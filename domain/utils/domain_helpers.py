@@ -35,6 +35,37 @@ from .domain_errors import (
 )
 
 
+
+def require_text(value: Any, *, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{field_name} must be a string, got {type(value).__name__}."
+        )
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError(f"{field_name} must not be empty.")
+    return stripped
+
+
+def optional_text(value: Any, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{field_name} must be a string or None, got {type(value).__name__}."
+        )
+    stripped = value.strip()
+    return stripped or None
+
+
+def require_mapping(value: Any, *, field_name: str) -> Mapping:
+    if not isinstance(value, Mapping):
+        raise ValueError(
+            f"{field_name} must be a mapping, got {type(value).__name__}."
+        )
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Time helpers
 # ---------------------------------------------------------------------------
