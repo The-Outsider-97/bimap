@@ -6,7 +6,9 @@ import {
   useState,
   type ReactNode,
 } from "react";
+
 import type { TocItem } from "@/lib/types";
+
 import { FloatingLogoButton } from "./FloatingLogoButton";
 import { Footer } from "./Footer";
 import { Header } from "./Header";
@@ -45,15 +47,6 @@ export function SiteShell({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [closeAll]);
-
-  useEffect(() => {
-    const locked = menuOpen || sideOpen;
-    document.body.classList.toggle("is-overlay-open", locked);
-
-    return () => {
-      document.body.classList.remove("is-overlay-open");
-    };
-  }, [menuOpen, sideOpen]);
 
   return (
     <div className="site-shell">
