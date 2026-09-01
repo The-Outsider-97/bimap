@@ -49,3 +49,17 @@ export const serviceNavigation: readonly NavigationItem[] = [
       "Turn model information into structured, reusable data.",
   },
 ];
+
+
+/*
+ * Shared donation destination.
+ *
+ * Defined once so the homepage, side panel, footer, or future
+ * donation-related components cannot drift to different routes.
+ */
+export const donationNavigation = {
+  label: "Support BIMAP",
+  href: "/donate",
+  description:
+    "Support the continued development, maintenance and expansion of BIMAP.",
+} as const;
