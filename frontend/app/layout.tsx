@@ -38,11 +38,22 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en" data-theme="dark" suppressHydrationWarning>
+    <html
+      lang="en"
+      data-theme="dark"
+      suppressHydrationWarning
+    >
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: themeBootScript,
+          }}
+        />
       </head>
-      <body>{children}</body>
+
+      <body suppressHydrationWarning>
+        {children}
+      </body>
     </html>
   );
 }
