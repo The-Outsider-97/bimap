@@ -22,7 +22,9 @@ SLAI/
 │   ├── functions/
 │   ├── tuning/
 │   └── utils/
+│
 └── applications/
+    │
     └── bimap/
         ├── __init__.py
         ├── __main__.py
