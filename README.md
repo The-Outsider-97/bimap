@@ -106,4 +106,27 @@ SLAI/
         │       ├── __init__.py
         │       ├── domain_errors.py
         │       └── domain_helpers.py
+        │
+        ├── reporting/
+        │   ├── __init__.py
+        │   ├── README.md
+        │   │
+        │   ├── artifact_manifest.py
+        │   ├── package_builder.py
+        │   ├── report_builder.py
+        │   │
+        │   ├── serializers/
+        │   │   ├── __init__.py
+        │   │   ├── evidence_manifest.py
+        │   │   ├── findings_json.py
+        │   │   ├── remediation_csv.py
+        │   │   └── requirement_matrix.py
+        │   │
+        │   ├── templates/
+        │   │   └── README.md
+        │   │
+        │   └── utils/
+        │       ├── __init__.py
+        │       ├── reporting_errors.py
+        │       └── reporting_helpers.py
 ```
