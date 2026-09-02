@@ -1,31 +1,28 @@
 """
 Structured application/port error hierarchy for BIMAP.
 
-``app/ports`` is BIMAP's dependency-inversion boundary.  Port interfaces may be
+``app/ports`` is BIMAP's dependency-inversion boundary. Port interfaces may be
 implemented by local, cloud, provider, or test adapters, but the application
 layer must observe one stable BIMAP-owned failure vocabulary rather than SDK-
 specific exceptions.
 
 This module deliberately sits at the bottom of the application-port dependency
-graph.  It imports no domain model, contract, concrete adapter, API, worker,
+graph. It imports no domain model, contract, concrete adapter, API, worker,
 audit-engine, reporting, or SLAI implementation.
 
 Operational policy
 ------------------
-* Exception construction has no logging side effects.  A handling boundary may
+* Exception construction has no logging side effects. A handling boundary may
   call :meth:`AppError.announce` once when operator-facing status is useful.
-* ``code`` and ``retryable`` are stable machine-readable properties.  They are
-  metadata, not an automatic retry policy; application services/workers remain
-  responsible for deciding whether and when retries are safe.
-* Diagnostic context is bounded and redacted.  Raw uploads, file contents,
-  credentials, signed URLs, storage paths, tokens, and provider payloads must
-  not be copied into logs through exception metadata.
+* ``code`` and ``retryable`` are stable machine-readable properties. They are
+  metadata, not an automatic retry policy.
+* Diagnostic context is bounded and redacted. Raw uploads, file contents,
+  credentials, signed URLs, storage paths, webhook signatures, payment
+  references, tokens, and provider payloads must not be copied into logs.
 * Concrete adapter exceptions may be retained through ``cause`` for exception
-  chaining.  ``to_dict()`` exposes only the cause type.
-* A positive malware finding is not an exception.  It is a valid scan result and
-  must be represented by the malware port's verdict model.  Exceptions are
-  reserved for invalid input, malformed adapter output, or scanner operation
-  failures.
+  chaining. ``to_dict()`` exposes only the cause type.
+* Normal business outcomes are represented by port result models rather than
+  being incorrectly turned into infrastructure exceptions.
 """
 
 from __future__ import annotations
@@ -46,6 +43,7 @@ _MAX_CONTEXT_STRING = 256
 _SENSITIVE_KEY_FRAGMENTS = (
     "authorization",
     "body",
+    "checkout_id",
     "content",
     "cookie",
     "credential",
@@ -56,10 +54,12 @@ _SENSITIVE_KEY_FRAGMENTS = (
     "password",
     "path",
     "payload",
+    "payment_reference",
     "presigned",
     "raw",
     "secret",
     "session",
+    "signature",
     "signed_url",
     "storage_key",
     "stream",
@@ -221,129 +221,194 @@ class AppError(Exception):
         return payload
 
 
-# ---------------------------------------------------------------------------
-# Cross-application primitives
-# ---------------------------------------------------------------------------
-
-
 class AppConfigurationError(AppError):
-    """Raised when an application component is configured inconsistently."""
-
     code = "BIMAP.APP.CONFIGURATION"
 
 
 class AppValidationError(AppError):
-    """Raised when application input violates a boundary precondition."""
-
     code = "BIMAP.APP.VALIDATION"
 
 
 class AppIntegrityError(AppError):
-    """Raised when accepted application state is internally contradictory."""
-
     code = "BIMAP.APP.INTEGRITY"
 
 
 class AppSerializationError(AppError):
-    """Raised when application metadata cannot be represented deterministically."""
-
     code = "BIMAP.APP.SERIALIZATION"
 
 
 class UnsupportedAppInputError(AppValidationError):
-    """Raised when a port receives an unsupported object type."""
-
     code = "BIMAP.APP.INPUT.UNSUPPORTED"
 
 
-# ---------------------------------------------------------------------------
-# Generic port boundary
-# ---------------------------------------------------------------------------
-
-
 class AppPortError(AppError):
-    """Base class for failures observed through an application port."""
-
     code = "BIMAP.APP.PORT"
 
 
 class AppPortOperationError(AppPortError):
-    """Raised when a concrete adapter cannot complete a requested operation."""
-
     code = "BIMAP.APP.PORT.OPERATION"
 
 
 class AppPortUnavailableError(AppPortOperationError):
-    """Raised when a required external/local adapter dependency is unavailable."""
-
     code = "BIMAP.APP.PORT.UNAVAILABLE"
     retryable = True
 
 
 class AppPortTimeoutError(AppPortOperationError):
-    """Raised when a port operation exceeds the adapter's configured time budget."""
-
     code = "BIMAP.APP.PORT.TIMEOUT"
     retryable = True
 
 
-# ---------------------------------------------------------------------------
-# Clock port
-# ---------------------------------------------------------------------------
-
-
 class ClockError(AppPortError):
-    """Base class for clock-port failures."""
-
     code = "BIMAP.APP.PORT.CLOCK"
 
 
 class ClockValidationError(ClockError):
-    """Raised when a clock value or temporal argument is invalid."""
-
     code = "BIMAP.APP.PORT.CLOCK.VALIDATION"
 
 
 class ClockReadError(ClockError):
-    """Raised when a clock implementation cannot provide a valid current time."""
-
     code = "BIMAP.APP.PORT.CLOCK.READ"
 
 
-# ---------------------------------------------------------------------------
-# Malware-scanning port
-# ---------------------------------------------------------------------------
-
-
 class MalwareError(AppPortError):
-    """Base class for malware-port failures."""
-
     code = "BIMAP.APP.PORT.MALWARE"
 
 
 class MalwareValidationError(MalwareError):
-    """Raised for invalid malware-scan inputs or malformed scanner output."""
-
     code = "BIMAP.APP.PORT.MALWARE.VALIDATION"
 
 
 class MalwareScanError(MalwareError):
-    """Raised when a malware scanner fails to complete an operation."""
-
     code = "BIMAP.APP.PORT.MALWARE.SCAN"
 
 
 class MalwareUnavailableError(MalwareScanError):
-    """Raised when the configured scanner service/engine is unavailable."""
-
     code = "BIMAP.APP.PORT.MALWARE.UNAVAILABLE"
     retryable = True
 
 
 class MalwareTimeoutError(MalwareScanError):
-    """Raised when malware scanning exceeds the adapter's configured time budget."""
-
     code = "BIMAP.APP.PORT.MALWARE.TIMEOUT"
+    retryable = True
+
+
+class PaymentError(AppPortError):
+    """Base class for payment-port failures."""
+    code = "BIMAP.APP.PORT.PAYMENT"
+
+
+class PaymentValidationError(PaymentError):
+    code = "BIMAP.APP.PORT.PAYMENT.VALIDATION"
+
+
+class PaymentOperationError(PaymentError):
+    code = "BIMAP.APP.PORT.PAYMENT.OPERATION"
+
+
+class PaymentVerificationError(PaymentOperationError):
+    code = "BIMAP.APP.PORT.PAYMENT.VERIFICATION"
+
+
+class PaymentUnavailableError(PaymentOperationError):
+    code = "BIMAP.APP.PORT.PAYMENT.UNAVAILABLE"
+    retryable = True
+
+
+class PaymentTimeoutError(PaymentOperationError):
+    code = "BIMAP.APP.PORT.PAYMENT.TIMEOUT"
+    retryable = True
+
+
+class QueueError(AppPortError):
+    code = "BIMAP.APP.PORT.QUEUE"
+
+
+class QueueValidationError(QueueError):
+    code = "BIMAP.APP.PORT.QUEUE.VALIDATION"
+
+
+class QueueIntegrityError(QueueError):
+    code = "BIMAP.APP.PORT.QUEUE.INTEGRITY"
+
+
+class QueueOperationError(QueueError):
+    code = "BIMAP.APP.PORT.QUEUE.OPERATION"
+
+
+class QueueUnavailableError(QueueOperationError):
+    code = "BIMAP.APP.PORT.QUEUE.UNAVAILABLE"
+    retryable = True
+
+
+class QueueTimeoutError(QueueOperationError):
+    code = "BIMAP.APP.PORT.QUEUE.TIMEOUT"
+    retryable = True
+
+
+class RepositoryError(AppPortError):
+    code = "BIMAP.APP.PORT.REPOSITORY"
+
+
+class RepositoryValidationError(RepositoryError):
+    code = "BIMAP.APP.PORT.REPOSITORY.VALIDATION"
+
+
+class RepositoryIntegrityError(RepositoryError):
+    code = "BIMAP.APP.PORT.REPOSITORY.INTEGRITY"
+
+
+class RepositoryOperationError(RepositoryError):
+    code = "BIMAP.APP.PORT.REPOSITORY.OPERATION"
+
+
+class RepositoryConflictError(RepositoryOperationError):
+    """
+    Optimistic-concurrency/precondition failure.
+
+    Deliberately non-retryable by default: authoritative state must be reloaded
+    before application logic decides whether retrying is semantically valid.
+    """
+    code = "BIMAP.APP.PORT.REPOSITORY.CONFLICT"
+
+
+class RepositoryUnavailableError(RepositoryOperationError):
+    code = "BIMAP.APP.PORT.REPOSITORY.UNAVAILABLE"
+    retryable = True
+
+
+class RepositoryTimeoutError(RepositoryOperationError):
+    code = "BIMAP.APP.PORT.REPOSITORY.TIMEOUT"
+    retryable = True
+
+
+class StorageError(AppPortError):
+    code = "BIMAP.APP.PORT.STORAGE"
+
+
+class StorageValidationError(StorageError):
+    code = "BIMAP.APP.PORT.STORAGE.VALIDATION"
+
+
+class StorageIntegrityError(StorageError):
+    code = "BIMAP.APP.PORT.STORAGE.INTEGRITY"
+
+
+class StorageOperationError(StorageError):
+    code = "BIMAP.APP.PORT.STORAGE.OPERATION"
+
+
+class StorageNotFoundError(StorageOperationError):
+    code = "BIMAP.APP.PORT.STORAGE.NOT_FOUND"
+
+
+class StorageUnavailableError(StorageOperationError):
+    code = "BIMAP.APP.PORT.STORAGE.UNAVAILABLE"
+    retryable = True
+
+
+class StorageTimeoutError(StorageOperationError):
+    code = "BIMAP.APP.PORT.STORAGE.TIMEOUT"
     retryable = True
 
 
@@ -367,6 +432,32 @@ __all__ = [
     "MalwareScanError",
     "MalwareUnavailableError",
     "MalwareTimeoutError",
+    "PaymentError",
+    "PaymentValidationError",
+    "PaymentOperationError",
+    "PaymentVerificationError",
+    "PaymentUnavailableError",
+    "PaymentTimeoutError",
+    "QueueError",
+    "QueueValidationError",
+    "QueueIntegrityError",
+    "QueueOperationError",
+    "QueueUnavailableError",
+    "QueueTimeoutError",
+    "RepositoryError",
+    "RepositoryValidationError",
+    "RepositoryIntegrityError",
+    "RepositoryOperationError",
+    "RepositoryConflictError",
+    "RepositoryUnavailableError",
+    "RepositoryTimeoutError",
+    "StorageError",
+    "StorageValidationError",
+    "StorageIntegrityError",
+    "StorageOperationError",
+    "StorageNotFoundError",
+    "StorageUnavailableError",
+    "StorageTimeoutError",
 ]
 
 
@@ -374,22 +465,25 @@ if __name__ == "__main__":
     print("\n=== Running Application Errors Self-Test ===\n")
     printer.status("TEST", "Application errors module initialized", "info")
 
-    error = MalwareScanError(
-        "Scanner failure.",
-        component="malware",
-        operation="scan",
+    error = StorageIntegrityError(
+        "Stored content did not match expected integrity metadata.",
+        component="storage",
+        operation="put",
         context={
             "object_id": "OBJ-1",
             "filename": "sensitive-project.rvt",
-            "payload": b"not-for-logs",
+            "signed_url": "https://example.invalid/private",
+            "payment_reference": "provider-secret-ref",
         },
         cause=RuntimeError("provider detail"),
     )
     payload = error.to_dict()
-    assert payload["code"] == "BIMAP.APP.PORT.MALWARE.SCAN"
     assert payload["context"]["filename"] == _REDACTED
-    assert payload["context"]["payload"] == _REDACTED
+    assert payload["context"]["signed_url"] == _REDACTED
+    assert payload["context"]["payment_reference"] == _REDACTED
     assert payload["cause_type"] == "RuntimeError"
+    assert PaymentUnavailableError.retryable is True
+    assert RepositoryConflictError.retryable is False
     printer.status("PASS", "Application error redaction and structure", "success")
 
     print("\n=== Test ran successfully ===\n")
