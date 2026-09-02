@@ -14,8 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from .utils.app_errors import *
-from .utils.app_helpers import *
+from ..utils.app_errors import *
+from ..utils.app_helpers import *
 from ...contracts.audit_job import *
 from ...audit_engine.result import *
 # BIMAP result/governance types
