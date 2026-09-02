@@ -129,4 +129,21 @@ SLAI/
         │       ├── __init__.py
         │       ├── reporting_errors.py
         │       └── reporting_helpers.py
+        │
+        ├── slai/
+        │   ├── __init__.py
+        │   ├── README.md
+        │   │
+        │   ├── adapter.py
+        │   ├── agent_policy.py
+        │   ├── governance.py
+        │   ├── health.py
+        │   ├── job_envelope.py
+        │   ├── orchestration.py
+        │   ├── result_mapper.py
+        │   │
+        │   └── utils/
+        │       ├── __all__.py
+        │       ├── slai_errors.py
+        │       └── slai_helpers.py
 ```
