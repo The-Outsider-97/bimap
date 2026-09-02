@@ -2,7 +2,9 @@
 BIMAP is an independent BIM quality intelligence service for Revit families and project deliverables. It transforms BIM checking results and Revit-family data into evidence-backed, prioritized quality decisions.
 
 
-https://github.com/The-Outsider-97/bimap.git should be cloned inside SLAI/applications/, and bimap.py moved to the SLAI root directory. The directory will therefore look something like:
+Clone https://github.com/The-Outsider-97/bimap.git into SLAI/applications/, and move bimap.py to the SLAI root directory. The directory will therefore look something like:
+
+```txt
 SLAI/
 ├── __init__.py
 ├── main.py
@@ -57,3 +59,4 @@ SLAI/
                 ├── __init__.py
                 ├── contracts_errors.py
                 └── contracts_helpers.py
+```
