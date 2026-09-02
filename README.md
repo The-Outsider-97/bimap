@@ -30,6 +30,7 @@ SLAI/
         ├── __main__.py
         ├── bootstrap.py
         ├── version.py
+        │
         ├── contracts/
         │   ├── __init__.py
         │   ├── README.md
@@ -61,6 +62,7 @@ SLAI/
         │       ├── __init__.py
         │       ├── contracts_errors.py
         │       └── contracts_helpers.py
+        │
         ├── domain/
         │   ├── __init__.py
         │   │
