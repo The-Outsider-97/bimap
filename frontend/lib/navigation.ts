@@ -22,14 +22,14 @@ export const commerceNavigation: readonly NavigationItem[] = [
     href: "/library/3d",
     eyebrow: "RVT · RFA · MAX",
     description:
-      "Production-ready Revit content, 3ds Max models and complete scenes.",
+      "Revit content, 3ds Max models and complete scenes.",
   },
   {
     label: "2D DWG Library",
     href: "/library/2d",
     eyebrow: "DWG",
     description:
-      "Individual drawing elements and coordinated drawing packs.",
+      "Individual DWG files and coordinated drawing packs.",
   },
 ];
 
@@ -50,12 +50,32 @@ export const serviceNavigation: readonly NavigationItem[] = [
   },
 ];
 
+export const informationNavigation: readonly NavigationItem[] = [
+  {
+    label: "Methodology",
+    href: "/methodology",
+    eyebrow: "Method",
+    description:
+      "How BIMAP moves from supplied evidence to reviewable findings.",
+  },
+  {
+    label: "FAQ",
+    href: "/faq",
+    eyebrow: "Help",
+    description:
+      "Answers about BIMAP audits, digital content and services.",
+  },
+  {
+    label: "Disclaimer",
+    href: "/disclaimer",
+    eyebrow: "Scope",
+    description:
+      "The intended use, boundaries and limitations of BIMAP outputs.",
+  },
+];
 
 /*
  * Shared donation destination.
- *
- * Defined once so the homepage, side panel, footer, or future
- * donation-related components cannot drift to different routes.
  */
 export const donationNavigation = {
   label: "Support BIMAP",

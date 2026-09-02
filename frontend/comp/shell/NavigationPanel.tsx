@@ -1,12 +1,17 @@
 "use client";
 
 import Link from "next/link";
+
 import {
   auditNavigation,
   commerceNavigation,
+  informationNavigation,
   serviceNavigation,
 } from "@/lib/navigation";
-import type { NavigationItem } from "@/lib/types";
+
+import type {
+  NavigationItem,
+} from "@/lib/types";
 
 function NavigationGroup({
   title,
@@ -19,7 +24,9 @@ function NavigationGroup({
 }) {
   return (
     <div className="nav-group">
-      <p className="nav-group__label">{title}</p>
+      <p className="nav-group__label">
+        {title}
+      </p>
 
       <div className="nav-group__items">
         {items.map((item) => (
@@ -29,14 +36,22 @@ function NavigationGroup({
             className="nav-item"
             onClick={onNavigate}
           >
-            <span className="nav-item__eyebrow">{item.eyebrow}</span>
-            <strong>{item.label}</strong>
+            <span className="nav-item__eyebrow">
+              {item.eyebrow}
+            </span>
+
+            <strong>
+              {item.label}
+            </strong>
 
             <span className="nav-item__description">
               {item.description}
             </span>
 
-            <span className="nav-item__arrow" aria-hidden="true">
+            <span
+              className="nav-item__arrow"
+              aria-hidden="true"
+            >
               ↗
             </span>
           </Link>
@@ -49,27 +64,47 @@ function NavigationGroup({
 type Props = {
   open: boolean;
   onClose: () => void;
+  onOpenContact: () => void;
 };
 
-export function NavigationPanel({ open, onClose }: Props) {
-  if (!open) return null;
+export function NavigationPanel({
+  open,
+  onClose,
+  onOpenContact,
+}: Props) {
+  if (!open) {
+    return null;
+  }
 
   return (
-    <div className="nav-backdrop" onMouseDown={onClose}>
+    <div
+      className="nav-backdrop"
+      onMouseDown={onClose}
+    >
       <div
         id="global-navigation"
         className="navigation-panel"
         role="dialog"
         aria-modal="true"
         aria-label="BIMAP navigation"
-        onMouseDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) =>
+          event.stopPropagation()
+        }
       >
         <div className="navigation-panel__grid">
-          <NavigationGroup
-            title="Audit"
-            items={auditNavigation}
-            onNavigate={onClose}
-          />
+          <div className="navigation-panel__column">
+            <NavigationGroup
+              title="Audit"
+              items={auditNavigation}
+              onNavigate={onClose}
+            />
+
+            <NavigationGroup
+              title="Information"
+              items={informationNavigation}
+              onNavigate={onClose}
+            />
+          </div>
 
           <div className="navigation-panel__column">
             <NavigationGroup
@@ -87,8 +122,24 @@ export function NavigationPanel({ open, onClose }: Props) {
         </div>
 
         <div className="navigation-panel__foot">
-          <span>Remy3Design / R3D</span>
-          <span>Evidence-first BIM quality analysis</span>
+          <span>
+            Remy3Design / R3D
+          </span>
+
+          <button
+            type="button"
+            className="navigation-panel__contact"
+            onClick={() => {
+              onClose();
+              onOpenContact();
+            }}
+          >
+            Contact BIMAP
+
+            <span aria-hidden="true">
+              ↗
+            </span>
+          </button>
         </div>
       </div>
     </div>
