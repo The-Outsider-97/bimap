@@ -31,6 +31,58 @@ SLAI/
         ├── bootstrap.py
         ├── version.py
         │
+        ├── audit_engine/
+        │   ├── __init__.py
+        │   ├── README.md
+        │   ├── context.py
+        │   ├── engine.py
+        │   ├── result.py
+        │   │
+        │   ├── ingestion/
+        │   │   ├── __init__.py
+        │   │   ├── dispatcher.py
+        │   │   ├── manifest.py
+        │   └── project_evidence.py
+        │   │
+        │   ├── normalization/
+        │   │   ├── __init__.py
+        │   │   ├── evidence_normalizer.py
+        │   │   ├── family_normalizer.py
+        │   │   └── schema_export.py
+        │   │
+        │   ├── rules/
+        │   │   ├── __init__.py
+        │   │   ├── base.py
+        │   │   ├── executor.py
+        │   │   ├── registry.py
+        │   │   └── versions.py
+        │   │
+        │   ├── rfa/
+        │   │   ├── __init__.py
+        │   │   └── auditor.py
+        │   │
+        │   ├── bim_qa/
+        │   │   ├── __init__.py
+        │   │   ├── auditor.py
+        │   │   └── requirement_matrix.py
+        │   │
+        │   ├── combined/
+        │   │   ├── __init__.py
+        │   │   ├── auditor.py
+        │   │   ├── evidence_graph.py
+        │   │   └── versions.py
+        │   │
+        │   ├── validation/
+        │   │   ├── __init__.py
+        │   │   ├── coverage.py
+        │   │   ├── evidence.py
+        │   │   └── findings.py
+        │   │
+        │   └── utils/
+        │       ├── __init__.py
+        │       ├── engine_errors.py
+        │       └── engine_helpers.py
+        │
         ├── contracts/
         │   ├── __init__.py
         │   ├── README.md
