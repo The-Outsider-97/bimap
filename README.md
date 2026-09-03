@@ -249,3 +249,152 @@ LEVEL 1
 │ core BIMAP business concepts            │
 └─────────────────────────────────────────┘
 ```
+
+# Exact file-level import hierarchy for SLAI integration
+```txt
+bimap/bootstrap.py
+│
+├── imports bimap/audit_engine/engine.py
+├── imports bimap/app/services/audit_service.py
+└── imports bimap/slai/adapter.py
+                    │
+                    ▼
+bimap/slai/adapter.py
+│
+├── imports bimap/app/ports/slai.py
+├── imports bimap/slai/orchestration.py
+├── imports bimap/slai/job_envelope.py
+├── imports bimap/slai/result_mapper.py
+├── imports bimap/slai/governance.py
+└── imports bimap/slai/health.py
+                    │
+                    ▼
+bimap/slai/orchestration.py
+│
+├── imports bimap/slai/agent_policy.py
+│
+├── imports src/agents/agent_factory.py
+│       └── AgentFactory
+│
+└── imports src/agents/collaborative/shared_memory.py
+        └── SharedMemory
+                    │
+                    ▼
+              AgentFactory
+                    │
+     ┌──────────────┼─────────────────────────┐
+     │              │                         │
+     ▼              ▼                         ▼
+Collaborative     Reader                   Knowledge
+     │              │                         │
+     ├──────────────┼─────────────────────────┤
+     ▼              ▼                         ▼
+ Reasoning       Planning                   Quality
+     │              │                         │
+     ├──────────────┼─────────────────────────┤
+     ▼              ▼                         ▼
+  Privacy        Safety                   Evaluation
+     │              │                         │
+     └──────────────┼─────────────────────────┘
+                    ▼
+                 Language
+                    │
+                    ▼
+              Observability
+```
+
+# The entire BIMAP + SLAI execution architecture
+```txt
+                         CUSTOMER
+                            │
+                            ▼
+                     BIMAP frontend
+                            │
+                            ▼
+                       BIMAP API
+                            │
+                            ▼
+                       AuditService
+                            │
+              ┌─────────────┴─────────────┐
+              │                           │
+              ▼                           │
+        BIMAP AuditEngine                 │
+              │                           │
+      deterministic rules                 │
+              │                           │
+              ▼                           │
+      deterministic findings              │
+              │                           │
+              └─────────────┐             │
+                            ▼             │
+                     SlaiJobEnvelope       │
+                            │             │
+                            ▼             │
+                       SlaiAdapter ◄───────┘
+                            │
+                            ▼
+                     SlaiOrchestrator
+                            │
+                  ┌─────────┴─────────┐
+                  │                   │
+                  ▼                   ▼
+           AgentFactory          SharedMemory
+                  │                   │
+                  └─────────┬─────────┘
+                            │
+         ┌──────────────────┼────────────────────┐
+         │                  │                    │
+         ▼                  ▼                    ▼
+     Quality            Privacy           Collaborative
+      ingress            ingress
+         │                  │
+         └────────┬─────────┘
+                  ▼
+                Reader
+                  │
+                  ▼
+              Knowledge
+                  │
+                  ▼
+              Reasoning
+                  │
+                  ▼
+               Planning
+                  │
+                  ▼
+            Collaborative
+            coordination
+                  │
+        ┌─────────┼──────────┐
+        ▼         ▼          ▼
+     Quality  Evaluation   Safety
+        │         │          │
+        └─────────┼──────────┘
+                  ▼
+               Privacy
+                  │
+                  ▼
+               Language
+                  │
+                  ▼
+            Result Mapper
+                  │
+                  ▼
+          Governance Mapper
+                  │
+                  ▼
+             SlaiAdapter
+                  │
+                  ▼
+             AuditService
+                  │
+                  ▼
+          Final BIMAP Result
+                  │
+                  ▼
+              Reporting
+                  │
+                  ▼
+        PDF / JSON / CSV / ZIP
+```
