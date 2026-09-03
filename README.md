@@ -31,6 +31,54 @@ SLAI/
         ├── bootstrap.py
         ├── version.py
         │
+        ├── app/
+        │   ├── __init__.py
+        │   ├── README.md
+        │   │
+        │   ├── commands/
+        │   │   ├── __init__.py
+        │   │   ├── begin_checkout.py
+        │   │   ├── cancel_order.py
+        │   │   ├── create_order.py
+        │   │   ├── create_upload_slot.py
+        │   │   ├── enqueue_audit.py
+        │   │   ├── handle_payment.py
+        │   │   ├── release_report.py
+        │   │   ├── request_deletion.py
+        │   │   └── validate_uploads.py
+        │   │
+        │   ├── queries/
+        │   │   ├── __init__.py
+        │   │   ├── get_audit_status.py
+        │   │   ├── get_order.py
+        │   │   ├── get_products.py
+        │   │   ├── list_orders.py
+        │   │   └── list_reports.py
+        │   │
+        │   ├── services/
+        │   │   ├── __init__.py
+        │   │   ├── audit_service.py
+        │   │   ├── fulfilment_service.py
+        │   │   ├── order_service.py
+        │   │   ├── review_service.py
+        │   │   └── upload_service.py
+        │   │
+        │   ├── ports/
+        │   │   ├── __init__.py
+        │   │   ├── clock.py
+        │   │   ├── malware.py
+        │   │   ├── notifications.py
+        │   │   ├── payment.py
+        │   │   ├── queue.py
+        │   │   ├── repositories.py
+        │   │   ├── slai.py
+        │   │   └── storage.py
+        │   │
+        │   └── utils/
+        │       ├── __init__.py
+        │       ├── app_errors.py
+        │       └── app_helpers.py
+        │
         ├── audit_engine/
         │   ├── __init__.py
         │   ├── README.md
