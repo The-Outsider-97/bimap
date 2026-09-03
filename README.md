@@ -316,21 +316,21 @@ Collaborative     Reader                   Knowledge
                             ▼
                        AuditService
                             │
-              ┌─────────────┴─────────────┐
-              │                           │
-              ▼                           │
-        BIMAP AuditEngine                 │
-              │                           │
-      deterministic rules                 │
-              │                           │
-              ▼                           │
-      deterministic findings              │
-              │                           │
-              └─────────────┐             │
-                            ▼             │
+              ┌─────────────┴──────────────┐
+              │                            │
+              ▼                            │
+        BIMAP AuditEngine                  │
+              │                            │
+      deterministic rules                  │
+              │                            │
+              ▼                            │
+      deterministic findings               │
+              │                            │
+              └─────────────┐              │
+                            ▼              │
                      SlaiJobEnvelope       │
-                            │             │
-                            ▼             │
+                            │              │
+                            ▼              │
                        SlaiAdapter ◄───────┘
                             │
                             ▼
