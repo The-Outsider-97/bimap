@@ -96,7 +96,6 @@ bimap/app/
 │
 ├── queries/
 │   ├── __init__.py
-│   ├── enqueue_audit.py              # empty legacy placeholder; not an active query
 │   ├── get_audit_status.py
 │   ├── get_order.py
 │   ├── get_products.py
