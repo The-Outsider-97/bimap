@@ -1,3 +1,20 @@
+"""
+Commands cause state changes.
+
+Current command files include create order, uploads, checkout, payment handling, audit enqueueing, report release and deletion.
+
+The rule:
+
+command
+    ↓
+service
+
+service
+    ✕
+command
+"""
+
+
 from .begin_checkout import *
 from .cancel_order import *
 from .create_order import *
