@@ -68,6 +68,8 @@ printer = PrettyPrinter()
 
 _FACTORY_ENV = "BIMAP_BOOTSTRAP_FACTORY"
 
+_DEFAULT_FACTORY_SPEC = "deployment.bimap:create_bootstrap"
+
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8000
 _DEFAULT_WORKERS = 1
@@ -159,29 +161,30 @@ def _factory_spec(
     explicit: str | None = None,
 ) -> str:
     """
-    Resolve the deployment Bootstrap factory specification.
+    Resolve the deployment-owned BIMAP Bootstrap factory.
 
-    Format:
+    Resolution precedence
+    ---------------------
+    1. Explicit ``--factory`` CLI argument.
+    2. ``BIMAP_BOOTSTRAP_FACTORY`` environment variable.
+    3. Canonical SLAI deployment factory.
 
+    Factory syntax
+    --------------
         package.module:callable
 
-    Example:
-
+    Canonical SLAI deployment:
         deployment.bimap:create_bootstrap
     """
 
     raw = (
         explicit
         if explicit is not None
-        else os.getenv(_FACTORY_ENV)
-    )
-
-    if raw is None:
-        raise BIMAPLauncherConfigurationError(
-            f"{_FACTORY_ENV} is not configured. "
-            "Set it to a callable such as "
-            "'deployment.bimap:create_bootstrap'."
+        else os.getenv(
+            _FACTORY_ENV,
+            _DEFAULT_FACTORY_SPEC,
         )
+    )
 
     spec = raw.strip()
 
@@ -192,10 +195,13 @@ def _factory_spec(
 
     module_name, separator, attribute_name = spec.partition(":")
 
+    module_name = module_name.strip()
+    attribute_name = attribute_name.strip()
+
     if (
         separator != ":"
-        or not module_name.strip()
-        or not attribute_name.strip()
+        or not module_name
+        or not attribute_name
         or ":" in attribute_name
     ):
         raise BIMAPLauncherConfigurationError(
@@ -203,10 +209,7 @@ def _factory_spec(
             "'module.path:callable_name' syntax."
         )
 
-    return (
-        f"{module_name.strip()}:"
-        f"{attribute_name.strip()}"
-    )
+    return f"{module_name}:{attribute_name}"
 
 
 def _load_factory(
@@ -449,7 +452,6 @@ def _create_parser() -> argparse.ArgumentParser:
 
     subcommands = parser.add_subparsers(
         dest="command",
-        required=True,
     )
 
     # ------------------------------------------------------------------
@@ -466,7 +468,8 @@ def _create_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Bootstrap factory as module:callable. "
-            f"Defaults to ${_FACTORY_ENV}."
+            f"Resolution order: CLI, ${_FACTORY_ENV}, "
+            f"then {_DEFAULT_FACTORY_SPEC!r}."
         ),
     )
 
@@ -564,7 +567,8 @@ def _create_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Bootstrap factory as module:callable. "
-            f"Defaults to ${_FACTORY_ENV}."
+            f"Resolution order: CLI, ${_FACTORY_ENV}, "
+            f"then {_DEFAULT_FACTORY_SPEC!r}."
         ),
     )
 
@@ -587,10 +591,10 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = _create_parser()
     args: dict[str, Any] = vars(parser.parse_args(argv))
-
+    
     try:
-        if args["command"] == "version":
-            print(__version__)
+        if args.get("command") is None:
+            parser.print_help()
             return 0
 
         specification = _factory_spec(args.get("factory"))
@@ -682,7 +686,6 @@ __all__ = [
 ]
 
 if __name__ == "__main__":
-    main()
-    # raise SystemExit(
-    #     main(sys.argv[1:])
-    # )
+    raise SystemExit(
+        main(sys.argv[1:])
+    )
