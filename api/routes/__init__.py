@@ -1,3 +1,6 @@
+"""FastAPI route groups for BIMAP."""
+
+from ._shared import *
 from .admin import *
 from .checkout import *
 from .deletion import *
@@ -8,9 +11,8 @@ from .products import *
 from .reports import *
 from .uploads import *
 from .webhooks import *
-from ._shared import *
 
-
+from ._shared import __all__ as _shared_exports
 from .admin import __all__ as _admin_exports
 from .checkout import __all__ as _checkout_exports
 from .deletion import __all__ as _deletion_exports
@@ -21,10 +23,9 @@ from .products import __all__ as _products_exports
 from .reports import __all__ as _reports_exports
 from .uploads import __all__ as _uploads_exports
 from .webhooks import __all__ as _webhooks_exports
-from ._shared import __all__ as __shared_exports 
-
 
 __all__ = [
+    *_shared_exports,
     *_admin_exports,
     *_checkout_exports,
     *_deletion_exports,
@@ -35,5 +36,4 @@ __all__ = [
     *_reports_exports,
     *_uploads_exports,
     *_webhooks_exports,
-    *__shared_exports,
-] # type: ignore
+]  # type: ignore
