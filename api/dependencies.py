@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request # type: ignore
 
 from .utils.api_errors import APIConfigurationError
 from .utils.api_helpers import *
@@ -52,7 +52,7 @@ from ..app.queries.get_products import GetProducts
 from ..app.queries.list_orders import ListOrders
 from ..app.queries.list_reports import ListReports
 from ..app.services.review_service import ReviewService
-from ..slai.health import SLAIHealthCheck
+from ..app.ports.slai import SLAIPort
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
 
 if TYPE_CHECKING:
@@ -222,18 +222,16 @@ class APIRouteHooks:
 
 @dataclass(frozen=True, slots=True)
 class APIHealthDependencies:
-    """Injected SLAI liveness/readiness dependencies for API health routes.
+    """
+    Application-facing SLAI health dependencies for the API layer.
 
-    ``factory`` and ``shared_memory`` intentionally remain runtime-opaque here.
-    ``SLAIHealthCheck`` is the existing owner of their health/readiness contract;
-    this API container must not duplicate SLAI runtime type assumptions.
+    The API depends only on BIMAP's SLAI application port.  AgentFactory,
+    SharedMemory, concrete SLAI health objects, and individual agents remain
+    behind the concrete integration adapter.
     """
 
-    health_check: SLAIHealthCheck
-    factory: Any
-    shared_memory: Any
-    required_agents: Sequence[str]
-    agents: Mapping[str, Any] | None = None
+    slai: SLAIPort
+    required_agents: Sequence[str] | None = None
     expose_details: bool = False
 
     def __post_init__(self) -> None:
@@ -244,77 +242,81 @@ class APIHealthDependencies:
             action="Validating API health dependencies",
             event="api_health_dependencies_validate_start",
         )
-        if not isinstance(self.health_check, SLAIHealthCheck):
-            raise APIConfigurationError(
-                "health_check must be an SLAIHealthCheck instance.",
-                component=_COMPONENT,
-                operation="validate_health_dependencies",
-                field="health_check",
-                context={"received_type": type(self.health_check).__name__},
-            )
-        if isinstance(self.required_agents, (str, bytes, bytearray)):
-            raise APIConfigurationError(
-                "required_agents must be a sequence of agent names.",
-                component=_COMPONENT,
-                operation="validate_health_dependencies",
-                field="required_agents",
-                context={"received_type": type(self.required_agents).__name__},
-            )
-        try:
-            raw_required = tuple(self.required_agents)
-        except TypeError as exc:
-            raise APIConfigurationError(
-                "required_agents must be iterable.",
-                component=_COMPONENT,
-                operation="validate_health_dependencies",
-                field="required_agents",
-                context={"received_type": type(self.required_agents).__name__},
-                cause=exc,
-            ) from exc
 
-        normalized_required: list[str] = []
-        seen: set[str] = set()
-        for index, raw_name in enumerate(raw_required):
-            name = require_api_text(
-                raw_name,
-                field=f"required_agents[{index}]",
-                error_type=APIConfigurationError,
+        if not isinstance(self.slai, SLAIPort):
+            raise APIConfigurationError(
+                "slai must implement the BIMAP SLAI application port.",
                 component=_COMPONENT,
                 operation="validate_health_dependencies",
-                max_length=256,
+                field="slai",
+                context={"received_type": type(self.slai).__name__},
             )
-            if name in seen:
+
+        normalized_required: tuple[str, ...] | None = None
+
+        if self.required_agents is not None:
+            if isinstance(
+                self.required_agents,
+                (str, bytes, bytearray),
+            ):
                 raise APIConfigurationError(
-                    "required_agents contains a duplicate agent name.",
+                    "required_agents must be a sequence of agent names or None.",
                     component=_COMPONENT,
                     operation="validate_health_dependencies",
                     field="required_agents",
-                    context={"agent": name},
+                    context={
+                        "received_type": type(self.required_agents).__name__,
+                    },
                 )
-            seen.add(name)
-            normalized_required.append(name)
 
-        if not normalized_required:
-            raise APIConfigurationError(
-                "At least one required SLAI agent must be configured for readiness.",
-                component=_COMPONENT,
-                operation="validate_health_dependencies",
-                field="required_agents",
-            )
-        object.__setattr__(self, "required_agents", tuple(normalized_required))
-
-        if self.agents is not None:
-            if not isinstance(self.agents, Mapping):
+            try:
+                raw_required = tuple(self.required_agents)
+            except TypeError as exc:
                 raise APIConfigurationError(
-                    "agents must be a mapping or None.",
+                    "required_agents must be iterable.",
                     component=_COMPONENT,
                     operation="validate_health_dependencies",
-                    field="agents",
-                    context={"received_type": type(self.agents).__name__},
+                    field="required_agents",
+                    context={
+                        "received_type": type(self.required_agents).__name__,
+                    },
+                    cause=exc,
+                ) from exc
+
+            names: list[str] = []
+            seen: set[str] = set()
+
+            for index, raw_name in enumerate(raw_required):
+                name = require_api_text(
+                    raw_name,
+                    field=f"required_agents[{index}]",
+                    error_type=APIConfigurationError,
+                    component=_COMPONENT,
+                    operation="validate_health_dependencies",
+                    max_length=256,
                 )
-            # Freeze only the container mapping.  The runtime objects themselves
-            # remain owned by SLAI and are not copied or interpreted here.
-            object.__setattr__(self, "agents", MappingProxyType(dict(self.agents)))
+
+                if name in seen:
+                    raise APIConfigurationError(
+                        "required_agents contains a duplicate agent name.",
+                        component=_COMPONENT,
+                        operation="validate_health_dependencies",
+                        field="required_agents",
+                        context={"agent": name},
+                    )
+
+                seen.add(name)
+                names.append(name)
+
+            if not names:
+                raise APIConfigurationError(
+                    "required_agents cannot be empty when explicitly supplied.",
+                    component=_COMPONENT,
+                    operation="validate_health_dependencies",
+                    field="required_agents",
+                )
+
+            normalized_required = tuple(names)
 
         if not isinstance(self.expose_details, bool):
             raise APIConfigurationError(
@@ -322,14 +324,26 @@ class APIHealthDependencies:
                 component=_COMPONENT,
                 operation="validate_health_dependencies",
                 field="expose_details",
-                context={"received_type": type(self.expose_details).__name__},
+                context={
+                    "received_type": type(self.expose_details).__name__,
+                },
             )
+
+        object.__setattr__(
+            self,
+            "required_agents",
+            normalized_required,
+        )
 
         logger.info(
             {
                 "event": "api_health_dependencies_validated",
-                "required_agent_count": len(self.required_agents),
-                "explicit_agent_count": 0 if self.agents is None else len(self.agents),
+                "required_agent_count": (
+                    None
+                    if normalized_required is None
+                    else len(normalized_required)
+                ),
+                "uses_policy_default_agents": normalized_required is None,
                 "expose_details": self.expose_details,
             }
         )
