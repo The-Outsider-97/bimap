@@ -248,6 +248,26 @@ SLAI/
         │       ├── __all__.py
         │       ├── slai_errors.py
         │       └── slai_helpers.py
+        │   
+        └── workers/
+            ├── __init__.py
+            ├── README.md
+            │
+            ├── engine.py
+            ├── reports.py
+            ├── runner.py
+            │
+            ├── jobs/
+            │   ├── __init__.py
+            │   ├── audit.py
+            │   ├── deletion.py
+            │   ├── report.py
+            │   └── retention.py
+            │
+            └── utils/
+                ├── __init__.py
+                ├── workers_errors.py
+                └── workers_helpers.py
 ```
 
 # Canonical BIMAP dependency hierarchy
