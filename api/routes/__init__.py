@@ -8,6 +8,7 @@ from .products import *
 from .reports import *
 from .uploads import *
 from .webhooks import *
+from ._shared import *
 
 
 from .admin import __all__ as _admin_exports
@@ -20,6 +21,7 @@ from .products import __all__ as _products_exports
 from .reports import __all__ as _reports_exports
 from .uploads import __all__ as _uploads_exports
 from .webhooks import __all__ as _webhooks_exports
+from ._shared import __all__ as __shared_exports 
 
 
 __all__ = [
@@ -33,4 +35,5 @@ __all__ = [
     *_reports_exports,
     *_uploads_exports,
     *_webhooks_exports,
+    *__shared_exports,
 ] # type: ignore
