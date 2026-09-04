@@ -48,6 +48,7 @@ This avoids module/package shadowing without sys.path manipulation.
 from __future__ import annotations
 
 import argparse
+from contextlib import asynccontextmanager
 import importlib
 import importlib.util
 import os
@@ -71,7 +72,7 @@ printer = PrettyPrinter()
 
 _FACTORY_ENV = "BIMAP_BOOTSTRAP_FACTORY"
 
-_DEFAULT_FACTORY_SPEC = "deployment.bimap:create_bootstrap"
+_DEFAULT_FACTORY_SPEC = "deployment.deployment_bimap:create_bootstrap"
 
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8000
@@ -163,7 +164,7 @@ def _factory_spec(explicit: str | None = None) -> str:
         package.module:callable
 
     Canonical SLAI deployment:
-        deployment.bimap:create_bootstrap
+        deployment.deployment_bimap:create_bootstrap
     """
 
     raw = (
@@ -307,91 +308,111 @@ def create_application() -> FastAPI:
     Each Uvicorn worker calls this function independently. Consequently each
     server process receives its own Bootstrap lifecycle and FastAPI application.
 
+    BIMAP runtime ownership is bound to the ASGI lifespan. Normal ASGI shutdown
+    closes Bootstrap exactly once; the launcher-level best-effort cleanup
+    remains responsible only for abnormal server termination.
+
     The SLAI SharedMemory lifecycle remains governed by Bootstrap's explicit
     ownership configuration.
     """
 
     global _active_bootstrap
 
-    _announce(
-        "Creating BIMAP ASGI application"
-    )
+    _announce("Creating BIMAP ASGI application")
 
     if _active_bootstrap is not None:
-        raise BIMAPLauncherError(
-            "A BIMAP Bootstrap is already active in this process."
-        )
+        raise BIMAPLauncherError("A BIMAP Bootstrap is already active in this process.")
 
     specification = _factory_spec()
 
-    bootstrap = _create_bootstrap(
-        specification
-    )
+    bootstrap = _create_bootstrap(specification)
+
+    @asynccontextmanager
+    async def _bimap_lifespan(application: FastAPI):
+        """
+        Own the BIMAP runtime for exactly one ASGI application lifespan.
+
+        Startup composition has already completed before Uvicorn enters this
+        context. Teardown releases Bootstrap-owned resources after request
+        serving has stopped.
+        """
+
+        global _active_bootstrap
+
+        del application
+
+        _announce("Starting BIMAP ASGI runtime lifecycle")
+
+        logger.info({"event": "bimap_asgi_lifespan_started", "version": __version__})
+
+        try:
+            yield
+
+        finally:
+            _announce("Shutting down BIMAP runtime")
+
+            try:
+                bootstrap.close()
+
+            finally:
+                if _active_bootstrap is bootstrap:
+                    _active_bootstrap = None
+
+            logger.info(
+                {
+                    "event": "bimap_asgi_lifespan_stopped",
+                    "version": __version__,
+                }
+            )
 
     try:
-        runtime = bootstrap.build()
+        runtime = bootstrap.build(lifespan=_bimap_lifespan)
+
     except Exception:
         try:
             bootstrap.close()
+
         except Exception:
-            logger.exception(
-                "BIMAP cleanup failed after unsuccessful startup"
-            )
+            logger.exception("BIMAP cleanup failed after unsuccessful startup")
+
         raise
 
     application = runtime.application
 
-    if not isinstance(
-        application,
-        FastAPI,
-    ):
+    if not isinstance(application, FastAPI):
         try:
             bootstrap.close()
+
         finally:
-            raise BIMAPLauncherError("Bootstrap runtime did not provide a FastAPI application.")
-
-    async def _shutdown_bimap() -> None:
-        global _active_bootstrap
-
-        _announce("Shutting down BIMAP runtime")
-
-        try:
-            bootstrap.close()
-        finally:
-            if _active_bootstrap is bootstrap:
-                _active_bootstrap = None
+            raise BIMAPLauncherError(
+                "Bootstrap runtime did not provide a "
+                "FastAPI application."
+            )
 
     try:
-        # Keep lifecycle objects available to trusted process integrations.
-        # They are application state, not public HTTP API data.
+        # Trusted process-local runtime state only.
+        # These objects are not exposed as public HTTP response data.
         application.state.bimap_bootstrap = bootstrap
         application.state.bimap_runtime = runtime
-
-        application.add_event_handler("shutdown", _shutdown_bimap)
 
     except Exception as exc:
         try:
             bootstrap.close()
+
         except Exception:
             logger.exception(
-                "BIMAP cleanup failed after ASGI lifecycle installation failure"
+                "BIMAP cleanup failed after ASGI runtime-state "
+                "binding failure"
             )
 
         raise BIMAPLauncherError(
-            "Unable to install the BIMAP ASGI runtime lifecycle."
+            "Unable to bind the BIMAP runtime to the ASGI application."
         ) from exc
 
     _active_bootstrap = bootstrap
 
-    logger.info(
-        {
-            "event": "bimap_asgi_application_created",
-            "version": __version__,
-        }
-    )
-
+    logger.info({"event": "bimap_asgi_application_created", "version": __version__, "lifespan_managed": True})
     printer.status("BIMAP", f"Backend ready — version {__version__}", "success")
-
     return application
 
 
@@ -620,9 +641,7 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging()
 
     parser = _create_parser()
-    args: dict[str, Any] = vars(
-        parser.parse_args(argv)
-    )
+    args: dict[str, Any] = vars(parser.parse_args(argv))
 
     command = args.get("command")
 

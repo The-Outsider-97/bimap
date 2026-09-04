@@ -42,7 +42,7 @@ from enum import Enum
 from threading import RLock
 from types import MappingProxyType
 from typing import Any, cast
-
+from starlette.types import Lifespan
 from fastapi import FastAPI
 
 from .api.app import APISettings, create_app
@@ -110,12 +110,7 @@ _COMPONENT = "bootstrap"
 # ---------------------------------------------------------------------------
 
 
-def _announce(
-    action: str,
-    *,
-    event: str,
-    context: Mapping[str, Any] | None = None,
-) -> None:
+def _announce(action: str, *, event: str, context: Mapping[str, Any] | None = None) -> None:
     """
     Emit one bounded method-start diagnostic.
 
@@ -137,9 +132,7 @@ def _announce(
     logger.debug(payload)
 
 
-def _safe_context(
-    context: Mapping[str, Any] | None,
-) -> Mapping[str, Any]:
+def _safe_context(context: Mapping[str, Any] | None) -> Mapping[str, Any]:
     """Return a shallow immutable operator-safe diagnostic context."""
 
     if context is None:
@@ -710,31 +703,16 @@ class BootstrapConfiguration:
             "retain_slai_shared_memory",
             "expose_health_details",
         ):
-            if not isinstance(
-                getattr(self, field_name),
-                bool,
-            ):
+            if not isinstance(getattr(self, field_name), bool):
                 raise BootstrapConfigurationError(
                     f"{field_name} must be boolean.",
                     operation="validate_configuration",
                     field=field_name,
                 )
 
-        object.__setattr__(
-            self,
-            "product_limits",
-            limits,
-        )
-        object.__setattr__(
-            self,
-            "slai_profile",
-            profile,
-        )
-        object.__setattr__(
-            self,
-            "slai_required_agents",
-            required_agents,
-        )
+        object.__setattr__(self, "product_limits", limits)
+        object.__setattr__(self, "slai_profile", profile)
+        object.__setattr__(self, "slai_required_agents", required_agents)
 
 
 # ---------------------------------------------------------------------------
@@ -883,6 +861,7 @@ class Bootstrap:
 
         self._state = BootstrapState.NEW
         self._runtime: BootstrapRuntime | None = None
+        self._lifespan: Lifespan[FastAPI] | None = None
         self._lock = RLock()
 
         logger.info(
@@ -934,7 +913,7 @@ class Bootstrap:
 
         return self._runtime
 
-    def build(self) -> BootstrapRuntime:
+    def build(self, *, lifespan: Lifespan[FastAPI] | None = None) -> BootstrapRuntime:
         """
         Compose the complete BIMAP runtime.
 
@@ -956,11 +935,26 @@ class Bootstrap:
                 self._state is BootstrapState.BUILT
                 and self._runtime is not None
             ):
+                if (
+                    lifespan is not None
+                    and lifespan is not self._lifespan
+                ):
+                    raise BootstrapStateError(
+                        "BIMAP runtime is already built with a different "
+                        "ASGI lifespan.",
+                        operation="build",
+                        field="lifespan",
+                        context={
+                            "state": self._state.value,
+                        },
+                    )
+            
                 logger.debug(
                     {
                         "event": "bootstrap_build_reused",
                     }
                 )
+            
                 return self._runtime
 
             if self._state is BootstrapState.CLOSED:
@@ -1253,6 +1247,7 @@ class Bootstrap:
                     rate_limiter=(
                         self.infrastructure.rate_limiter
                     ),
+                    lifespan=lifespan,
                 )
 
                 # ---------------------------------------------------------
@@ -1261,21 +1256,10 @@ class Bootstrap:
 
                 stage = "workers"
 
-                worker_audit = WorkerAudit(
-                    audit_service
-                )
-
-                worker_report = JobReport(
-                    fulfilment_service
-                )
-
-                worker_retention = JobRetention(
-                    fulfilment_service
-                )
-
-                worker_deletion = JobDeletion(
-                    request_deletion
-                )
+                worker_audit = WorkerAudit(audit_service)
+                worker_report = JobReport(fulfilment_service)
+                worker_retention = JobRetention(fulfilment_service)
+                worker_deletion = JobDeletion(request_deletion)
 
                 runner = Runner(
                     audit=worker_audit,
@@ -1322,6 +1306,7 @@ class Bootstrap:
                 ) from exc
 
             self._runtime = runtime
+            self._lifespan = lifespan
             self._state = BootstrapState.BUILT
 
             printer.status(
@@ -1402,6 +1387,7 @@ class Bootstrap:
 
             # State becomes CLOSED even when there was no successful build.
             self._runtime = None
+            self._lifespan = None
             self._state = BootstrapState.CLOSED
 
             if runtime is None:
