@@ -1,0 +1,10 @@
+# =============================================================================
+# R3D BIM Audit Platform — BIMAP
+# Direct Python runtime dependencies
+#
+# SLAI itself is the host runtime and owns its own dependency set.
+# Do NOT duplicate SLAI's requirements here.
+# =============================================================================
+
+fastapi~=0.141.1
+uvicorn[standard]~=0.52.4
