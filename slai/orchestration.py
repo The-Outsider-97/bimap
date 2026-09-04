@@ -416,13 +416,13 @@ class SLAIOrchestrator:
 
     _ANALYSIS_ORDER: tuple[str, ...] = (
         "collaborative",
-        "reader",
-        "perception",
-        "knowledge",
-        "reasoning",
-        "planning",
-        "language",
         "execution",
+        "knowledge",
+        "language",
+        "perception",
+        "planning",
+        "reader",
+        "reasoning",
     )
 
     def __init__(
@@ -436,6 +436,7 @@ class SLAIOrchestrator:
         task_builder: AgentTaskBuilder | None = None,
         allow_degraded_readiness: bool = False,
         retain_shared_memory: bool = False,
+        close_shared_memory: bool = False,
     ) -> None:
         announce_method_start(
             printer,
@@ -455,11 +456,17 @@ class SLAIOrchestrator:
             )
 
         self._owns_factory = factory is None
-        self._owns_shared_memory = shared_memory is None
+
         self.factory = factory if factory is not None else AgentFactory()
-        self.shared_memory = shared_memory if shared_memory is not None else SharedMemory()
-        self.health = health_check if health_check is not None else SLAIHealthCheck()
-        self.governance = governance if governance is not None else SLAIGovernance()
+        self.shared_memory = (shared_memory if shared_memory is not None else SharedMemory())
+        self.health = (health_check if health_check is not None else SLAIHealthCheck())
+        self.governance = (governance if governance is not None else SLAIGovernance())
+
+        self._close_shared_memory = require_bool(
+            close_shared_memory,
+            field="close_shared_memory",
+            error_type=SLAIRuntimeContractError,
+        )        
 
         if not isinstance(self.health, SLAIHealthCheck):
             raise SLAIRuntimeContractError(
@@ -498,10 +505,12 @@ class SLAIOrchestrator:
         self._closed = False
         self._lock = RLock()
 
+
         logger.info(
-            "BIMAP SLAI orchestrator initialized: owns_factory=%s owns_shared_memory=%s",
+            "BIMAP SLAI orchestrator initialized: "
+            "owns_factory=%s close_shared_memory=%s",
             self._owns_factory,
-            self._owns_shared_memory,
+            self._close_shared_memory,
         )
 
     @property
@@ -930,18 +939,21 @@ class SLAIOrchestrator:
                             type(exc).__name__,
                         )
 
-            if self._owns_shared_memory:
+
+            if self._close_shared_memory:
                 for method_name in ("close", "shutdown"):
                     method = getattr(self.shared_memory, method_name, None)
-                    if callable(method):
-                        try:
-                            method()
-                        except Exception as exc:
-                            logger.warning(
-                                "Owned SLAI SharedMemory shutdown failed: %s",
-                                type(exc).__name__,
-                            )
-                        break
+                    if not callable(method):
+                        continue
+
+                    try:
+                        method()
+                    except Exception as exc:
+                        logger.warning(
+                            "SLAI SharedMemory shutdown failed: %s",
+                            type(exc).__name__,
+                        )
+                    break
 
             self._agents.clear()
             logger.info("BIMAP SLAI orchestrator closed")
