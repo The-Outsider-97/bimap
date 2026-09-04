@@ -590,35 +590,70 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging()
 
     parser = _create_parser()
-    args: dict[str, Any] = vars(parser.parse_args(argv))
-    
+    args: dict[str, Any] = vars(
+        parser.parse_args(argv)
+    )
+
+    command = args.get("command")
+
+    if command is None:
+        parser.print_help()
+        return 0
+
     try:
-        if args.get("command") is None:
-            parser.print_help()
+        # --------------------------------------------------------------
+        # Version
+        # --------------------------------------------------------------
+
+        if command == "version":
+            print(__version__)
             return 0
 
-        specification = _factory_spec(args.get("factory"))
+        # --------------------------------------------------------------
+        # Resolve deployment
+        # --------------------------------------------------------------
 
-        if args["command"] == "check":
-            return _run_preflight(specification)
+        specification = _factory_spec(
+            args.get("factory")
+        )
 
-        if args["command"] != "serve":
+        # --------------------------------------------------------------
+        # Preflight
+        # --------------------------------------------------------------
+
+        if command == "check":
+            return _run_preflight(
+                specification
+            )
+
+        # --------------------------------------------------------------
+        # Serve
+        # --------------------------------------------------------------
+
+        if command != "serve":
             raise BIMAPLauncherConfigurationError(
-                f"Unsupported command: {args['command']}"
+                f"Unsupported command: {command}"
             )
 
         if (
             args["reload"]
             and args["workers"] != 1
         ):
-            raise BIMAPLauncherConfigurationError("--reload and --workers > 1 cannot be used together.")
+            raise BIMAPLauncherConfigurationError(
+                "--reload and --workers > 1 "
+                "cannot be used together."
+            )
 
-        # Uvicorn worker processes must inherit the exact same factory.
+        # Uvicorn child processes must inherit exactly the same
+        # deployment factory specification.
         os.environ[_FACTORY_ENV] = specification
 
         printer.status(
             "BIMAP",
-            f"Starting backend on {args['host']}:{args['port']}",
+            (
+                f"Starting backend on "
+                f"{args['host']}:{args['port']}"
+            ),
             "info",
         )
 
@@ -630,24 +665,68 @@ def main(argv: list[str] | None = None) -> int:
                 "workers": args["workers"],
                 "reload": args["reload"],
                 "version": __version__,
+                "factory": specification,
             }
         )
 
-        uvicorn.run(
-            "bimap:create_application",
-            factory=True,
-            host=args["host"],
-            port=args["port"],
-            workers=args["workers"],
-            reload=args["reload"],
-            log_level=args["log_level"],
-            log_config=None,
-            access_log=args["access_log"],
-            proxy_headers=args["proxy_headers"],
-            forwarded_allow_ips=args["forwarded_allow_ips"],
-            server_header=False,
-            lifespan="on",
-        )
+        uvicorn_options: dict[str, Any] = {
+            "host": args["host"],
+            "port": args["port"],
+            "workers": args["workers"],
+            "reload": args["reload"],
+            "log_level": args["log_level"],
+            "log_config": None,
+            "access_log": args["access_log"],
+            "proxy_headers": args["proxy_headers"],
+            "forwarded_allow_ips": (
+                args["forwarded_allow_ips"]
+            ),
+            "server_header": False,
+            "lifespan": "on",
+        }
+
+        # --------------------------------------------------------------
+        # Single-process path
+        # --------------------------------------------------------------
+        #
+        # Do not ask Uvicorn to re-import this launcher as "bimap".
+        # The launcher may currently be executing as "__main__".
+        #
+        # Constructing the FastAPI app here guarantees:
+        #
+        # - one launcher module instance;
+        # - one exception hierarchy;
+        # - one _active_bootstrap variable;
+        # - startup failures remain inside this error boundary.
+        # --------------------------------------------------------------
+
+        if (
+            args["workers"] == 1
+            and not args["reload"]
+        ):
+            application = create_application()
+
+            uvicorn.run(
+                application,
+                **uvicorn_options,
+            )
+
+        # --------------------------------------------------------------
+        # Reload / multiprocess path
+        # --------------------------------------------------------------
+
+        else:
+            # Validate module resolution before Uvicorn starts
+            # child processes.
+            _load_factory(
+                specification
+            )
+
+            uvicorn.run(
+                "bimap:create_application",
+                factory=True,
+                **uvicorn_options,
+            )
 
         return 0
 
@@ -675,6 +754,22 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         return 130
+
+    except Exception as exc:
+        logger.exception(
+            "Unexpected BIMAP launcher failure"
+        )
+
+        printer.status(
+            "BIMAP",
+            (
+                "Unexpected launcher failure: "
+                f"{type(exc).__name__}"
+            ),
+            "error",
+        )
+
+        return 1
 
 
 __all__ = [
