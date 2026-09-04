@@ -1,0 +1,148 @@
+[build-system]
+requires = [
+    "setuptools>=80",
+]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "r3d-bimap"
+dynamic = ["version"]
+
+description = "R3D BIM Audit Platform: evidence-grounded deterministic BIM auditing with governed SLAI integration."
+readme = "README.md"
+
+requires-python = ">=3.10"
+
+license = "MIT"
+license-files = ["LICENSE"]
+
+keywords = [
+    "BIM",
+    "Revit",
+    "quality-assurance",
+    "audit",
+    "SLAI",
+    "AEC",
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "fastapi~=0.141.1",
+    "uvicorn[standard]~=0.52.4",
+]
+
+
+[project.urls]
+Repository = "https://github.com/The-Outsider-97/bimap"
+Issues = "https://github.com/The-Outsider-97/bimap/issues"
+
+
+# ---------------------------------------------------------------------------
+# Setuptools package layout
+# ---------------------------------------------------------------------------
+#
+# BIMAP physically lives at:
+#
+#   SLAI/applications/bimap/
+#
+# and SLAI/bimap.py intentionally exists at the SLAI root.
+#
+# Packaging BIMAP as applications.bimap avoids the top-level name collision
+# between:
+#
+#   SLAI/bimap.py
+#
+# and:
+#
+#   applications/bimap/
+#
+# Internal BIMAP modules use relative imports, so this namespace mapping does
+# not require rewriting the package internals.
+#
+
+[tool.setuptools]
+include-package-data = true
+
+package-dir = { "applications.bimap" = "." }
+
+packages = [
+    "applications.bimap",
+
+    "applications.bimap.api",
+    "applications.bimap.api.middleware",
+    "applications.bimap.api.routes",
+    "applications.bimap.api.utils",
+
+    "applications.bimap.app",
+    "applications.bimap.app.commands",
+    "applications.bimap.app.ports",
+    "applications.bimap.app.queries",
+    "applications.bimap.app.services",
+    "applications.bimap.app.utils",
+
+    "applications.bimap.audit_engine",
+    "applications.bimap.audit_engine.bim_qa",
+    "applications.bimap.audit_engine.combined",
+    "applications.bimap.audit_engine.ingestion",
+    "applications.bimap.audit_engine.normalization",
+    "applications.bimap.audit_engine.rfa",
+    "applications.bimap.audit_engine.rules",
+    "applications.bimap.audit_engine.utils",
+    "applications.bimap.audit_engine.validation",
+
+    "applications.bimap.contracts",
+    "applications.bimap.contracts.utils",
+
+    "applications.bimap.domain",
+    "applications.bimap.domain.evidence",
+    "applications.bimap.domain.findings",
+    "applications.bimap.domain.governance",
+    "applications.bimap.domain.orders",
+    "applications.bimap.domain.products",
+    "applications.bimap.domain.reports",
+    "applications.bimap.domain.requirements",
+    "applications.bimap.domain.utils",
+
+    "applications.bimap.reporting",
+    "applications.bimap.reporting.serializers",
+    "applications.bimap.reporting.utils",
+
+    "applications.bimap.slai",
+    "applications.bimap.slai.utils",
+
+    "applications.bimap.workers",
+    "applications.bimap.workers.jobs",
+    "applications.bimap.workers.utils",
+]
+
+
+[tool.setuptools.dynamic]
+version = { attr = "applications.bimap.version.__version__" }
+
+
+[tool.setuptools.package-data]
+"applications.bimap" = [
+    "configs/*.yaml",
+    "configs/README.md",
+
+    "contracts/schema/README.md",
+    "contracts/schema/*.json",
+    "contracts/schema/generated/*.json",
+
+    "reporting/templates/*",
+]
