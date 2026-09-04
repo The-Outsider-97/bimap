@@ -31,9 +31,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
-from fastapi import FastAPI, Request, Response
-from fastapi.exceptions import RequestValidationError
-from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi import FastAPI, Request, Response # type: ignore
+from fastapi.exceptions import RequestValidationError # type: ignore
+from starlette.exceptions import HTTPException as StarletteHTTPException # type: ignore
 
 from .dependencies import APIDependencies, install_api_dependencies
 from .middleware.correlation import CorrelationMiddleware
@@ -452,11 +452,8 @@ def _construct_route_groups(dependencies: APIDependencies) -> tuple[Any, ...]:
 
     route_groups: list[Any] = [
         RouteHealth(
-            health.health_check,
-            factory=health.factory,
-            shared_memory=health.shared_memory,
+            health.slai,
             required_agents=health.required_agents,
-            agents=health.agents,
             expose_details=health.expose_details,
         ),
         RouteProducts(use_cases.get_products),
