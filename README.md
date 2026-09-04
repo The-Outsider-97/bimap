@@ -804,6 +804,7 @@ SLAI/
 ├── modules/
 ├── data/
 ├── deployment/
+├── bimap.py
 │
 └── applications/
     └── bimap/
@@ -820,6 +821,8 @@ SLAI/
         ├── slai/
         └── workers/
 ```
+
+Move bimap.py to the SLAI root directory
 
 The service should execute from the **SLAI repository root** so SLAI-owned modules such as:
 
