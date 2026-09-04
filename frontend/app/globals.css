@@ -5449,3 +5449,427 @@ span {
     animation: none;
   }
 }
+
+
+/* ==========================================================
+   BIMAP 2D DWG LIBRARY
+   Reuses the 3D storefront card/modal system.
+   ========================================================== */
+
+
+/* Static DWG preview */
+
+.dwg-preview,
+.dwg-preview__image {
+  width: 100%;
+  height: 100%;
+}
+
+
+.dwg-preview__image {
+  display: block;
+
+  object-fit: cover;
+
+  background:
+    #f2f2ee;
+}
+
+
+.dwg-preview {
+  position: relative;
+
+  display: grid;
+
+  place-items:
+    center;
+
+  overflow: hidden;
+
+  background:
+    #090909;
+}
+
+
+.dwg-preview__grid {
+  position: absolute;
+
+  inset: 0;
+
+  background-image:
+
+    linear-gradient(
+      rgba(
+        234,
+        236,
+        236,
+        0.06
+      )
+      1px,
+      transparent 1px
+    ),
+
+    linear-gradient(
+      90deg,
+      rgba(
+        234,
+        236,
+        236,
+        0.06
+      )
+      1px,
+      transparent 1px
+    );
+
+  background-size:
+    24px 24px;
+}
+
+
+/*
+ * Abstract architectural
+ * drawing proxy.
+ *
+ * Static — no rotation.
+ */
+
+.dwg-preview__drawing {
+  position: relative;
+
+  width: 66%;
+  height: 58%;
+
+  border:
+    1px solid
+    rgba(
+      225,
+      200,
+      56,
+      0.75
+    );
+}
+
+
+.dwg-preview__drawing
+span {
+  position: absolute;
+
+  display: block;
+
+  background:
+    rgba(
+      225,
+      200,
+      56,
+      0.62
+    );
+}
+
+
+.dwg-preview__drawing
+span:nth-child(1) {
+  left: 12%;
+  top: 18%;
+
+  width: 76%;
+  height: 1px;
+}
+
+
+.dwg-preview__drawing
+span:nth-child(2) {
+  left: 25%;
+  top: 10%;
+
+  width: 1px;
+  height: 76%;
+}
+
+
+.dwg-preview__drawing
+span:nth-child(3) {
+  right: 18%;
+  top: 28%;
+
+  width: 1px;
+  height: 58%;
+}
+
+
+.dwg-preview__drawing
+span:nth-child(4) {
+  left: 14%;
+  bottom: 22%;
+
+  width: 70%;
+  height: 1px;
+}
+
+
+.dwg-preview__drawing
+span:nth-child(5) {
+  left: 36%;
+  top: 43%;
+
+  width: 36%;
+  height: 1px;
+}
+
+
+.dwg-preview > p {
+  position: absolute;
+
+  left: 14px;
+  bottom: 13px;
+
+  margin: 0;
+
+  color:
+    rgba(
+      234,
+      236,
+      236,
+      0.7
+    );
+
+  font:
+    9px
+    var(--font-mono);
+
+  text-transform:
+    uppercase;
+
+  letter-spacing:
+    0.08em;
+}
+
+
+.dwg-preview > p span {
+  display: block;
+
+  margin-top: 3px;
+
+  color:
+    rgba(
+      234,
+      236,
+      236,
+      0.38
+    );
+}
+
+
+/* Tags requested at upper-right */
+
+.dwg-card__tags {
+  left: auto;
+
+  right: 12px;
+}
+
+
+/* Category bottom-left */
+
+.dwg-card__category-overlay {
+  position: absolute;
+
+  z-index: 4;
+
+  left: 12px;
+  bottom: 12px;
+
+  padding:
+    6px 8px;
+
+  background:
+    rgba(
+      0,
+      0,
+      0,
+      0.72
+    );
+
+  border:
+    1px solid
+    rgba(
+      234,
+      236,
+      236,
+      0.16
+    );
+
+  color:
+    rgba(
+      234,
+      236,
+      236,
+      0.72
+    );
+
+  font:
+    9px
+    var(--font-mono);
+
+  text-transform:
+    uppercase;
+
+  letter-spacing:
+    0.09em;
+}
+
+
+/*
+ * The existing "View details"
+ * control is also bottom-right.
+ */
+
+.dwg-card
+.model-card__inspect {
+  bottom: 12px;
+  right: 12px;
+}
+
+
+/* Drawing previews inside popup */
+
+.dwg-render__placeholder {
+  position: relative;
+
+  width: 100%;
+
+  aspect-ratio:
+    16 / 10;
+
+  display: grid;
+
+  place-items:
+    center;
+
+  overflow: hidden;
+
+  background:
+    #0b0b0b;
+
+  background-image:
+
+    linear-gradient(
+      var(--faint)
+      1px,
+      transparent 1px
+    ),
+
+    linear-gradient(
+      90deg,
+      var(--faint)
+      1px,
+      transparent 1px
+    );
+
+  background-size:
+    30px 30px;
+}
+
+
+.dwg-render__linework {
+  position: absolute;
+
+  width: 60%;
+  height: 58%;
+
+  border:
+    1px solid
+    rgba(
+      225,
+      200,
+      56,
+      0.62
+    );
+}
+
+
+.dwg-render__linework
+span {
+  position: absolute;
+
+  background:
+    rgba(
+      225,
+      200,
+      56,
+      0.55
+    );
+}
+
+
+.dwg-render__linework
+span:nth-child(1) {
+  left: 15%;
+  top: 20%;
+
+  width: 70%;
+  height: 1px;
+}
+
+
+.dwg-render__linework
+span:nth-child(2) {
+  left: 30%;
+  top: 12%;
+
+  width: 1px;
+  height: 72%;
+}
+
+
+.dwg-render__linework
+span:nth-child(3) {
+  right: 20%;
+  top: 32%;
+
+  width: 1px;
+  height: 54%;
+}
+
+
+.dwg-render__linework
+span:nth-child(4) {
+  left: 16%;
+  bottom: 22%;
+
+  width: 65%;
+  height: 1px;
+}
+
+
+.dwg-render__placeholder
+> p {
+  position: relative;
+
+  z-index: 2;
+
+  margin: 0;
+
+  padding:
+    6px 9px;
+
+  background:
+    rgba(
+      0,
+      0,
+      0,
+      0.75
+    );
+
+  color:
+    var(--bimap-yellow);
+
+  font:
+    10px
+    var(--font-mono);
+
+  text-transform:
+    uppercase;
+
+  letter-spacing:
+    0.1em;
+}

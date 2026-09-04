@@ -1,4 +1,6 @@
-import Link from "next/link";
+import {
+  PurchaseAssetButton,
+} from "@/comp/library/shared/PurchaseAssetButton";
 
 import type {
   ThreeDProduct,
@@ -6,7 +8,6 @@ import type {
 
 type Props = {
   product: ThreeDProduct;
-
   compact?: boolean;
 };
 
@@ -14,64 +15,17 @@ export function PurchaseModelButton({
   product,
   compact = false,
 }: Props) {
-
-  const label =
-    product.priceLabel
-      ? `Purchase model · ${product.priceLabel}`
-      : "Purchase model";
-
-  /*
-   * Commerce does not exist yet.
-   *
-   * Keep the control visible,
-   * but do not send customers to
-   * a fabricated checkout route.
-   */
-  if (!product.purchaseHref) {
-    return (
-      <button
-        type="button"
-
-        className="model-purchase"
-
-        data-compact={compact}
-
-        disabled
-
-        title="Checkout has not yet been configured for this product."
-      >
-        <span>
-          {label}
-        </span>
-
-        <span aria-hidden="true">
-          ↗
-        </span>
-      </button>
-    );
-  }
-
   return (
-    <Link
-      href={
+    <PurchaseAssetButton
+      title={product.title}
+      label="Purchase model"
+      purchaseHref={
         product.purchaseHref
       }
-
-      className="model-purchase"
-
-      data-compact={compact}
-
-      aria-label={
-        `${label}: ${product.title}`
+      priceLabel={
+        product.priceLabel
       }
-    >
-      <span>
-        {label}
-      </span>
-
-      <span aria-hidden="true">
-        ↗
-      </span>
-    </Link>
+      compact={compact}
+    />
   );
 }
