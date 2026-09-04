@@ -824,6 +824,84 @@ SLAI/
 
 Move bimap.py to the SLAI root directory
 
+And move the below bimap.py to SLAI/deployment
+```python
+"""
+SLAI deployment factory for the R3D BIM Audit Platform.
+
+Location
+--------
+SLAI/deployment/bimap.py
+
+Architectural role
+------------------
+This module is the deployment-owned composition boundary between the SLAI host
+runtime and the BIMAP application package.
+
+It is permitted to know about:
+
+- concrete persistence implementations;
+- object storage;
+- payment infrastructure;
+- malware scanning infrastructure;
+- queue infrastructure;
+- SLAI SharedMemory;
+- SLAI AgentFactory;
+- HTTP authentication/authorization hooks;
+- deployment configuration;
+- BIMAP product policy; and
+- deterministic Audit Engine product construction.
+
+The BIMAP package itself must not depend on this module.
+"""
+
+from __future__ import annotations
+
+from ..applications.bimap.bootstrap import (
+    Bootstrap,
+    BootstrapAuditComponents,
+    BootstrapConfiguration,
+    BootstrapInfrastructure,
+)
+
+from logs.logger import PrettyPrinter, get_logger # pyright: ignore[reportMissingImports]
+
+
+logger = get_logger("BIMAP Deployment")
+printer = PrettyPrinter()
+
+
+def create_bootstrap() -> Bootstrap:
+    """
+    Construct one fully configured BIMAP Bootstrap instance.
+
+    This function is intentionally the zero-argument callable consumed by:
+
+        SLAI/bimap.py
+
+    All deployment-specific dependency construction belongs here.
+    """
+
+    printer.status(
+        "BIMAP",
+        "Constructing deployment bootstrap",
+        "info",
+    )
+
+    raise RuntimeError(
+        "BIMAP deployment adapters have not yet been configured. "
+        "Provide concrete Repository, Payment, Clock, Malware, Storage, "
+        "Queue, APIRouteHooks, SLAI runtime dependencies, product "
+        "configuration, and deterministic audit components in "
+        "SLAI/deployment/bimap.py."
+    )
+
+
+__all__ = [
+    "create_bootstrap",
+]
+```
+
 The service should execute from the **SLAI repository root** so SLAI-owned modules such as:
 
 ```python
