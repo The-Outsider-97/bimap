@@ -30,7 +30,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
-
+from starlette.types import Lifespan
 from fastapi import FastAPI, Request, Response # type: ignore
 from fastapi.exceptions import RequestValidationError # type: ignore
 from starlette.exceptions import HTTPException as StarletteHTTPException # type: ignore
@@ -575,6 +575,7 @@ def create_app(
     *,
     settings: APISettings,
     rate_limiter: RateLimiter | None = None,
+    lifespan: Lifespan[FastAPI] | None = None,
 ) -> FastAPI:
     """Create the fully wired FastAPI application for one BIMAP deployment.
 
@@ -590,6 +591,10 @@ def create_app(
         Optional infrastructure-owned asynchronous rate-limit implementation.
         ``None`` means no rate-limit adapter is installed; request body/header
         limits still apply according to ``settings.request_limits``.
+    lifespan:
+        Optional host-owned ASGI lifespan context. The API layer executes the
+        lifecycle but does not define BIMAP runtime ownership or shutdown
+        policy.
     """
     announce_api_action(
         printer,
@@ -621,6 +626,7 @@ def create_app(
         openapi_url=settings.openapi_url,
         docs_url=settings.docs_url,
         redoc_url=settings.redoc_url,
+        lifespan=lifespan,
     )
     install_api_dependencies(application, dependencies)
 
