@@ -49,11 +49,14 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import os
 import sys
-import uvicorn
 
 from collections.abc import Callable
+from pathlib import Path
+
+import uvicorn
 from typing import Any, cast
 from fastapi import FastAPI
 
@@ -75,7 +78,14 @@ _DEFAULT_PORT = 8000
 _DEFAULT_WORKERS = 1
 
 _DEFAULT_FORWARDED_ALLOW_IPS = "127.0.0.1"
-
+_UVICORN_LOG_LEVELS = (
+    "critical",
+    "error",
+    "warning",
+    "info",
+    "debug",
+    "trace",
+)
 
 BootstrapFactory = Callable[[], Bootstrap]
 
@@ -105,25 +115,10 @@ class BIMAPLauncherFactoryError(BIMAPLauncherError):
 # ---------------------------------------------------------------------------
 
 
-def _announce(
-    action: str,
-    *,
-    level: str = "info",
-) -> None:
+def _announce(action: str, *, level: str = "info") -> None:
     """Emit one process-level diagnostic without customer evidence."""
-
-    printer.status(
-        "BIMAP",
-        action,
-        level,
-    )
-
-    logger.debug(
-        {
-            "event": "bimap_launcher_action",
-            "action": action,
-        }
-    )
+    printer.status("BIMAP", action, level)
+    logger.debug({"event": "bimap_launcher_action", "action": action})
 
 
 def _positive_int(value: str) -> int:
@@ -137,9 +132,7 @@ def _positive_int(value: str) -> int:
         ) from exc
 
     if parsed <= 0:
-        raise argparse.ArgumentTypeError(
-            "value must be greater than zero"
-        )
+        raise argparse.ArgumentTypeError("value must be greater than zero")
 
     return parsed
 
@@ -150,16 +143,12 @@ def _port(value: str) -> int:
     parsed = _positive_int(value)
 
     if parsed > 65535:
-        raise argparse.ArgumentTypeError(
-            "port must be <= 65535"
-        )
+        raise argparse.ArgumentTypeError("port must be <= 65535")
 
     return parsed
 
 
-def _factory_spec(
-    explicit: str | None = None,
-) -> str:
+def _factory_spec(explicit: str | None = None) -> str:
     """
     Resolve the deployment-owned BIMAP Bootstrap factory.
 
@@ -180,18 +169,13 @@ def _factory_spec(
     raw = (
         explicit
         if explicit is not None
-        else os.getenv(
-            _FACTORY_ENV,
-            _DEFAULT_FACTORY_SPEC,
+        else os.getenv( _FACTORY_ENV, _DEFAULT_FACTORY_SPEC)
         )
-    )
 
     spec = raw.strip()
 
     if not spec:
-        raise BIMAPLauncherConfigurationError(
-            f"{_FACTORY_ENV} cannot be empty."
-        )
+        raise BIMAPLauncherConfigurationError(f"{_FACTORY_ENV} cannot be empty.")
 
     module_name, separator, attribute_name = spec.partition(":")
 
@@ -252,9 +236,7 @@ def _load_factory(
     return cast(BootstrapFactory, factory)
 
 
-def _create_bootstrap(
-    specification: str,
-) -> Bootstrap:
+def _create_bootstrap(specification: str) -> Bootstrap:
     """Create and validate one BIMAP Bootstrap instance."""
 
     factory = _load_factory(
@@ -280,6 +262,37 @@ def _create_bootstrap(
         )
 
     return bootstrap
+
+
+def _close_active_bootstrap_best_effort(
+    *,
+    reason: str,
+) -> None:
+    """
+    Best-effort cleanup for an active Bootstrap when the ASGI lifecycle may not
+    have completed.
+
+    This helper is intentionally idempotent. Normal FastAPI shutdown clears the
+    active Bootstrap first; abnormal Uvicorn exits are cleaned up here.
+    """
+
+    global _active_bootstrap
+
+    bootstrap = _active_bootstrap
+
+    if bootstrap is None:
+        return
+
+    try:
+        bootstrap.close()
+    except Exception:
+        logger.exception(
+            "BIMAP emergency Bootstrap cleanup failed; reason=%s",
+            reason,
+        )
+    finally:
+        if _active_bootstrap is bootstrap:
+            _active_bootstrap = None
 
 
 # ---------------------------------------------------------------------------
@@ -335,23 +348,12 @@ def create_application() -> FastAPI:
         try:
             bootstrap.close()
         finally:
-            raise BIMAPLauncherError(
-                "Bootstrap runtime did not provide a FastAPI application."
-            )
-
-    _active_bootstrap = bootstrap
-
-    # Keep lifecycle objects available to trusted process integrations.
-    # They are application state, not public HTTP API data.
-    application.state.bimap_bootstrap = bootstrap
-    application.state.bimap_runtime = runtime
+            raise BIMAPLauncherError("Bootstrap runtime did not provide a FastAPI application.")
 
     async def _shutdown_bimap() -> None:
         global _active_bootstrap
 
-        _announce(
-            "Shutting down BIMAP runtime"
-        )
+        _announce("Shutting down BIMAP runtime")
 
         try:
             bootstrap.close()
@@ -359,10 +361,27 @@ def create_application() -> FastAPI:
             if _active_bootstrap is bootstrap:
                 _active_bootstrap = None
 
-    application.add_event_handler(
-        "shutdown",
-        _shutdown_bimap,
-    )
+    try:
+        # Keep lifecycle objects available to trusted process integrations.
+        # They are application state, not public HTTP API data.
+        application.state.bimap_bootstrap = bootstrap
+        application.state.bimap_runtime = runtime
+
+        application.add_event_handler("shutdown", _shutdown_bimap)
+
+    except Exception as exc:
+        try:
+            bootstrap.close()
+        except Exception:
+            logger.exception(
+                "BIMAP cleanup failed after ASGI lifecycle installation failure"
+            )
+
+        raise BIMAPLauncherError(
+            "Unable to install the BIMAP ASGI runtime lifecycle."
+        ) from exc
+
+    _active_bootstrap = bootstrap
 
     logger.info(
         {
@@ -371,11 +390,7 @@ def create_application() -> FastAPI:
         }
     )
 
-    printer.status(
-        "BIMAP",
-        f"Backend ready — version {__version__}",
-        "success",
-    )
+    printer.status("BIMAP", f"Backend ready — version {__version__}", "success")
 
     return application
 
@@ -385,18 +400,12 @@ def create_application() -> FastAPI:
 # ---------------------------------------------------------------------------
 
 
-def _run_preflight(
-    specification: str,
-) -> int:
+def _run_preflight(specification: str) -> int:
     """Build the complete graph and evaluate its SLAI integration health."""
 
-    _announce(
-        "Running BIMAP deployment preflight"
-    )
+    _announce("Running BIMAP deployment preflight")
 
-    bootstrap = _create_bootstrap(
-        specification
-    )
+    bootstrap = _create_bootstrap(specification)
 
     try:
         runtime = bootstrap.build()
@@ -404,17 +413,9 @@ def _run_preflight(
         liveness = runtime.slai.check_liveness()
         readiness = runtime.slai.check_readiness()
 
-        printer.status(
-            "LIVE",
-            liveness.to_dict(),
-            "success" if liveness.live else "error",
-        )
+        printer.status("LIVE", liveness.to_dict(), "success" if liveness.live else "error")
 
-        printer.status(
-            "READY",
-            readiness.to_dict(),
-            "success" if readiness.ready else "warning",
-        )
+        printer.status("READY", readiness.to_dict(), "success" if readiness.ready else "warning")
 
         if not liveness.live:
             return 2
@@ -422,11 +423,7 @@ def _run_preflight(
         if not readiness.ready:
             return 3
 
-        printer.status(
-            "BIMAP",
-            "Deployment preflight passed",
-            "success",
-        )
+        printer.status("BIMAP", "Deployment preflight passed", "success")
 
         return 0
 
@@ -437,6 +434,18 @@ def _run_preflight(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+def _log_level(value: str) -> str:
+    """Validate and normalize one Uvicorn log level."""
+
+    normalized = str(value).strip().lower()
+
+    if normalized not in _UVICORN_LOG_LEVELS:
+        raise argparse.ArgumentTypeError(
+            "log level must be one of: "
+            + ", ".join(_UVICORN_LOG_LEVELS)
+        )
+
+    return normalized
 
 
 def _create_parser() -> argparse.ArgumentParser:
@@ -482,26 +491,24 @@ def _create_parser() -> argparse.ArgumentParser:
         help="Backend bind host.",
     )
 
+    
     serve.add_argument(
         "--port",
         type=_port,
-        default=int(
-            os.getenv(
-                "BIMAP_PORT",
-                str(_DEFAULT_PORT),
-            )
+        default=os.getenv(
+            "BIMAP_PORT",
+            str(_DEFAULT_PORT),
         ),
-        help="Backend TCP port.",
+        help="TCP port to bind.",
     )
+
 
     serve.add_argument(
         "--workers",
         type=_positive_int,
-        default=int(
-            os.getenv(
-                "BIMAP_WORKERS",
-                str(_DEFAULT_WORKERS),
-            )
+        default=os.getenv(
+            "BIMAP_WORKERS",
+            str(_DEFAULT_WORKERS),
         ),
         help="Number of Uvicorn worker processes.",
     )
@@ -514,14 +521,8 @@ def _create_parser() -> argparse.ArgumentParser:
 
     serve.add_argument(
         "--log-level",
-        choices=(
-            "critical",
-            "error",
-            "warning",
-            "info",
-            "debug",
-            "trace",
-        ),
+        type=_log_level,
+        choices=_UVICORN_LOG_LEVELS,
         default=os.getenv(
             "BIMAP_UVICORN_LOG_LEVEL",
             "info",
@@ -582,6 +583,35 @@ def _create_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def _validate_uvicorn_import_target() -> None:
+    """
+    Ensure Uvicorn child processes will resolve ``bimap`` to this SLAI-root
+    launcher rather than another installed module/package.
+    """
+
+    try:
+        specification = importlib.util.find_spec("bimap")
+
+    except (ImportError, AttributeError, ValueError) as exc:
+        raise BIMAPLauncherConfigurationError(
+            "Unable to resolve the SLAI-root 'bimap' launcher module."
+        ) from exc
+
+    if specification is None or specification.origin is None:
+        raise BIMAPLauncherConfigurationError(
+            "The SLAI-root 'bimap' launcher module is not importable."
+        )
+
+    expected = Path(__file__).resolve()
+    actual = Path(specification.origin).resolve()
+
+    if actual != expected:
+        raise BIMAPLauncherConfigurationError(
+            "Uvicorn would resolve 'bimap' to a different module. "
+            f"Expected {expected!s}; resolved {actual!s}."
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -706,27 +736,19 @@ def main(argv: list[str] | None = None) -> int:
         ):
             application = create_application()
 
-            uvicorn.run(
-                application,
-                **uvicorn_options,
-            )
+            try:
+                uvicorn.run(application, **uvicorn_options)
+            finally:
+                _close_active_bootstrap_best_effort(reason="uvicorn_run_exit")
 
         # --------------------------------------------------------------
         # Reload / multiprocess path
         # --------------------------------------------------------------
 
         else:
-            # Validate module resolution before Uvicorn starts
-            # child processes.
-            _load_factory(
-                specification
-            )
-
-            uvicorn.run(
-                "bimap:create_application",
-                factory=True,
-                **uvicorn_options,
-            )
+            _validate_uvicorn_import_target()
+            _load_factory(specification)
+            uvicorn.run("bimap:create_application", factory=True, **uvicorn_options)
 
         return 0
 
@@ -734,41 +756,17 @@ def main(argv: list[str] | None = None) -> int:
         BIMAPLauncherError,
         BootstrapError,
     ) as exc:
-        logger.exception(
-            "BIMAP launcher failed"
-        )
-
-        printer.status(
-            "BIMAP",
-            str(exc),
-            "error",
-        )
-
+        logger.exception("BIMAP launcher failed")
+        printer.status("BIMAP", str(exc), "error")
         return 1
 
     except KeyboardInterrupt:
-        printer.status(
-            "BIMAP",
-            "Shutdown requested",
-            "warning",
-        )
-
+        printer.status("BIMAP", "Shutdown requested", "warning")
         return 130
 
     except Exception as exc:
-        logger.exception(
-            "Unexpected BIMAP launcher failure"
-        )
-
-        printer.status(
-            "BIMAP",
-            (
-                "Unexpected launcher failure: "
-                f"{type(exc).__name__}"
-            ),
-            "error",
-        )
-
+        logger.exception("Unexpected BIMAP launcher failure")
+        printer.status("BIMAP", ("Unexpected launcher failure: " f"{type(exc).__name__}"), "error")
         return 1
 
 
@@ -781,6 +779,4 @@ __all__ = [
 ]
 
 if __name__ == "__main__":
-    raise SystemExit(
-        main(sys.argv[1:])
-    )
+    main()
