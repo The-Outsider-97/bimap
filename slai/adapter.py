@@ -347,14 +347,8 @@ class SLAIAdapter:
             )
 
 
-# Preserve the class name used by the initial repository scaffold while making
-# the conventional capitalization available to new code.
-SLAIADapter = SLAIAdapter
-
-
 __all__ = [
     "SLAIAdapter",
-    "SLAIADapter",
 ]
 
 
