@@ -310,7 +310,8 @@ class SLAIRequest:
                 cause=exc,
             ) from exc
 
-        finding_ids: list[str] = []
+        finding_ids: set[str] = set()
+
         for index, finding in enumerate(findings):
             if not isinstance(finding, FindingContract):
                 raise UnsupportedAppInputError(
@@ -320,6 +321,7 @@ class SLAIRequest:
                     field=f"authoritative_findings[{index}]",
                     context={"received_type": type(finding).__name__},
                 )
+
             if finding.finding_id in finding_ids:
                 raise AppIntegrityError(
                     "authoritative_findings contains a duplicate finding identifier.",
@@ -328,7 +330,8 @@ class SLAIRequest:
                     field="authoritative_findings",
                     context={"finding_id": finding.finding_id},
                 )
-            finding_ids.append(finding.finding_id)
+
+            finding_ids.add(finding.finding_id)
 
         requested_agents = _normalize_text_sequence(
             self.requested_agents,
@@ -582,6 +585,14 @@ def _validate_slai_result(
         )
 
     warnings = getattr(value, "mapping_warnings", None)
+    if warnings is None:
+        raise AppIntegrityError(
+            "SLAI result mapping_warnings must be a sequence of strings.",
+            component=_COMPONENT,
+            operation="validate_result",
+            field="result.mapping_warnings",
+            context={"received_type": "NoneType"},
+        )
     if isinstance(warnings, (str, bytes, bytearray, Mapping)):
         raise AppIntegrityError(
             "SLAI result mapping_warnings must be a sequence of strings.",
@@ -591,7 +602,7 @@ def _validate_slai_result(
             context={"received_type": type(warnings).__name__},
         )
     try:
-        warning_items = tuple(warnings)
+        warning_items = tuple(cast(Iterable[Any], warnings))
     except TypeError as exc:
         raise AppIntegrityError(
             "SLAI result mapping_warnings must be iterable.",
@@ -649,8 +660,17 @@ def _validate_health(value: Any, *, operation: str) -> SlaiHealth:
             field="health.live",
             context={"received_type": type(live).__name__},
         )
+    checked_at = getattr(value, "checked_at", None)
+    if checked_at is None:
+        raise AppIntegrityError(
+            "SLAI health result checked_at is required.",
+            component=_COMPONENT,
+            operation=operation,
+            field="health.checked_at",
+            context={"received_type": "NoneType"},
+        )
     ensure_app_utc_datetime(
-        getattr(value, "checked_at", None),
+        checked_at,
         field="health.checked_at",
         error_type=AppIntegrityError,
         component=_COMPONENT,
@@ -968,11 +988,11 @@ if __name__ == "__main__":
         requested_agents=("quality", "reasoning"),
     )
     port = _Port()
-    result = invoke_slai(port, request)
+    result = invoke_slai(cast(SLAIPort, port), request)
     assert result.job_id == "job-1"
-    assert probe_slai_liveness(port).live is True
-    assert probe_slai_readiness(port).ready is True
-    close_slai(port)
+    assert probe_slai_liveness(cast(SLAIPort, port)).live is True
+    assert probe_slai_readiness(cast(SLAIPort, port)).ready is True
+    close_slai(cast(SLAIPort, port))
     assert port.closed is True
     printer.status("PASS", "SLAI port structure and boundary invariants", "success")
 
