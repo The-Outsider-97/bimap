@@ -822,7 +822,7 @@ SLAI/
         └── workers/
 ```
 
-Move bimap.py to the SLAI root directory
+Move bimap.py to the SLAI root directory and deployment_bimap.py to SLAI/deployment/
 
 And move the below bimap.py to SLAI/deployment
 ```python
