@@ -48,16 +48,22 @@ This avoids module/package shadowing without sys.path manipulation.
 from __future__ import annotations
 
 import argparse
-from contextlib import asynccontextmanager
 import importlib
 import importlib.util
 import os
 import sys
+import uvicorn
+import shutil
+import signal
+import subprocess
+import time
+import urllib.error
+import urllib.request
+import webbrowser
 
 from collections.abc import Callable
 from pathlib import Path
-
-import uvicorn
+from contextlib import asynccontextmanager
 from typing import Any, cast
 from fastapi import FastAPI
 
@@ -197,21 +203,15 @@ def _factory_spec(explicit: str | None = None) -> str:
     return f"{module_name}:{attribute_name}"
 
 
-def _load_factory(
-    specification: str,
-) -> BootstrapFactory:
+def _load_factory(specification: str) -> BootstrapFactory:
     """Import and validate one deployment Bootstrap factory."""
 
-    _announce(
-        "Resolving BIMAP deployment factory"
-    )
+    _announce("Resolving BIMAP deployment factory")
 
     module_name, _, attribute_name = specification.partition(":")
 
     try:
-        module = importlib.import_module(
-            module_name
-        )
+        module = importlib.import_module(module_name)
     except Exception as exc:
         raise BIMAPLauncherFactoryError(
             "Unable to import BIMAP deployment module "
@@ -219,10 +219,7 @@ def _load_factory(
         ) from exc
 
     try:
-        factory = getattr(
-            module,
-            attribute_name,
-        )
+        factory = getattr(module, attribute_name)
     except AttributeError as exc:
         raise BIMAPLauncherFactoryError(
             f"Deployment module {module_name!r} does not expose "
@@ -230,9 +227,7 @@ def _load_factory(
         ) from exc
 
     if not callable(factory):
-        raise BIMAPLauncherFactoryError(
-            "Configured BIMAP Bootstrap factory is not callable."
-        )
+        raise BIMAPLauncherFactoryError("Configured BIMAP Bootstrap factory is not callable.")
 
     return cast(BootstrapFactory, factory)
 
@@ -240,9 +235,7 @@ def _load_factory(
 def _create_bootstrap(specification: str) -> Bootstrap:
     """Create and validate one BIMAP Bootstrap instance."""
 
-    factory = _load_factory(
-        specification
-    )
+    factory = _load_factory(specification)
 
     try:
         bootstrap = factory()
@@ -265,10 +258,7 @@ def _create_bootstrap(specification: str) -> Bootstrap:
     return bootstrap
 
 
-def _close_active_bootstrap_best_effort(
-    *,
-    reason: str,
-) -> None:
+def _close_active_bootstrap_best_effort(*, reason: str) -> None:
     """
     Best-effort cleanup for an active Bootstrap when the ASGI lifecycle may not
     have completed.
@@ -287,10 +277,7 @@ def _close_active_bootstrap_best_effort(
     try:
         bootstrap.close()
     except Exception:
-        logger.exception(
-            "BIMAP emergency Bootstrap cleanup failed; reason=%s",
-            reason,
-        )
+        logger.exception("BIMAP emergency Bootstrap cleanup failed; reason=%s", reason)
     finally:
         if _active_bootstrap is bootstrap:
             _active_bootstrap = None
@@ -358,12 +345,7 @@ def create_application() -> FastAPI:
                 if _active_bootstrap is bootstrap:
                     _active_bootstrap = None
 
-            logger.info(
-                {
-                    "event": "bimap_asgi_lifespan_stopped",
-                    "version": __version__,
-                }
-            )
+            logger.info({"event": "bimap_asgi_lifespan_stopped", "version": __version__})
 
     try:
         runtime = bootstrap.build(lifespan=_bimap_lifespan)
@@ -404,10 +386,7 @@ def create_application() -> FastAPI:
                 "BIMAP cleanup failed after ASGI runtime-state "
                 "binding failure"
             )
-
-        raise BIMAPLauncherError(
-            "Unable to bind the BIMAP runtime to the ASGI application."
-        ) from exc
+        raise BIMAPLauncherError("Unable to bind the BIMAP runtime to the ASGI application.") from exc
 
     _active_bootstrap = bootstrap
 
@@ -430,12 +409,10 @@ def _run_preflight(specification: str) -> int:
 
     try:
         runtime = bootstrap.build()
-
         liveness = runtime.slai.check_liveness()
         readiness = runtime.slai.check_readiness()
 
         printer.status("LIVE", liveness.to_dict(), "success" if liveness.live else "error")
-
         printer.status("READY", readiness.to_dict(), "success" if readiness.ready else "warning")
 
         if not liveness.live:
@@ -480,18 +457,13 @@ def _create_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    subcommands = parser.add_subparsers(
-        dest="command",
-    )
+    subcommands = parser.add_subparsers(dest="command")
 
     # ------------------------------------------------------------------
     # serve
     # ------------------------------------------------------------------
 
-    serve = subcommands.add_parser(
-        "serve",
-        help="Run the BIMAP FastAPI backend.",
-    )
+    serve = subcommands.add_parser("serve", help="Run the BIMAP FastAPI backend.")
 
     serve.add_argument(
         "--factory",
@@ -503,105 +475,41 @@ def _create_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    serve.add_argument(
-        "--host",
-        default=os.getenv(
-            "BIMAP_HOST",
-            _DEFAULT_HOST,
-        ),
-        help="Backend bind host.",
-    )
-
-    
-    serve.add_argument(
-        "--port",
-        type=_port,
-        default=os.getenv(
-            "BIMAP_PORT",
-            str(_DEFAULT_PORT),
-        ),
-        help="TCP port to bind.",
-    )
-
-
-    serve.add_argument(
-        "--workers",
-        type=_positive_int,
-        default=os.getenv(
-            "BIMAP_WORKERS",
-            str(_DEFAULT_WORKERS),
-        ),
-        help="Number of Uvicorn worker processes.",
-    )
-
-    serve.add_argument(
-        "--reload",
-        action="store_true",
-        help="Enable code reload for development only.",
-    )
-
-    serve.add_argument(
-        "--log-level",
-        type=_log_level,
-        choices=_UVICORN_LOG_LEVELS,
-        default=os.getenv(
-            "BIMAP_UVICORN_LOG_LEVEL",
-            "info",
-        ),
-    )
-
-    serve.add_argument(
-        "--proxy-headers",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Honor trusted proxy forwarding headers.",
-    )
-
-    serve.add_argument(
-        "--forwarded-allow-ips",
-        default=os.getenv(
-            "BIMAP_FORWARDED_ALLOW_IPS",
-            _DEFAULT_FORWARDED_ALLOW_IPS,
-        ),
-        help=(
-            "Comma-separated proxy IP allowlist. "
-            "Do not use '*' unless the network boundary is trusted."
-        ),
-    )
-
-    serve.add_argument(
-        "--access-log",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-    )
+    serve.add_argument("--host", default=os.getenv("BIMAP_HOST", _DEFAULT_HOST), help="Backend bind host.")
+    serve.add_argument("--port", type=_port, default=os.getenv("BIMAP_PORT", str(_DEFAULT_PORT)), help="TCP port to bind.")
+    serve.add_argument("--workers", type=_positive_int, default=os.getenv("BIMAP_WORKERS", str(_DEFAULT_WORKERS)),
+                       help="Number of Uvicorn worker processes.")
+    serve.add_argument("--reload", action="store_true", help="Enable code reload for development only.")
+    serve.add_argument("--log-level", type=_log_level, choices=_UVICORN_LOG_LEVELS, default=os.getenv(
+        "BIMAP_UVICORN_LOG_LEVEL", "info"))
+    serve.add_argument("--proxy-headers", action=argparse.BooleanOptionalAction, default=True,
+                       help="Honor trusted proxy forwarding headers.")
+    serve.add_argument("--forwarded-allow-ips", default=os.getenv("BIMAP_FORWARDED_ALLOW_IPS", _DEFAULT_FORWARDED_ALLOW_IPS),
+                       help=("Comma-separated proxy IP allowlist. "
+                             "Do not use '*' unless the network boundary is trusted."
+                            ),
+                        )
+    serve.add_argument("--access-log", action=argparse.BooleanOptionalAction, default=True)
 
     # ------------------------------------------------------------------
     # check
     # ------------------------------------------------------------------
 
-    check = subcommands.add_parser(
-        "check",
-        help="Build BIMAP and run deployment liveness/readiness checks.",
-    )
+    check = subcommands.add_parser("check", help="Build BIMAP and run deployment liveness/readiness checks.")
 
-    check.add_argument(
-        "--factory",
-        default=None,
-        help=(
-            "Bootstrap factory as module:callable. "
-            f"Resolution order: CLI, ${_FACTORY_ENV}, "
-            f"then {_DEFAULT_FACTORY_SPEC!r}."
-        ),
-    )
+    check.add_argument("--factory", default=None,
+                       help=(
+                           "Bootstrap factory as module:callable. "
+                           f"Resolution order: CLI, ${_FACTORY_ENV}, "
+                           f"then {_DEFAULT_FACTORY_SPEC!r}."
+                           ),
+                        )
 
     # ------------------------------------------------------------------
     # version
     # ------------------------------------------------------------------
 
-    subcommands.add_parser(
-        "version",
-        help="Print the BIMAP package version.",
-    )
+    subcommands.add_parser("version", help="Print the BIMAP package version.")
 
     return parser
 
@@ -621,9 +529,7 @@ def _validate_uvicorn_import_target() -> None:
         ) from exc
 
     if specification is None or specification.origin is None:
-        raise BIMAPLauncherConfigurationError(
-            "The SLAI-root 'bimap' launcher module is not importable."
-        )
+        raise BIMAPLauncherConfigurationError("The SLAI-root 'bimap' launcher module is not importable.")
 
     expected = Path(__file__).resolve()
     actual = Path(specification.origin).resolve()
@@ -662,27 +568,21 @@ def main(argv: list[str] | None = None) -> int:
         # Resolve deployment
         # --------------------------------------------------------------
 
-        specification = _factory_spec(
-            args.get("factory")
-        )
+        specification = _factory_spec(args.get("factory"))
 
         # --------------------------------------------------------------
         # Preflight
         # --------------------------------------------------------------
 
         if command == "check":
-            return _run_preflight(
-                specification
-            )
+            return _run_preflight(specification)
 
         # --------------------------------------------------------------
         # Serve
         # --------------------------------------------------------------
 
         if command != "serve":
-            raise BIMAPLauncherConfigurationError(
-                f"Unsupported command: {command}"
-            )
+            raise BIMAPLauncherConfigurationError(f"Unsupported command: {command}")
 
         if (
             args["reload"]
