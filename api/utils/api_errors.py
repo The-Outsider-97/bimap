@@ -33,6 +33,7 @@ circular imports.
 
 from __future__ import annotations
 
+from http import HTTPStatus
 from collections.abc import Mapping
 from typing import Any
 
@@ -124,9 +125,7 @@ def _safe_context_value(value: Any, *, depth: int = 0) -> Any:
     return f"<{type(value).__name__}>"
 
 
-def sanitize_api_context(
-    context: Mapping[str, Any] | None,
-) -> dict[str, Any]:
+def sanitize_api_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
     """Normalize diagnostic context without retaining sensitive request data."""
     if context is None:
         return {}
@@ -147,9 +146,7 @@ def sanitize_api_context(
     return safe
 
 
-def _normalize_error_headers(
-    headers: Mapping[str, str] | None,
-) -> dict[str, str]:
+def _normalize_error_headers(headers: Mapping[str, str] | None) -> dict[str, str]:
     """Retain only syntactically safe, bounded response-header metadata."""
     if headers is None:
         return {}
@@ -283,21 +280,34 @@ class APIError(Exception):
         *,
         correlation_id: str | None = None,
     ) -> dict[str, Any]:
-        """Return a safe RFC-9457-style problem document.
-
-        ``about:blank`` is used deliberately because BIMAP does not yet publish
-        a stable external problem-type URI registry.  ``code`` remains the
-        stable BIMAP machine-readable discriminator.
         """
+        Return a safe RFC 9457 problem-detail representation.
+    
+        ``about:blank`` means the HTTP status itself defines the problem type.
+        Consequently ``title`` uses the canonical HTTP status phrase while
+        ``detail`` carries BIMAP's stable public explanation.
+    
+        ``code`` remains BIMAP's machine-readable application discriminator.
+        """
+    
+        try:
+            title = HTTPStatus(
+                int(self.status_code)
+            ).phrase
+        except ValueError:
+            title = "HTTP Error"
+    
         payload: dict[str, Any] = {
             "type": "about:blank",
-            "title": self.client_message,
+            "title": title,
             "status": int(self.status_code),
             "detail": self.client_message,
             "code": self.code,
         }
+    
         if correlation_id:
             payload["correlation_id"] = correlation_id
+    
         return payload
 
 
@@ -344,6 +354,16 @@ class APINotFoundError(APIError):
     code = "BIMAP.API.NOT_FOUND"
     status_code = 404
     public_message = "The requested resource was not found."
+
+
+class APIMethodNotAllowedError(APIError):
+    """Raised when a route exists but does not permit the requested method."""
+
+    code = "BIMAP.API.METHOD_NOT_ALLOWED"
+    status_code = 405
+    public_message = (
+        "The requested HTTP method is not allowed for this resource."
+    )
 
 
 class APIConflictError(APIError):
@@ -463,6 +483,7 @@ __all__ = [
     "APIUnauthorizedError",
     "APIForbiddenError",
     "APINotFoundError",
+    "APIMethodNotAllowedError",
     "APIConflictError",
     "APIRequestTooLargeError",
     "APIUnsupportedMediaTypeError",
