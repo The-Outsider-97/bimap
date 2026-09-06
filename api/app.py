@@ -629,6 +629,70 @@ def create_app(
         lifespan=lifespan,
     )
     install_api_dependencies(application, dependencies)
+    async def _service_root() -> Response:
+        """
+        Return a non-business service-discovery response.
+    
+        This endpoint confirms that the FastAPI transport is reachable. It is not a
+        liveness/readiness substitute and deliberately exposes no deployment,
+        infrastructure, SLAI-agent, or customer state.
+        """
+    
+        return Response(
+            content=json_bytes(
+                {
+                    "service": "R3D BIM Audit Platform API",
+                    "api_prefix": settings.api_prefix,
+                    "health": {
+                        "liveness": (
+                            f"{settings.api_prefix}/health/live"
+                        ),
+                        "readiness": (
+                            f"{settings.api_prefix}/health/ready"
+                        ),
+                    },
+                }
+            ),
+            status_code=200,
+            headers={
+                "Cache-Control": "no-store",
+            },
+            media_type="application/json",
+        )
+    
+    
+    async def _empty_favicon() -> Response:
+        """
+        Suppress the browser-generated favicon request on the API-only origin.
+    
+        The actual BIMAP favicon remains owned by the Next.js frontend.
+        """
+    
+        return Response(
+            status_code=204,
+            headers={
+                "Cache-Control": "public, max-age=86400",
+            },
+        )
+    
+    
+    application.add_api_route(
+        "/",
+        _service_root,
+        methods=["GET"],
+        response_class=Response,
+        include_in_schema=False,
+        name="service_root",
+    )
+    
+    application.add_api_route(
+        "/favicon.ico",
+        _empty_favicon,
+        methods=["GET"],
+        response_class=Response,
+        include_in_schema=False,
+        name="service_favicon",
+    )
 
     # Convert framework-owned validation/routing exceptions before they become
     # FastAPI's default detail-bearing JSON responses.  Re-raised API errors
@@ -647,12 +711,21 @@ def create_app(
 
     _install_middleware(application, settings, rate_limiter=rate_limiter)
 
-    total_routes = sum(len(group.router.routes) for group in route_groups)
+    api_route_count = sum(len(group.router.routes) for group in route_groups)
+    
+    service_route_count = 2
+    
+    total_routes = (
+        api_route_count
+        + service_route_count
+    )
     logger.info(
         {
             "event": "api_app_created",
             "api_prefix": settings.api_prefix,
             "route_group_count": len(route_groups),
+            "registered_api_route_count": api_route_count,
+            "registered_service_route_count": service_route_count,
             "registered_bimap_route_count": total_routes,
             "admin_routes_enabled": dependencies.admin is not None,
             "rate_limiter_configured": rate_limiter is not None,
