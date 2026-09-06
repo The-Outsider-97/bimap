@@ -1,442 +1,701 @@
 """
-Safe exception-to-HTTP mapping middleware for BIMAP.
+SLAI-root process launcher for the R3D BIM Audit Platform (BIMAP).
 
-The API boundary is the single owner of HTTP status semantics.  Lower BIMAP
-layers expose stable exception classes/codes but intentionally do not know HTTP.
-This middleware translates those failures without parsing exception strings and
-without copying lower-layer technical messages, contexts, provider payloads, or
-nested exception text into client responses.
+Location
+--------
+SLAI/bimap.py
 
-Mapping principles
+Architectural role
 ------------------
-* API-native errors preserve their explicitly selected HTTP semantics.
-* client/input validation failures map to 400/422 without exposing internals.
-* missing canonical resources map to 404 only when the lower error explicitly
-  means "not found"; absence is never guessed from arbitrary messages.
-* optimistic-concurrency/domain-state conflicts map to 409.
-* dependency unavailability/timeouts map to 503/504.
-* integrity, serialization, configuration, reporting and unexpected failures
-  remain 500 unless a more specific stable class proves otherwise.
-* SLAI runtime failures marked retryable map to 503; internal SLAI policy or
-  mapping failures are not misrepresented as user authorization failures.
-* once an HTTP response has started, the middleware cannot safely replace it
-  with a problem response; the original exception is re-raised to the server.
+This file is outside the BIMAP package and belongs to the SLAI host process.
 
-Responses use the API error layer's safe RFC-9457-style problem document and
-``application/problem+json``.  Error details are intentionally generic.
+It:
+
+- resolves the deployment-owned BIMAP Bootstrap factory;
+- creates one BIMAP runtime per server process;
+- exposes the FastAPI application through Uvicorn;
+- coordinates clean BIMAP shutdown;
+- supports deployment preflight/readiness checking;
+- exposes version information; and
+- preserves the SLAI-root execution environment.
+
+It does NOT:
+
+- construct BIMAP repositories;
+- construct storage/payment/malware/queue adapters;
+- define product or rule policy;
+- construct audit rules;
+- manipulate sys.path;
+- parse BIM evidence;
+- launch or supervise the Next.js frontend process.
+
+Why ``applications.bimap``?
+---------------------------
+This file is named ``bimap.py`` and therefore occupies the top-level Python
+module name ``bimap`` when SLAI is executed from its root directory.
+
+The BIMAP application package is consequently imported through:
+
+    applications.bimap
+
+rather than:
+
+    bimap
+
+This avoids module/package shadowing without sys.path manipulation.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import argparse
+import importlib
+import importlib.util
+import os
+import sys
+import uvicorn
+import shutil
+import signal
+import subprocess
+import time
+import urllib.error
+import urllib.request
+import webbrowser
 
-from ..utils.api_errors import *
-from ..utils.api_helpers import *
-from ...app.utils.app_errors import *
-from ...audit_engine.utils.engine_errors import *
-from ...contracts.utils.contracts_errors import *
-from ...domain.utils.domain_errors import *
-from ...reporting.utils.reporting_errors import ReportingError
-from ...slai.utils.slai_errors import SLAIIntegrationError
-from logs.logger import PrettyPrinter, get_logger  # type: ignore
+from collections.abc import Callable
+from pathlib import Path
+from contextlib import asynccontextmanager
+from typing import Any, cast
+from fastapi import FastAPI
+
+from logs.logger import PrettyPrinter, configure_logging, get_logger
+from applications.bimap.bootstrap import Bootstrap, BootstrapError
+from applications.bimap.version import __version__
 
 
-logger = get_logger("BIMAP API Error Mapping Middleware")
+logger = get_logger("SLAI BIMAP Launcher")
 printer = PrettyPrinter()
 
-_COMPONENT = "api_error_mapping"
+
+_FACTORY_ENV = "BIMAP_BOOTSTRAP_FACTORY"
+
+_DEFAULT_FACTORY_SPEC = "deployment.deployment_bimap:create_bootstrap"
+
+_DEFAULT_HOST = "127.0.0.1"
+_DEFAULT_PORT = 8000
+_DEFAULT_WORKERS = 1
+
+_DEFAULT_FORWARDED_ALLOW_IPS = "127.0.0.1"
+_UVICORN_LOG_LEVELS = (
+    "critical",
+    "error",
+    "warning",
+    "info",
+    "debug",
+    "trace",
+)
+
+BootstrapFactory = Callable[[], Bootstrap]
 
 
-class ErrorMapping:
-    """Map stable BIMAP exception families to safe HTTP problem responses."""
+_active_bootstrap: Bootstrap | None = None
 
-    def __init__(self, app: ASGIApp) -> None:
-        announce_api_action(
-            printer,
-            logger,
-            component=_COMPONENT,
-            action="Initializing API error-mapping middleware",
-            event="api_error_mapping_init_start",
-        )
-        if not callable(app):
-            from ..utils.api_errors import APIConfigurationError
 
-            raise APIConfigurationError(
-                "ErrorMapping requires a callable ASGI application.",
-                component=_COMPONENT,
-                operation="initialize",
-                field="app",
-                context={"received_type": type(app).__name__},
-            )
-        self.app = app
-        logger.info({"event": "api_error_mapping_initialized"})
+# ---------------------------------------------------------------------------
+# Errors
+# ---------------------------------------------------------------------------
 
-    @classmethod
-    def map_exception(cls, error: BaseException) -> APIError:
-        """Translate one known BIMAP/lower-runtime failure into an ``APIError``."""
-        announce_api_action(
-            printer,
-            logger,
-            component=_COMPONENT,
-            action="Mapping exception to HTTP error",
-            event="api_error_mapping_translate_start",
-            context={"error_type": type(error).__name__},
-        )
 
-        if isinstance(error, APIError):
-            return error
+class BIMAPLauncherError(RuntimeError):
+    """Base failure raised by the SLAI-root BIMAP launcher."""
 
-        # Application layer: only explicitly stable semantics are made public.
-        if isinstance(error, RepositoryConflictError):
-            return APIConflictError(
-                "Repository optimistic-concurrency precondition failed.",
-                component=_COMPONENT,
-                operation="map_exception",
-                context=lower_error_context(error),
-                cause=error,
-            )
-        if isinstance(error, StorageNotFoundError):
-            return APINotFoundError(
-                "Requested storage-backed resource was not found.",
-                component=_COMPONENT,
-                operation="map_exception",
-                context=lower_error_context(error),
-                cause=error,
-            )
-        if isinstance(
-            error,
-            (
-                AppPortTimeoutError,
-                MalwareTimeoutError,
-                PaymentTimeoutError,
-                QueueTimeoutError,
-                RepositoryTimeoutError,
-                StorageTimeoutError,
-            ),
-        ):
-            return APIGatewayTimeoutError(
-                "Application dependency timed out.",
-                component=_COMPONENT,
-                operation="map_exception",
-                context=lower_error_context(error),
-                cause=error,
-            )
-        if isinstance(
-            error,
-            (
-                AppPortUnavailableError,
-                MalwareUnavailableError,
-                PaymentUnavailableError,
-                QueueUnavailableError,
-                RepositoryUnavailableError,
-                StorageUnavailableError,
-            ),
-        ):
-            return APIServiceUnavailableError(
-                "Application dependency is unavailable.",
-                component=_COMPONENT,
-                operation="map_exception",
-                context=lower_error_context(error),
-                cause=error,
-            )
-        if isinstance(error, AppValidationError):
-            return APIValidationError(
-                "Application request validation failed.",
-                component=_COMPONENT,
-                operation="map_exception",
-                field=getattr(error, "field", None),
-                context=lower_error_context(error),
-                cause=error,
-            )
-        if isinstance(error, AppError):
-            if bool(getattr(error, "retryable", False)):
-                return APIServiceUnavailableError(
-                    "A required application dependency is temporarily unavailable.",
-                    component=_COMPONENT,
-                    operation="map_exception",
-                    context=lower_error_context(error),
-                    cause=error,
-                )
-            return APIInternalError(
-                "Unhandled application-layer failure reached the API boundary.",
-                component=_COMPONENT,
-                operation="map_exception",
-                context=lower_error_context(error),
-                cause=error,
-            )
 
-        # Domain semantics: validation is bad input; state/invariant clashes are
-        # conflicts; only an explicit NotFound type becomes HTTP 404.
-        if isinstance(error, EvidenceNotFoundError):
-            return APINotFoundError(
-                "Required domain resource was not found.",
-                component=_COMPONENT,
-                operation="map_exception",
-                field=getattr(error, "field", None),
-                context=lower_error_context(error),
-                cause=error,
-            )
-        if isinstance(error, DomainValidationError):
-            return APIValidationError(
-                "Domain validation rejected request data.",
-                component=_COMPONENT,
-                operation="map_exception",
-                field=getattr(error, "field", None),
-                context=lower_error_context(error),
-                cause=error,
-            )
-        if isinstance(error, DomainInvariantError):
-            return APIConflictError(
-                "Requested operation conflicts with canonical domain state.",
-                component=_COMPONENT,
-                operation="map_exception",
-                field=getattr(error, "field", None),
-                context=lower_error_context(error),
-                cause=error,
-            )
-        if isinstance(error, DomainError):
-            return APIInternalError(
-                "Unhandled domain failure reached the API boundary.",
-                component=_COMPONENT,
-                operation="map_exception",
-                context=lower_error_context(error),
-                cause=error,
-            )
+class BIMAPLauncherConfigurationError(BIMAPLauncherError):
+    """Raised when process/deployment configuration is invalid."""
 
-        # External contract parsing/version errors are client-facing validation
-        # failures. Contract integrity/serialization/registry definition errors
-        # remain internal by falling through to the ContractError branch.
-        if isinstance(
-            error,
-            (
-                ContractValidationError,
-                ContractDeserializationError,
-                ContractVersionError,
-                ContractSchemaValidationError,
-            ),
-        ):
-            return APIValidationError(
-                "External contract validation failed.",
-                component=_COMPONENT,
-                operation="map_exception",
-                field=getattr(error, "field", None),
-                context=lower_error_context(error),
-                cause=error,
-            )
-        if isinstance(error, ContractError):
-            return APIInternalError(
-                "Contract-layer failure reached the API boundary.",
-                component=_COMPONENT,
-                operation="map_exception",
-                context=lower_error_context(error),
-                cause=error,
-            )
 
-        # Engine validation can be reached by endpoints that accept analytical
-        # input directly; it is represented as semantically unprocessable input.
-        # Internal engine failures remain 500.
-        if isinstance(error, IngestionDeserializationError):
-            return APIValidationError(
-                "Audit ingestion payload could not be decoded.",
-                component=_COMPONENT,
-                operation="map_exception",
-                context=lower_error_context(error),
-                cause=error,
-            )
-        if isinstance(error, EngineValidationError):
-            return APIUnprocessableError(
-                "Audit input failed engine-level validation.",
-                component=_COMPONENT,
-                operation="map_exception",
-                field=getattr(error, "field", None),
-                context=lower_error_context(error),
-                cause=error,
-            )
-        if isinstance(error, EngineError):
-            return APIInternalError(
-                "Audit-engine failure reached the API boundary.",
-                component=_COMPONENT,
-                operation="map_exception",
-                context=lower_error_context(error),
-                cause=error,
-            )
+class BIMAPLauncherFactoryError(BIMAPLauncherError):
+    """Raised when the deployment Bootstrap factory cannot be resolved."""
 
-        # Reporting is output construction and should not be reclassified as a
-        # client error merely because some reporting subclasses use 'validation'.
-        if isinstance(error, ReportingError):
-            return APIInternalError(
-                "Reporting failure reached the API boundary.",
-                component=_COMPONENT,
-                operation="map_exception",
-                context=lower_error_context(error),
-                cause=error,
-            )
 
-        # SLAI integration policy is internal system policy, not HTTP user auth.
-        if isinstance(error, SLAIIntegrationError):
-            if bool(getattr(error, "retryable", False)):
-                return APIServiceUnavailableError(
-                    "SLAI runtime is temporarily unavailable.",
-                    component=_COMPONENT,
-                    operation="map_exception",
-                    context=lower_error_context(error),
-                    cause=error,
-                )
-            return APIInternalError(
-                "SLAI integration failure reached the API boundary.",
-                component=_COMPONENT,
-                operation="map_exception",
-                context=lower_error_context(error),
-                cause=error,
-            )
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-        # Conservative standard-library infrastructure fallbacks.  These do not
-        # inspect exception messages and therefore cannot disclose provider text.
-        if isinstance(error, TimeoutError):
-            return APIGatewayTimeoutError(
-                "Unhandled dependency timeout reached the API boundary.",
-                component=_COMPONENT,
-                operation="map_exception",
-                context={"lower_error_type": type(error).__name__},
-                cause=error,
-            )
-        if isinstance(error, ConnectionError):
-            return APIServiceUnavailableError(
-                "Unhandled dependency connection failure reached the API boundary.",
-                component=_COMPONENT,
-                operation="map_exception",
-                context={"lower_error_type": type(error).__name__},
-                cause=error,
-            )
 
-        return APIInternalError(
-            "Unexpected exception reached the API boundary.",
-            component=_COMPONENT,
-            operation="map_exception",
-            context={"lower_error_type": type(error).__name__},
-            cause=error,
+def _announce(action: str, *, level: str = "info") -> None:
+    """Emit one process-level diagnostic without customer evidence."""
+    printer.status("BIMAP", action, level)
+    logger.debug({"event": "bimap_launcher_action", "action": action})
+
+
+def _positive_int(value: str) -> int:
+    """argparse validator for strictly positive integer values."""
+
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(
+            "value must be an integer"
+        ) from exc
+
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be greater than zero")
+
+    return parsed
+
+
+def _port(value: str) -> int:
+    """Validate one TCP port."""
+
+    parsed = _positive_int(value)
+
+    if parsed > 65535:
+        raise argparse.ArgumentTypeError("port must be <= 65535")
+
+    return parsed
+
+
+def _factory_spec(explicit: str | None = None) -> str:
+    """
+    Resolve the deployment-owned BIMAP Bootstrap factory.
+
+    Resolution precedence
+    ---------------------
+    1. Explicit ``--factory`` CLI argument.
+    2. ``BIMAP_BOOTSTRAP_FACTORY`` environment variable.
+    3. Canonical SLAI deployment factory.
+
+    Factory syntax
+    --------------
+        package.module:callable
+
+    Canonical SLAI deployment:
+        deployment.deployment_bimap:create_bootstrap
+    """
+
+    raw = (
+        explicit
+        if explicit is not None
+        else os.getenv( _FACTORY_ENV, _DEFAULT_FACTORY_SPEC)
         )
 
-    async def __call__(
-        self,
-        scope: ASGIScope,
-        receive: ASGIReceive,
-        send: ASGISend,
-    ) -> None:
-        announce_api_action(
-            printer,
-            logger,
-            component=_COMPONENT,
-            action="Applying API error-mapping middleware",
-            event="api_error_mapping_call_start",
-            context={"scope_type": scope.get("type")},
+    spec = raw.strip()
+
+    if not spec:
+        raise BIMAPLauncherConfigurationError(f"{_FACTORY_ENV} cannot be empty.")
+
+    module_name, separator, attribute_name = spec.partition(":")
+
+    module_name = module_name.strip()
+    attribute_name = attribute_name.strip()
+
+    if (
+        separator != ":"
+        or not module_name
+        or not attribute_name
+        or ":" in attribute_name
+    ):
+        raise BIMAPLauncherConfigurationError(
+            "Bootstrap factory must use "
+            "'module.path:callable_name' syntax."
         )
-        if scope.get("type") != "http":
-            await self.app(scope, receive, send)
-            return
 
-        response_started = False
+    return f"{module_name}:{attribute_name}"
 
-        async def send_tracked(message: ASGIMessage) -> None:
-            nonlocal response_started
-            if message.get("type") == "http.response.start":
-                if response_started:
-                    raise APIInternalError(
-                        "ASGI application attempted to start the HTTP response twice.",
-                        component=_COMPONENT,
-                        operation="send_tracked",
-                    )
-                response_started = True
-            await send(message)
+
+def _load_factory(specification: str) -> BootstrapFactory:
+    """Import and validate one deployment Bootstrap factory."""
+
+    _announce("Resolving BIMAP deployment factory")
+
+    module_name, _, attribute_name = specification.partition(":")
+
+    try:
+        module = importlib.import_module(module_name)
+    except Exception as exc:
+        raise BIMAPLauncherFactoryError(
+            "Unable to import BIMAP deployment module "
+            f"{module_name!r}: {type(exc).__name__}"
+        ) from exc
+
+    try:
+        factory = getattr(module, attribute_name)
+    except AttributeError as exc:
+        raise BIMAPLauncherFactoryError(
+            f"Deployment module {module_name!r} does not expose "
+            f"{attribute_name!r}."
+        ) from exc
+
+    if not callable(factory):
+        raise BIMAPLauncherFactoryError("Configured BIMAP Bootstrap factory is not callable.")
+
+    return cast(BootstrapFactory, factory)
+
+
+def _create_bootstrap(specification: str) -> Bootstrap:
+    """Create and validate one BIMAP Bootstrap instance."""
+
+    factory = _load_factory(specification)
+
+    try:
+        bootstrap = factory()
+    except Exception as exc:
+        raise BIMAPLauncherFactoryError(
+            "BIMAP deployment factory failed while constructing "
+            f"Bootstrap: {type(exc).__name__}"
+        ) from exc
+
+    if not isinstance(
+        bootstrap,
+        Bootstrap,
+    ):
+        raise BIMAPLauncherFactoryError(
+            "BIMAP deployment factory must return "
+            "applications.bimap.bootstrap.Bootstrap; "
+            f"received {type(bootstrap).__name__}."
+        )
+
+    return bootstrap
+
+
+def _close_active_bootstrap_best_effort(*, reason: str) -> None:
+    """
+    Best-effort cleanup for an active Bootstrap when the ASGI lifecycle may not
+    have completed.
+
+    This helper is intentionally idempotent. Normal FastAPI shutdown clears the
+    active Bootstrap first; abnormal Uvicorn exits are cleaned up here.
+    """
+
+    global _active_bootstrap
+
+    bootstrap = _active_bootstrap
+
+    if bootstrap is None:
+        return
+
+    try:
+        bootstrap.close()
+    except Exception:
+        logger.exception("BIMAP emergency Bootstrap cleanup failed; reason=%s", reason)
+    finally:
+        if _active_bootstrap is bootstrap:
+            _active_bootstrap = None
+
+
+# ---------------------------------------------------------------------------
+# ASGI factory
+# ---------------------------------------------------------------------------
+
+
+def create_application() -> FastAPI:
+    """
+    Uvicorn application factory.
+
+    Each Uvicorn worker calls this function independently. Consequently each
+    server process receives its own Bootstrap lifecycle and FastAPI application.
+
+    BIMAP runtime ownership is bound to the ASGI lifespan. Normal ASGI shutdown
+    closes Bootstrap exactly once; the launcher-level best-effort cleanup
+    remains responsible only for abnormal server termination.
+
+    The SLAI SharedMemory lifecycle remains governed by Bootstrap's explicit
+    ownership configuration.
+    """
+
+    global _active_bootstrap
+
+    _announce("Creating BIMAP ASGI application")
+
+    if _active_bootstrap is not None:
+        raise BIMAPLauncherError("A BIMAP Bootstrap is already active in this process.")
+
+    specification = _factory_spec()
+
+    bootstrap = _create_bootstrap(specification)
+
+    @asynccontextmanager
+    async def _bimap_lifespan(application: FastAPI):
+        """
+        Own the BIMAP runtime for exactly one ASGI application lifespan.
+
+        Startup composition has already completed before Uvicorn enters this
+        context. Teardown releases Bootstrap-owned resources after request
+        serving has stopped.
+        """
+
+        global _active_bootstrap
+
+        del application
+
+        _announce("Starting BIMAP ASGI runtime lifecycle")
+
+        logger.info({"event": "bimap_asgi_lifespan_started", "version": __version__})
 
         try:
-            await self.app(scope, receive, send_tracked)
-        except Exception as exc:
-            correlation_id = get_correlation_id(scope)
-            request_id = get_request_id(scope)
+            yield
 
-            if response_started:
-                logger.error(
-                    {
-                        "event": "api_error_after_response_started",
-                        "error_type": type(exc).__name__,
-                        "error_code": getattr(exc, "code", None),
-                        "correlation_id": correlation_id,
-                        "request_id": request_id,
-                    }
-                )
-                raise
+        finally:
+            _announce("Shutting down BIMAP runtime")
 
-            mapped = self.map_exception(exc)
-            logger.error(
-                {
-                    "event": "api_exception_mapped",
-                    "source_type": type(exc).__name__,
-                    "source_code": getattr(exc, "code", None),
-                    "mapped_code": mapped.code,
-                    "status_code": mapped.status_code,
-                    "retryable": mapped.retryable,
-                    "correlation_id": correlation_id,
-                    "request_id": request_id,
-                }
-            )
-            printer.status(
-                "API",
-                f"HTTP request failed with {mapped.status_code} ({mapped.code})",
-                "error",
-            )
-            await send_problem_response(
-                send,
-                error=mapped,
-                correlation_id=correlation_id,
-                request_id=request_id,
-                suppress_body=str(scope.get("method", "")).upper() == "HEAD",
+            try:
+                bootstrap.close()
+
+            finally:
+                if _active_bootstrap is bootstrap:
+                    _active_bootstrap = None
+
+            logger.info({"event": "bimap_asgi_lifespan_stopped", "version": __version__})
+
+    try:
+        runtime = bootstrap.build(lifespan=_bimap_lifespan)
+
+    except Exception:
+        try:
+            bootstrap.close()
+
+        except Exception:
+            logger.exception("BIMAP cleanup failed after unsuccessful startup")
+
+        raise
+
+    application = runtime.application
+
+    if not isinstance(application, FastAPI):
+        try:
+            bootstrap.close()
+
+        finally:
+            raise BIMAPLauncherError(
+                "Bootstrap runtime did not provide a "
+                "FastAPI application."
             )
 
+    try:
+        # Trusted process-local runtime state only.
+        # These objects are not exposed as public HTTP response data.
+        application.state.bimap_bootstrap = bootstrap
+        application.state.bimap_runtime = runtime
 
-ErrorMappingMiddleware = ErrorMapping
+    except Exception as exc:
+        try:
+            bootstrap.close()
+
+        except Exception:
+            logger.exception(
+                "BIMAP cleanup failed after ASGI runtime-state "
+                "binding failure"
+            )
+        raise BIMAPLauncherError("Unable to bind the BIMAP runtime to the ASGI application.") from exc
+
+    _active_bootstrap = bootstrap
+
+    logger.info({"event": "bimap_asgi_application_created", "version": __version__, "lifespan_managed": True})
+    printer.status("BIMAP", f"Backend ready — version {__version__}", "success")
+    return application
+
+
+# ---------------------------------------------------------------------------
+# Preflight
+# ---------------------------------------------------------------------------
+
+
+def _run_preflight(specification: str) -> int:
+    """Build the complete graph and evaluate its SLAI integration health."""
+
+    _announce("Running BIMAP deployment preflight")
+
+    bootstrap = _create_bootstrap(specification)
+
+    try:
+        runtime = bootstrap.build()
+        liveness = runtime.slai.check_liveness()
+        readiness = runtime.slai.check_readiness()
+
+        printer.status("LIVE", liveness.to_dict(), "success" if liveness.live else "error")
+        printer.status("READY", readiness.to_dict(), "success" if readiness.ready else "warning")
+
+        if not liveness.live:
+            return 2
+
+        if not readiness.ready:
+            return 3
+
+        printer.status("BIMAP", "Deployment preflight passed", "success")
+
+        return 0
+
+    finally:
+        bootstrap.close()
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+def _log_level(value: str) -> str:
+    """Validate and normalize one Uvicorn log level."""
+
+    normalized = str(value).strip().lower()
+
+    if normalized not in _UVICORN_LOG_LEVELS:
+        raise argparse.ArgumentTypeError(
+            "log level must be one of: "
+            + ", ".join(_UVICORN_LOG_LEVELS)
+        )
+
+    return normalized
+
+
+def _create_parser() -> argparse.ArgumentParser:
+    """Construct the SLAI-root BIMAP CLI."""
+
+    parser = argparse.ArgumentParser(
+        prog="bimap.py",
+        description=(
+            "R3D BIM Audit Platform service launcher "
+            "for the SLAI host runtime."
+        ),
+    )
+
+    subcommands = parser.add_subparsers(dest="command")
+
+    # ------------------------------------------------------------------
+    # serve
+    # ------------------------------------------------------------------
+
+    serve = subcommands.add_parser("serve", help="Run the BIMAP FastAPI backend.")
+
+    serve.add_argument(
+        "--factory",
+        default=None,
+        help=(
+            "Bootstrap factory as module:callable. "
+            f"Resolution order: CLI, ${_FACTORY_ENV}, "
+            f"then {_DEFAULT_FACTORY_SPEC!r}."
+        ),
+    )
+
+    serve.add_argument("--host", default=os.getenv("BIMAP_HOST", _DEFAULT_HOST), help="Backend bind host.")
+    serve.add_argument("--port", type=_port, default=os.getenv("BIMAP_PORT", str(_DEFAULT_PORT)), help="TCP port to bind.")
+    serve.add_argument("--workers", type=_positive_int, default=os.getenv("BIMAP_WORKERS", str(_DEFAULT_WORKERS)),
+                       help="Number of Uvicorn worker processes.")
+    serve.add_argument("--reload", action="store_true", help="Enable code reload for development only.")
+    serve.add_argument("--log-level", type=_log_level, choices=_UVICORN_LOG_LEVELS, default=os.getenv(
+        "BIMAP_UVICORN_LOG_LEVEL", "info"))
+    serve.add_argument("--proxy-headers", action=argparse.BooleanOptionalAction, default=True,
+                       help="Honor trusted proxy forwarding headers.")
+    serve.add_argument("--forwarded-allow-ips", default=os.getenv("BIMAP_FORWARDED_ALLOW_IPS", _DEFAULT_FORWARDED_ALLOW_IPS),
+                       help=("Comma-separated proxy IP allowlist. "
+                             "Do not use '*' unless the network boundary is trusted."
+                            ),
+                        )
+    serve.add_argument("--access-log", action=argparse.BooleanOptionalAction, default=True)
+
+    # ------------------------------------------------------------------
+    # check
+    # ------------------------------------------------------------------
+
+    check = subcommands.add_parser("check", help="Build BIMAP and run deployment liveness/readiness checks.")
+
+    check.add_argument("--factory", default=None,
+                       help=(
+                           "Bootstrap factory as module:callable. "
+                           f"Resolution order: CLI, ${_FACTORY_ENV}, "
+                           f"then {_DEFAULT_FACTORY_SPEC!r}."
+                           ),
+                        )
+
+    # ------------------------------------------------------------------
+    # version
+    # ------------------------------------------------------------------
+
+    subcommands.add_parser("version", help="Print the BIMAP package version.")
+
+    return parser
+
+
+def _validate_uvicorn_import_target() -> None:
+    """
+    Ensure Uvicorn child processes will resolve ``bimap`` to this SLAI-root
+    launcher rather than another installed module/package.
+    """
+
+    try:
+        specification = importlib.util.find_spec("bimap")
+
+    except (ImportError, AttributeError, ValueError) as exc:
+        raise BIMAPLauncherConfigurationError(
+            "Unable to resolve the SLAI-root 'bimap' launcher module."
+        ) from exc
+
+    if specification is None or specification.origin is None:
+        raise BIMAPLauncherConfigurationError("The SLAI-root 'bimap' launcher module is not importable.")
+
+    expected = Path(__file__).resolve()
+    actual = Path(specification.origin).resolve()
+
+    if actual != expected:
+        raise BIMAPLauncherConfigurationError(
+            "Uvicorn would resolve 'bimap' to a different module. "
+            f"Expected {expected!s}; resolved {actual!s}."
+        )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Execute the SLAI-root BIMAP launcher."""
+
+    configure_logging()
+
+    parser = _create_parser()
+    args: dict[str, Any] = vars(parser.parse_args(argv))
+
+    command = args.get("command")
+
+    if command is None:
+        parser.print_help()
+        return 0
+
+    try:
+        # --------------------------------------------------------------
+        # Version
+        # --------------------------------------------------------------
+
+        if command == "version":
+            print(__version__)
+            return 0
+
+        # --------------------------------------------------------------
+        # Resolve deployment
+        # --------------------------------------------------------------
+
+        specification = _factory_spec(args.get("factory"))
+
+        # --------------------------------------------------------------
+        # Preflight
+        # --------------------------------------------------------------
+
+        if command == "check":
+            return _run_preflight(specification)
+
+        # --------------------------------------------------------------
+        # Serve
+        # --------------------------------------------------------------
+
+        if command != "serve":
+            raise BIMAPLauncherConfigurationError(f"Unsupported command: {command}")
+
+        if (
+            args["reload"]
+            and args["workers"] != 1
+        ):
+            raise BIMAPLauncherConfigurationError(
+                "--reload and --workers > 1 "
+                "cannot be used together."
+            )
+
+        # Uvicorn child processes must inherit exactly the same
+        # deployment factory specification.
+        os.environ[_FACTORY_ENV] = specification
+
+        printer.status(
+            "BIMAP",
+            (
+                f"Starting backend on "
+                f"{args['host']}:{args['port']}"
+            ),
+            "info",
+        )
+
+        logger.info(
+            {
+                "event": "bimap_server_start",
+                "host": args["host"],
+                "port": args["port"],
+                "workers": args["workers"],
+                "reload": args["reload"],
+                "version": __version__,
+                "factory": specification,
+            }
+        )
+
+        uvicorn_options: dict[str, Any] = {
+            "host": args["host"],
+            "port": args["port"],
+            "workers": args["workers"],
+            "reload": args["reload"],
+            "log_level": args["log_level"],
+            "log_config": None,
+            "access_log": args["access_log"],
+            "proxy_headers": args["proxy_headers"],
+            "forwarded_allow_ips": (
+                args["forwarded_allow_ips"]
+            ),
+            "server_header": False,
+            "lifespan": "on",
+        }
+
+        # --------------------------------------------------------------
+        # Single-process path
+        # --------------------------------------------------------------
+        #
+        # Do not ask Uvicorn to re-import this launcher as "bimap".
+        # The launcher may currently be executing as "__main__".
+        #
+        # Constructing the FastAPI app here guarantees:
+        #
+        # - one launcher module instance;
+        # - one exception hierarchy;
+        # - one _active_bootstrap variable;
+        # - startup failures remain inside this error boundary.
+        # --------------------------------------------------------------
+
+        if (
+            args["workers"] == 1
+            and not args["reload"]
+        ):
+            application = create_application()
+
+            try:
+                uvicorn.run(application, **uvicorn_options)
+            finally:
+                _close_active_bootstrap_best_effort(reason="uvicorn_run_exit")
+
+        # --------------------------------------------------------------
+        # Reload / multiprocess path
+        # --------------------------------------------------------------
+
+        else:
+            _validate_uvicorn_import_target()
+            _load_factory(specification)
+            uvicorn.run("bimap:create_application", factory=True, **uvicorn_options)
+
+        return 0
+
+    except (
+        BIMAPLauncherError,
+        BootstrapError,
+    ) as exc:
+        logger.exception("BIMAP launcher failed")
+        printer.status("BIMAP", str(exc), "error")
+        return 1
+
+    except KeyboardInterrupt:
+        printer.status("BIMAP", "Shutdown requested", "warning")
+        return 130
+
+    except Exception as exc:
+        logger.exception("Unexpected BIMAP launcher failure")
+        printer.status("BIMAP", ("Unexpected launcher failure: " f"{type(exc).__name__}"), "error")
+        return 1
 
 
 __all__ = [
-    "ErrorMapping",
-    "ErrorMappingMiddleware",
+    "BIMAPLauncherError",
+    "BIMAPLauncherConfigurationError",
+    "BIMAPLauncherFactoryError",
+    "create_application",
+    "main",
 ]
 
-
 if __name__ == "__main__":
-    import asyncio
-
-    print("\n=== Running API Error Mapping Self-Test ===\n")
-    printer.status("TEST", "API error mapping middleware initialized", "info")
-
-    mapped = ErrorMapping.map_exception(
-        DomainInvariantError("Transition is not permitted.", field="target_state")
-    )
-    assert isinstance(mapped, APIConflictError)
-    assert mapped.status_code == 409
-    assert "Transition is not permitted" not in str(mapped.to_public_dict())
-
-    async def _app(scope: ASGIScope, receive: ASGIReceive, send: ASGISend) -> None:
-        raise AppValidationError("private validation detail", field="order_id")
-
-    middleware = ErrorMapping(_app)
-    sent: list[ASGIMessage] = []
-
-    async def _receive() -> ASGIMessage:
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    async def _send(message: ASGIMessage) -> None:
-        sent.append(dict(message))
-
-    asyncio.run(
-        middleware(
-            {"type": "http", "method": "GET", "headers": []},
-            _receive,
-            _send,
-        )
-    )
-    assert sent[0]["status"] == 400
-    assert b"private validation detail" not in sent[1]["body"]
-    printer.status("PASS", "Safe exception-to-HTTP mapping", "success")
-
-    print("\n=== Test ran successfully ===\n")
+    main()
