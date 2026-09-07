@@ -1,22 +1,50 @@
-import type { Metadata, Viewport } from "next";
-import type { ReactNode } from "react";
+import type {
+  Metadata,
+  Viewport,
+} from "next";
+
+import type {
+  ReactNode,
+} from "react";
+
+import {
+  AccountProvider,
+} from "@/comp/account/AccountProvider";
+
 import "./globals.css";
 
-export const metadata: Metadata = {
-  title: {
-    default: "BIMAP | R3D BIM Audit Platform",
-    template: "%s | BIMAP",
-  },
-  description:
-    "Evidence-first quality analysis for Revit families and BIM deliverables, plus R3D digital content and model-data services.",
-};
+export const metadata:
+  Metadata = {
+    title: {
+      default:
+        "BIMAP | R3D BIM Audit Platform",
 
-export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: dark)", color: "#000000" },
-    { media: "(prefers-color-scheme: light)", color: "#EAEDEC" },
-  ],
-};
+      template:
+        "%s | BIMAP",
+    },
+
+    description:
+      "Evidence-first quality analysis for Revit families and BIM deliverables, plus R3D digital content and model-data services.",
+  };
+
+export const viewport:
+  Viewport = {
+    themeColor: [
+      {
+        media:
+          "(prefers-color-scheme: dark)",
+        color:
+          "#000000",
+      },
+
+      {
+        media:
+          "(prefers-color-scheme: light)",
+        color:
+          "#EAEDEC",
+      },
+    ],
+  };
 
 const themeBootScript = `
 (() => {
@@ -27,7 +55,9 @@ const themeBootScript = `
       : "dark";
 
     document.documentElement.dataset.theme =
-      stored === "light" || stored === "dark" ? stored : preferred;
+      stored === "light" || stored === "dark"
+        ? stored
+        : preferred;
   } catch (_) {
     document.documentElement.dataset.theme = "dark";
   }
@@ -36,7 +66,9 @@ const themeBootScript = `
 
 export default function RootLayout({
   children,
-}: Readonly<{ children: ReactNode }>) {
+}: Readonly<{
+  children: ReactNode;
+}>) {
   return (
     <html
       lang="en"
@@ -46,13 +78,18 @@ export default function RootLayout({
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: themeBootScript,
+            __html:
+              themeBootScript,
           }}
         />
       </head>
 
-      <body suppressHydrationWarning>
-        {children}
+      <body
+        suppressHydrationWarning
+      >
+        <AccountProvider>
+          {children}
+        </AccountProvider>
       </body>
     </html>
   );
