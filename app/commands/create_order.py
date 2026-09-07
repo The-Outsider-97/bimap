@@ -83,9 +83,11 @@ class CreateOrder:
             }
         )
 
+    
     def execute(
         self,
         *,
+        account_id: str,
         product_code: ProductCode | str,
         tier_code: str | None = None,
         order_id: str | None = None,
@@ -94,11 +96,11 @@ class CreateOrder:
         metadata: Mapping[str, Any] | None = None,
     ) -> Order:
         """
-        Create and persist one authoritative draft order.
-
-        ``OrderService`` remains the source of truth for all business and
-        persistence rules.  This boundary deliberately does not inspect or log
-        project aliases, upload-session identifiers, or metadata content.
+        Create and persist one authoritative account-owned draft order.
+    
+        Account ownership is supplied by the authenticated application/API
+        boundary and forwarded unchanged to OrderService. The command does not
+        derive, replace, or infer account identity itself.
         """
         announce_app_action(
             printer,
@@ -107,14 +109,18 @@ class CreateOrder:
             action="Executing create-order command",
             event="create_order_command_execute_start",
             context={
-                "product_code_type": type(product_code).__name__,
-                "has_tier": tier_code is not None,
-                "has_requested_order_id": order_id is not None,
+                "product_code_type":
+                    type(product_code).__name__,
+                "has_tier":
+                    tier_code is not None,
+                "has_requested_order_id":
+                    order_id is not None,
             },
         )
-
+    
         try:
             result = self._service.create_order(
+                account_id=account_id,
                 product_code=product_code,
                 tier_code=tier_code,
                 order_id=order_id,
@@ -122,8 +128,10 @@ class CreateOrder:
                 upload_session_id=upload_session_id,
                 metadata=metadata,
             )
+    
         except AppError:
             raise
+    
         except Exception as exc:
             raise AppIntegrityError(
                 "OrderService failed outside the BIMAP application-error contract.",
@@ -132,26 +140,43 @@ class CreateOrder:
                 context=lower_error_context(exc),
                 cause=exc,
             ) from exc
-
+    
         if not isinstance(result, Order):
             raise AppIntegrityError(
                 "Create-order service returned an unsupported result type.",
                 component=_COMPONENT,
                 operation="execute",
                 field="result",
-                context={"received_type": type(result).__name__},
+                context={
+                    "received_type":
+                        type(result).__name__,
+                },
             )
-
+    
+        if result.account_id != account_id:
+            raise AppIntegrityError(
+                "Create-order service returned an order owned by "
+                "a different account.",
+                component=_COMPONENT,
+                operation="execute",
+                field="result.account_id",
+                context={
+                    "order_id": result.order_id,
+                },
+            )
+    
         logger.info(
             {
                 "event": "create_order_command_completed",
                 "order_id": result.order_id,
+                "account_id": result.account_id,
                 "product_code": result.product_code,
                 "tier_code": result.tier_code,
                 "state": result.state.value,
                 "version": result.version,
             }
         )
+    
         return result
 
 
