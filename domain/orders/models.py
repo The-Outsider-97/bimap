@@ -63,20 +63,16 @@ class Order:
     """
 
     order_id: str
+    account_id: str
     product_code: str
-
     state: OrderState = OrderState.DRAFT
-
     created_at: datetime = dataclass_field(default_factory=utc_now)
     updated_at: datetime = dataclass_field(default_factory=utc_now)
-
     tier_code: str | None = None
     project_alias: str | None = None
     upload_session_id: str | None = None
     retention_expires_at: datetime | None = None
-
     version: int = 0
-
     metadata: Mapping[str, Any] = dataclass_field(default_factory=dict)
     events: tuple[OrderEvent, ...] = ()
 
@@ -84,6 +80,7 @@ class Order:
         _announce("Validating order aggregate")
 
         object.__setattr__(self, "order_id", require_text(self.order_id, field="order_id"))
+        object.__setattr__(self, "account_id", require_text(self.account_id, field="account_id"))
         object.__setattr__(self, "product_code",require_text(self.product_code, field="product_code"))
         object.__setattr__(self, "state", coerce_order_state(self.state))
 
@@ -149,6 +146,7 @@ class Order:
     def create(
         cls,
         *,
+        account_id: str,
         product_code: str,
         order_id: str | None = None,
         tier_code: str | None = None,
@@ -173,6 +171,7 @@ class Order:
 
         return cls(
             order_id=order_id or uuid4().hex,
+            account_id=account_id,
             product_code=product_code,
             state=OrderState.DRAFT,
             created_at=timestamp,
@@ -186,9 +185,7 @@ class Order:
         )
 
     @staticmethod
-    def _normalize_events(
-        value: Iterable[OrderEvent] | None,
-    ) -> tuple[OrderEvent, ...]:
+    def _normalize_events(value: Iterable[OrderEvent] | None) -> tuple[OrderEvent, ...]:
         _announce("Normalizing order event history")
 
         if value is None:
@@ -490,6 +487,7 @@ class Order:
 
         return {
             "order_id": self.order_id,
+            "account_id": self.account_id,
             "product_code": self.product_code,
             "tier_code": self.tier_code,
             "project_alias": self.project_alias,
@@ -539,16 +537,38 @@ class Order:
                 context={"received_type": type(raw_events).__name__},
             ) from exc
 
+        order_id = data.get("order_id")
+        account_id = data.get("account_id")
+        product_code = data.get("product_code")
+        created_at = data.get("created_at")
+        updated_at = data.get("updated_at")
+
+        if order_id is None:
+            raise DomainValidationError("order_id is required.", field="order_id")
+
+        if account_id is None:
+            raise DomainValidationError("account_id is required.", field="account_id")
+
+        if product_code is None:
+            raise DomainValidationError("product_code is required.", field="product_code")
+
+        if created_at is None:
+            raise DomainValidationError("created_at is required.", field="created_at")
+
+        if updated_at is None:
+            raise DomainValidationError("updated_at is required.", field="updated_at")
+
         return cls(
-            order_id=data.get("order_id"),
-            product_code=data.get("product_code"),
+            order_id=order_id,
+            account_id=account_id,
+            product_code=product_code,
             tier_code=data.get("tier_code"),
             project_alias=data.get("project_alias"),
             state=coerce_order_state(
                 data.get("state", OrderState.DRAFT.value)
             ),
-            created_at=data.get("created_at"),
-            updated_at=data.get("updated_at"),
+            created_at=created_at,
+            updated_at=updated_at,
             upload_session_id=data.get("upload_session_id"),
             retention_expires_at=data.get("retention_expires_at"),
             version=data.get("version", 0),

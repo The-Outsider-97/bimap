@@ -64,6 +64,7 @@ class OrderState(str, Enum):
     DRAFT = "draft"
     UPLOADING = "uploading"
     UPLOAD_VALIDATED = "upload_validated"
+    ENTITLED = "entitled"
     PAYMENT_PENDING = "payment_pending"
     PAID = "paid"
     QUEUED = "queued"
