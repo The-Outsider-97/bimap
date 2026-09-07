@@ -73,6 +73,7 @@ TRANSITION_GRAPH: Mapping[OrderState, frozenset[OrderState]] = MappingProxyType(
         ),
         OrderState.UPLOAD_VALIDATED: frozenset(
             {
+                OrderState.ENTITLED,
                 OrderState.PAYMENT_PENDING,
                 OrderState.CANCELLED,
                 OrderState.EXPIRED,
