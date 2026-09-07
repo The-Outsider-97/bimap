@@ -1,0 +1,101 @@
+schema_version: 1
+
+plans:
+  basic:
+    display_name: Basic
+    base_purchase_discount_percent: 0
+    max_effective_purchase_discount_percent: 20
+
+    usage:
+      audit:
+        mode: finite
+        limit: 5
+        renewal: monthly
+
+      conversion:
+        mode: finite
+        limit: 3
+        renewal: weekly
+
+      data_extraction:
+        mode: finite
+        limit: 5
+        renewal: weekly
+
+  pro:
+    display_name: Pro
+    base_purchase_discount_percent: 5
+    max_effective_purchase_discount_percent: 30
+
+    usage:
+      audit:
+        mode: unconfigured
+        limit: 15
+        renewal: monthly
+
+      conversion:
+        mode: unconfigured
+        limit: 9
+        renewal: weekly
+
+      data_extraction:
+        mode: unconfigured
+        limit: 15
+        renewal: weekly
+
+  plus:
+    display_name: Plus
+    base_purchase_discount_percent: 10
+    max_effective_purchase_discount_percent: 40
+
+    usage:
+      audit:
+        mode: unconfigured
+        limit: 25
+        renewal: monthly
+
+      conversion:
+        mode: unconfigured
+        limit: 15
+        renewal: weekly
+
+      data_extraction:
+        mode: unconfigured
+        limit: 25
+        renewal: weekly
+
+  business:
+    display_name: Business
+    base_purchase_discount_percent: 15
+    max_effective_purchase_discount_percent: 50
+
+    usage:
+      audit:
+        mode: unlimited
+        limit: null
+        renewal: none
+
+      conversion:
+        mode: unlimited
+        limit: null
+        renewal: none
+
+      data_extraction:
+        mode: unlimited
+        limit: null
+        renewal: none
+
+rewards:
+  earn:
+    audit_completed: null
+    conversion_completed: null
+    data_extraction_completed: null
+    purchase_completed: null
+
+  redeem:
+    extra_audit: null
+    extra_conversion: null
+    extra_data_extraction: null
+
+  purchase_discount:
+    points_per_percentage_point: null
