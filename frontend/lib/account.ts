@@ -14,6 +14,74 @@ export type AuthMode =
   | "login"
   | "signup";
 
+  export type UsageKind =
+  | "audit"
+  | "conversion"
+  | "data_extraction";
+
+export type AccountUsage = {
+  used: number;
+  limit: number | null;
+  remaining: number | null;
+  unlimited: boolean;
+
+  renewal:
+    | "weekly"
+    | "monthly"
+    | "none";
+  periodStart?: string | null;
+  periodEnd?: string | null;
+
+  bonusCredits: number;
+};
+
+export type AccountRewards = {
+  points: number;
+
+  basePurchaseDiscountPercent:
+    number;
+
+  maxEffectivePurchaseDiscountPercent:
+    number;
+
+  maxRewardDiscountPercent:
+    number;
+};
+
+export type AccountSummary = {
+  audits: {
+    inProgress:
+      readonly AccountAudit[];
+    done:
+      readonly AccountAudit[];
+    cancelled:
+      readonly AccountAudit[];
+  };
+
+  purchases: {
+    threeD:
+      readonly AccountPurchase[];
+    twoD:
+      readonly AccountPurchase[];
+  };
+
+  currentPlan: AccountPlan;
+
+  usage: {
+    audit: AccountUsage;
+    conversion: AccountUsage;
+    dataExtraction:
+      AccountUsage;
+  };
+
+  rewards: AccountRewards;
+};
+
+
+
+
+
+
 export type AccountProfile = {
   userId: string;
   username: string;
@@ -75,24 +143,6 @@ export type AccountPurchase = {
   format: string;
   purchasedAt?: string | null;
   downloadHref?: string | null;
-};
-
-export type AccountSummary = {
-  audits: {
-    inProgress:
-      readonly AccountAudit[];
-    done:
-      readonly AccountAudit[];
-    cancelled:
-      readonly AccountAudit[];
-  };
-  purchases: {
-    threeD:
-      readonly AccountPurchase[];
-    twoD:
-      readonly AccountPurchase[];
-  };
-  currentPlan: AccountPlan;
 };
 
 export const PLAN_OPTIONS = [
