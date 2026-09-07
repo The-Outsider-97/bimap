@@ -122,8 +122,17 @@ class RouteOrders:
             }
         )
 
-    async def create(self, request: Request) -> Response:
-        """POST ``/orders`` -> ``CreateOrder`` -> versioned ``OrderContract``."""
+    async def create(
+        self,
+        request: Request,
+    ) -> Response:
+        """
+        POST /orders -> authenticated account -> CreateOrder -> OrderContract.
+    
+        The authenticated account identity is obtained exclusively from the
+        configured RouteAuthorizer. Clients cannot select or override account_id
+        through the request payload.
+        """
         announce_api_action(
             printer,
             logger,
@@ -131,47 +140,92 @@ class RouteOrders:
             action="Handling create-order request",
             event="api_route_orders_create_start",
         )
-        await authorize_request(
+    
+        account_id = await authorize_request(
             self._authorize,
             request,
             operation="create_order",
             resource_id=None,
         )
-
+    
+        if account_id is None:
+            raise APIUnauthorizedError(
+                "Authenticated account identity is required to create an order.",
+                component=_COMPONENT,
+                operation="create_order",
+                field="account_id",
+            )
+    
         payload = validate_object_fields(
             await read_json_object(request),
-            required=("product_code",),
-            optional=("tier_code", "project_alias"),
+            required=(
+                "product_code",
+            ),
+            optional=(
+                "tier_code",
+                "project_alias",
+            ),
         )
+    
         product_code = require_api_text(
             payload["product_code"],
             field="product_code",
             component=_COMPONENT,
             operation="create_order",
         )
-        tier_code = optional_route_text(payload.get("tier_code"), field="tier_code")
+    
+        tier_code = optional_route_text(
+            payload.get("tier_code"),
+            field="tier_code",
+        )
+    
         project_alias = optional_route_text(
             payload.get("project_alias"),
             field="project_alias",
         )
-
+    
         order = self._create_order.execute(
+            account_id=account_id,
             product_code=product_code,
             tier_code=tier_code,
             project_alias=project_alias,
         )
-        response_payload = order_to_public_dict(order)
+    
+        if order.account_id != account_id:
+            raise APIInternalError(
+                "Created order ownership does not match "
+                "the authenticated account.",
+                component=_COMPONENT,
+                operation="create_order",
+                field="order.account_id",
+                context={
+                    "order_id": order.order_id,
+                },
+            )
+    
+        response_payload = order_to_public_dict(
+            order
+        )
+    
         logger.info(
             {
-                "event": "api_route_orders_create_completed",
-                "order_id": order.order_id,
-                "state": order.state.value,
+                "event":
+                    "api_route_orders_create_completed",
+                "order_id":
+                    order.order_id,
+                "account_id":
+                    order.account_id,
+                "state":
+                    order.state.value,
             }
         )
+    
         return json_response(
             response_payload,
             status_code=status.HTTP_201_CREATED,
-            headers={"Cache-Control": "no-store"},
+            headers={
+                "Cache-Control": "no-store",
+            },
         )
 
     async def get(self, request: Request, order_id: str) -> Response:
@@ -211,7 +265,7 @@ class RouteOrders:
             {
                 "event": "api_route_orders_get_completed",
                 "order_id": result.order_id,
-                "state": result.state.value,
+                "state": result.state,
                 "version": result.version,
             }
         )
