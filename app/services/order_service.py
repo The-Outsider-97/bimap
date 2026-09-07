@@ -324,6 +324,7 @@ class OrderService:
     def create_order(
         self,
         *,
+        account_id: str,
         product_code: ProductCode | str,
         tier_code: str | None = None,
         order_id: str | None = None,
@@ -331,60 +332,108 @@ class OrderService:
         upload_session_id: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> Order:
-        """Create and persist one catalog-backed draft order."""
+        """Create and persist one account-owned, catalog-backed draft order."""
         announce_app_action(
             printer,
             logger,
             component=_COMPONENT,
             action="Creating order",
             event="order_service_create_start",
-            context={"product_code": str(product_code), "has_tier": tier_code is not None},
+            context={
+                "product_code": str(product_code),
+                "has_tier": tier_code is not None,
+            },
         )
-
+    
+        normalized_account_id = require_app_text(
+            account_id,
+            field="account_id",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation="create_order",
+            max_length=512,
+        )
+    
         try:
-            product = self.catalog.get_product(product_code)
+            product = self.catalog.get_product(
+                product_code
+            )
+    
             tier: ProductTier | None = None
+    
             if tier_code is not None:
-                tier = self.catalog.get_tier(product.code, tier_code)
-
+                tier = self.catalog.get_tier(
+                    product.code,
+                    tier_code,
+                )
+    
             order = Order.create(
                 order_id=order_id,
+                account_id=normalized_account_id,
                 product_code=product.code.value,
-                tier_code=None if tier is None else tier.tier_code,
+                tier_code=(
+                    None
+                    if tier is None
+                    else tier.tier_code
+                ),
                 project_alias=project_alias,
                 upload_session_id=upload_session_id,
                 created_at=self.clock.now(),
-                metadata=_normalize_metadata(metadata, operation="create_order"),
+                metadata=_normalize_metadata(
+                    metadata,
+                    operation="create_order",
+                ),
             )
+    
         except AppError:
             raise
+    
         except DomainError as exc:
             raise _translate_domain_error(
                 exc,
                 operation="create_order",
-                message="Order creation input does not satisfy product/order constraints.",
+                message=(
+                    "Order creation input does not satisfy "
+                    "product/order constraints."
+                ),
             ) from exc
-
-        existing = self.repository.get_order(order.order_id)
+    
+        existing = self.repository.get_order(
+            order.order_id
+        )
+    
         if existing is not None:
             raise AppIntegrityError(
                 "An order with the requested identifier already exists.",
                 component=_COMPONENT,
                 operation="create_order",
                 field="order_id",
-                context={"order_id": order.order_id},
+                context={
+                    "order_id": order.order_id,
+                },
             )
-
-        persisted = self.repository.save_order(order, expected_version=None)
-        self._require_persisted_order(persisted, expected=order, operation="create_order")
+    
+        persisted = self.repository.save_order(
+            order,
+            expected_version=None,
+        )
+    
+        self._require_persisted_order(
+            persisted,
+            expected=order,
+            operation="create_order",
+        )
+    
         logger.info(
             {
                 "event": "order_service_order_created",
                 "order_id": persisted.order_id,
+                "account_id": persisted.account_id,
                 "product_code": persisted.product_code,
                 "tier_code": persisted.tier_code,
             }
         )
+    
         return persisted
 
     def _require_persisted_order(
