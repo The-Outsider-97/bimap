@@ -66,6 +66,10 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+body.is-overlay-open {
+  overflow: hidden;
+}
+
 a {
   color: inherit;
   text-decoration: none;
@@ -198,7 +202,11 @@ html[data-theme="light"] .section--dark-band {
 }
 
 .site-header__left,
-.brand,
+.brand {
+  display: flex;
+  align-items: center;
+}
+
 .site-header__left {
   gap: 20px;
 }
@@ -2123,18 +2131,18 @@ html[data-theme="dark"] .theme-toggle__thumb {
     padding:
       76px 0;
   }
-  
+
   .donation-section__inner {
     grid-template-columns:
       1fr;
-  
+
     gap: 34px;
   }
-  
+
   .donation-section__index {
     display: none;
   }
-  
+
   .donation-section__content h2 {
     font-size:
       clamp(
@@ -2143,11 +2151,11 @@ html[data-theme="dark"] .theme-toggle__thumb {
         66px
       );
   }
-  
+
   .donation-section__action {
     grid-column:
       auto;
-  
+
     width: 100%;
   }
 
@@ -2265,22 +2273,6 @@ html[data-theme="dark"] .theme-toggle__thumb {
     font-size: 42px;
   }
 
-  .donation-section__inner {
-    grid-template-columns:
-      120px
-      1fr;
-  }
-  
-  .donation-section__action {
-    grid-column:
-      2;
-  
-    width:
-      min(
-        300px,
-        100%
-      );
-  }
 
   .product-card {
     padding: 24px;
@@ -2731,7 +2723,7 @@ html[data-theme="dark"] .theme-toggle__thumb {
 
 .footer-contact:hover,
 .navigation-panel__contact:hover {
-  color: var(--yellow);
+  color: var(--bimap-yellow);
 }
 
 .navigation-panel__contact {
@@ -2739,7 +2731,7 @@ html[data-theme="dark"] .theme-toggle__thumb {
   align-items: center;
   gap: 16px;
 
-  color: var(--yellow);
+  color: var(--bimap-yellow);
 
   font:
     11px
@@ -2793,7 +2785,7 @@ html[data-theme="dark"] .theme-toggle__thumb {
 
   border-top:
     2px solid
-    var(--yellow);
+    var(--bimap-yellow);
 
   box-shadow:
     0 36px 90px
@@ -2831,7 +2823,7 @@ html[data-theme="dark"] .theme-toggle__thumb {
 .contact-modal__eyebrow {
   margin: 0 0 8px;
 
-  color: var(--gold);
+  color: var(--bimap-gold);
 
   font:
     10px
@@ -2885,8 +2877,8 @@ html[data-theme="dark"] .theme-toggle__thumb {
 }
 
 .contact-modal__close:hover {
-  color: var(--yellow);
-  border-color: var(--yellow);
+  color: var(--bimap-yellow);
+  border-color: var(--bimap-yellow);
 }
 
 .contact-modal__intro {
@@ -2963,10 +2955,10 @@ html[data-theme="dark"] .theme-toggle__thumb {
 .contact-form textarea:focus {
   outline:
     1px solid
-    var(--yellow);
+    var(--bimap-yellow);
 
   border-color:
-    var(--yellow);
+    var(--bimap-yellow);
 }
 
 .contact-form__foot {
@@ -3030,13 +3022,13 @@ html[data-theme="dark"] .theme-toggle__thumb {
   gap: 20px;
 
   border-color:
-    var(--yellow);
+    var(--bimap-yellow);
 
   background:
-    var(--yellow);
+    var(--bimap-yellow);
 
   color:
-    var(--black);
+    var(--bimap-black);
 }
 
 @keyframes contactIn {
@@ -3070,7 +3062,7 @@ html[data-theme="dark"] .theme-toggle__thumb {
 
   display: flex;
 
-  align-items: end;
+  align-items: flex-end;
 
   padding:
     calc(
@@ -3190,7 +3182,7 @@ html[data-theme="dark"] .theme-toggle__thumb {
     4px 0 0;
 
   color:
-    var(--gold);
+    var(--bimap-gold);
 
   font:
     10px
@@ -3294,7 +3286,7 @@ html[data-theme="dark"] .theme-toggle__thumb {
   top: 22px;
   right: 4px;
 
-  color: var(--yellow);
+  color: var(--bimap-yellow);
 
   font:
     24px
@@ -3361,7 +3353,7 @@ summary::after {
 
 .method-chain i {
   color:
-    var(--yellow);
+    var(--bimap-yellow);
 
   font-style:
     normal;
@@ -3399,7 +3391,7 @@ summary::after {
 
 .method-grid article > span {
   color:
-    var(--gold);
+    var(--bimap-gold);
 
   font:
     10px
@@ -3432,7 +3424,7 @@ summary::after {
 
   border-left:
     3px solid
-    var(--yellow);
+    var(--bimap-yellow);
 
   background:
     var(--surface);
@@ -3592,7 +3584,7 @@ summary::after {
 
 .catalog-search__field span {
   color:
-    var(--yellow);
+    var(--bimap-yellow);
 }
 
 .catalog-search__field input {
@@ -3645,13 +3637,13 @@ summary::after {
 .catalog-filters
 button[data-active="true"] {
   border-color:
-    var(--yellow);
+    var(--bimap-yellow);
 
   background:
-    var(--yellow);
+    var(--bimap-yellow);
 
   color:
-    var(--black);
+    var(--bimap-black);
 }
 
 .catalog-results__heading {
@@ -3660,7 +3652,7 @@ button[data-active="true"] {
   justify-content:
     space-between;
 
-  align-items: end;
+  align-items: flex-end;
 
   gap: 24px;
 
@@ -3759,7 +3751,7 @@ button[data-active="true"] {
 
 .catalog-card__top > span {
   color:
-    var(--gold);
+    var(--bimap-gold);
 
   font:
     10px
@@ -3884,7 +3876,7 @@ span:nth-child(3) {
 .catalog-card__foot
 span:last-child {
   color:
-    var(--yellow);
+    var(--bimap-yellow);
 
   font-size:
     17px;
@@ -3912,7 +3904,7 @@ span:last-child {
 
 .catalog-empty > span {
   color:
-    var(--gold);
+    var(--bimap-gold);
 
   font:
     10px
@@ -5556,6 +5548,7 @@ span {
 
   border:
     1px solid
+
     rgba(
       225,
       200,
@@ -6025,162 +6018,6 @@ body.is-account-modal-open {
     var(--bimap-yellow);
 
   outline-offset: 3px;
-}
-.user-access-button {
-  height:
-    calc(
-      var(--header-height) *
-      0.95
-    );
-
-  min-width: 176px;
-
-  display: flex;
-
-  align-items:
-    center;
-
-  gap: 11px;
-
-  padding:
-    6px 13px 6px 8px;
-
-  border:
-    1px solid
-    rgba(
-      225,
-      200,
-      56,
-      0.5
-    );
-
-  background:
-    var(--bimap-graphite);
-
-  color:
-    var(--bimap-white);
-
-  cursor: pointer;
-
-  transition:
-    filter 160ms ease,
-    border-color 160ms ease,
-    transform 160ms ease;
-}
-
-.user-access-button:hover {
-  /*
-   * Exact requested hover:
-   * darken by 10%.
-   */
-  filter:
-    brightness(0.9);
-
-  border-color:
-    var(--bimap-yellow);
-}
-
-.user-access-button:active {
-  transform:
-    translateY(1px);
-}
-
-.user-access-button[
-  data-loading="true"
-] {
-  cursor: wait;
-}
-
-.user-access-button__avatar {
-  flex:
-    0 0 auto;
-
-  width:
-    calc(
-      var(--header-height) *
-      0.69
-    );
-
-  height:
-    calc(
-      var(--header-height) *
-      0.69
-    );
-
-  display: grid;
-
-  place-items:
-    center;
-
-  overflow: hidden;
-
-  border-radius: 50%;
-
-  background:
-    #050505;
-
-  border:
-    1px solid
-    rgba(
-      225,
-      200,
-      56,
-      0.4
-    );
-}
-
-.user-access-button__avatar
-img {
-  width: 100%;
-  height: 100%;
-
-  object-fit: cover;
-}
-
-.user-access-button__copy {
-  min-width: 0;
-
-  display: grid;
-
-  gap: 2px;
-
-  text-align: left;
-}
-
-.user-access-button__copy
-small {
-  color:
-    rgba(
-      234,
-      236,
-      236,
-      0.58
-    );
-
-  font:
-    8px
-    var(--font-mono);
-
-  text-transform:
-    uppercase;
-
-  letter-spacing:
-    0.1em;
-}
-
-.user-access-button__copy
-strong {
-  max-width: 100px;
-
-  overflow: hidden;
-
-  text-overflow:
-    ellipsis;
-
-  white-space: nowrap;
-
-  font-size: 12px;
-  font-weight: 600;
 }
 
 /* Auth modal */
@@ -7008,6 +6845,8 @@ input {
 div {
   min-height: 110px;
 
+  padding: 18px;
+
   display: flex;
 
   flex-direction:
@@ -7017,8 +6856,6 @@ div {
     space-between;
 
   gap: 16px;
-
-  padding: 18px;
 
   border-right:
     1px solid
@@ -7067,7 +6904,7 @@ dd {
     space-between;
 
   align-items:
-    end;
+    flex-end;
 
   gap: 30px;
 
@@ -7576,16 +7413,6 @@ h1 {
 @media (
   max-width: 1080px
 ) {
-  .user-access-button {
-    min-width: 68px;
-
-    padding:
-      5px;
-  }
-
-  .user-access-button__copy {
-    display: none;
-  }
 
   .account-plan-grid {
     grid-template-columns:
@@ -7650,33 +7477,6 @@ h1 {
     display: none;
   }
 
-  .user-access-button {
-    height:
-      calc(
-        var(--header-height) *
-        0.95
-      );
-
-    min-width:
-      calc(
-        var(--header-height) *
-        0.95
-      );
-  }
-
-  .user-access-button__avatar {
-    width:
-      calc(
-        var(--header-height) *
-        0.68
-      );
-
-    height:
-      calc(
-        var(--header-height) *
-        0.68
-      );
-  }
 
   .account-modal-backdrop {
     padding: 8px;
