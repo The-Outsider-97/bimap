@@ -7582,3 +7582,261 @@ h1 {
     animation: none;
   }
 }
+
+.account-current-plan {
+  display: grid;
+
+  grid-template-columns:
+    2fr 1fr 1fr;
+
+  margin-bottom: 24px;
+
+  border:
+    1px solid
+    var(--line);
+
+  background:
+    var(--surface);
+}
+
+.account-current-plan
+> div {
+  min-height: 150px;
+
+  padding: 22px;
+
+  border-right:
+    1px solid
+    var(--line);
+}
+
+.account-current-plan
+> div:last-child {
+  border-right: 0;
+}
+
+.account-current-plan
+span,
+.account-current-plan
+small,
+.account-usage-card
+span,
+.account-usage-card
+small,
+.account-reward-summary
+span {
+  color:
+    var(--muted);
+
+  font:
+    9px
+    var(--font-mono);
+
+  text-transform:
+    uppercase;
+
+  letter-spacing:
+    0.08em;
+}
+
+.account-current-plan__identity
+h3 {
+  margin:
+    12px 0 8px;
+
+  font-size:
+    32px;
+
+  letter-spacing:
+    -0.035em;
+}
+
+.account-current-plan__identity
+p {
+  margin: 0;
+
+  color:
+    var(--muted);
+
+  line-height:
+    1.55;
+}
+
+.account-current-plan__discount
+strong,
+.account-current-plan__points
+strong {
+  display: block;
+
+  margin-top: 12px;
+
+  font-size:
+    34px;
+
+  line-height: 1;
+}
+
+.account-current-plan__discount
+small,
+.account-current-plan__points
+small {
+  display: block;
+
+  margin-top: 12px;
+}
+
+.account-usage-grid {
+  display: grid;
+
+  grid-template-columns:
+    repeat(
+      3,
+      minmax(
+        0,
+        1fr
+      )
+    );
+
+  gap: 16px;
+
+  margin-bottom: 24px;
+}
+
+.account-usage-card {
+  padding: 22px;
+
+  border:
+    1px solid
+    var(--line);
+
+  background:
+    var(--surface);
+}
+
+.account-usage-card__heading,
+.account-usage-card__meta {
+  display: flex;
+
+  align-items: center;
+
+  justify-content:
+    space-between;
+
+  gap: 16px;
+}
+
+.account-usage-card
+> strong {
+  display: block;
+
+  margin:
+    24px 0 16px;
+
+  font-size:
+    32px;
+
+  line-height: 1;
+}
+
+.account-usage-card
+> p {
+  margin:
+    20px 0 0;
+
+  color:
+    var(--muted);
+}
+
+.account-usage-meter {
+  height: 4px;
+
+  margin-bottom: 12px;
+
+  overflow: hidden;
+
+  background:
+    var(--line);
+}
+
+.account-usage-meter
+> span {
+  display: block;
+
+  height: 100%;
+
+  background:
+    var(--bimap-yellow);
+}
+
+.account-reward-summary {
+  display: grid;
+
+  grid-template-columns:
+    repeat(
+      3,
+      minmax(
+        0,
+        1fr
+      )
+    );
+
+  margin-bottom: 32px;
+
+  border:
+    1px solid
+    var(--line);
+}
+
+.account-reward-summary
+> div {
+  padding:
+    18px 22px;
+
+  border-right:
+    1px solid
+    var(--line);
+}
+
+.account-reward-summary
+> div:last-child {
+  border-right: 0;
+}
+
+.account-reward-summary
+strong {
+  display: block;
+
+  margin-top: 8px;
+
+  font-size:
+    24px;
+}
+
+@media (
+  max-width: 900px
+) {
+  .account-current-plan,
+  .account-usage-grid,
+  .account-reward-summary {
+    grid-template-columns:
+      1fr;
+  }
+
+  .account-current-plan
+  > div,
+  .account-reward-summary
+  > div {
+    border-right: 0;
+
+    border-bottom:
+      1px solid
+      var(--line);
+  }
+
+  .account-current-plan
+  > div:last-child,
+  .account-reward-summary
+  > div:last-child {
+    border-bottom: 0;
+  }
+}
