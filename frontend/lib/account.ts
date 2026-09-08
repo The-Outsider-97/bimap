@@ -20,7 +20,7 @@ export type AuthMode =
   | "data_extraction";
 
 export type AccountUsage = {
-  used: number;
+  used: number | null;
   limit: number | null;
   remaining: number | null;
   unlimited: boolean;
