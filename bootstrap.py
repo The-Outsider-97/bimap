@@ -203,12 +203,11 @@ class BootstrapInfrastructure:
     # provider-backed implementations.
     shared_memory: SharedMemory
 
-    account_plan_resolver: Any
-    route_hooks: APIRouteHooks
     accounts: Accounts
     authentication: Authentication
     entitlement_store: Any
     renewal_window_resolver: Any
+    route_hooks: APIRouteHooks
 
     account_summary_resolver: AccountSummaryResolver | None = None
     account_avatar_uploader: AccountAvatarUploader | None = None
@@ -970,9 +969,7 @@ class Bootstrap:
                 entitlement_service = EntitlementService(
                     self.infrastructure.entitlement_store,
                     self.infrastructure.clock,
-                    catalog=(
-                        self.configuration.account_plans
-                    ),
+                    catalog=self.configuration.account_plans,
                     plan_resolver=self.infrastructure.accounts,
                     renewal_window_resolver=(
                         self.infrastructure.renewal_window_resolver

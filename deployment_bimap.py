@@ -77,11 +77,12 @@ from applications.bimap.infra.local import ( # type: ignore
     CalendarUTCRenewalWindowResolver,
     DevelopmentMalware,
     DisabledPayment,
+    InMemoryAccounts,
     InMemoryEntitlementStore,
     InMemoryRepository,
     InMemoryStorage,
     InProcessQueue,
-    LocalAccountPlanResolver,
+    LocalSLAIAuthentication,
     SystemClock,
 )
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
@@ -511,6 +512,11 @@ def _create_local_bootstrap() -> Bootstrap:
     clock = SystemClock()
     repository = InMemoryRepository()
     accounts = InMemoryAccounts()
+
+    # ---------------------------------------------------------
+    # Local account-entitlement infrastructure
+    # ---------------------------------------------------------
+
     entitlement_store = InMemoryEntitlementStore()
     renewal_window_resolver = CalendarUTCRenewalWindowResolver()
 
@@ -532,23 +538,44 @@ def _create_local_bootstrap() -> Bootstrap:
         plan_catalog=plan_catalog,
     )
 
+    # ---------------------------------------------------------
+    # Local infrastructure
+    # ---------------------------------------------------------
+
     infrastructure = BootstrapInfrastructure(
         repository=repository,
         payment=DisabledPayment(),
         clock=clock,
-        malware=DevelopmentMalware(trust_uploads=trust_uploads),
+        malware=DevelopmentMalware(
+            trust_uploads=trust_uploads,
+        ),
         storage=InMemoryStorage(),
         queue=InProcessQueue(),
+
         accounts=accounts,
         authentication=authentication,
+
         entitlement_store=entitlement_store,
         renewal_window_resolver=renewal_window_resolver,
+
         shared_memory=SharedMemory(),
-        route_hooks=_build_route_hooks(authentication, accounts),
-        account_summary_resolver=account_summary_resolver,
+
+        route_hooks=_build_route_hooks(
+            authentication,
+            accounts,
+        ),
+
+        account_summary_resolver=(
+            account_summary_resolver
+        ),
         account_avatar_uploader=None,
+
         close_shared_memory_on_shutdown=True,
     )
+
+    # ---------------------------------------------------------
+    # Validated BIMAP configuration
+    # ---------------------------------------------------------
 
     configuration = BootstrapConfiguration(
         catalog=_build_catalog(),
@@ -579,93 +606,6 @@ def _create_local_bootstrap() -> Bootstrap:
             "trusted_upload_override": trust_uploads,
         }
     )
-    return bootstrap
-
-    # ---------------------------------------------------------
-    # Local account-entitlement infrastructure
-    # ---------------------------------------------------------
-
-    entitlement_store = InMemoryEntitlementStore()
-    account_plan_resolver = LocalAccountPlanResolver()
-    renewal_window_resolver = CalendarUTCRenewalWindowResolver()
-
-    # ---------------------------------------------------------
-    # Local infrastructure
-    # ---------------------------------------------------------
-
-    infrastructure = BootstrapInfrastructure(
-        repository=InMemoryRepository(),
-        payment=DisabledPayment(),
-        clock=SystemClock(),
-        malware=DevelopmentMalware(
-            trust_uploads=trust_uploads,
-        ),
-        storage=InMemoryStorage(),
-        queue=InProcessQueue(),
-
-        entitlement_store=(
-            entitlement_store
-        ),
-        account_plan_resolver=(
-            account_plan_resolver
-        ),
-        renewal_window_resolver=(
-            renewal_window_resolver
-        ),
-
-        shared_memory=SharedMemory(),
-        route_hooks=_build_route_hooks(),
-
-        close_shared_memory_on_shutdown=True,
-    )
-
-    # ---------------------------------------------------------
-    # Validated BIMAP configuration
-    # ---------------------------------------------------------
-
-    configuration = BootstrapConfiguration(
-        catalog=_build_catalog(),
-        api_settings=_build_api_settings(),
-
-        account_plans=(
-            load_account_plan_catalog()
-        ),
-
-        product_limits=(),
-
-        slai_profile=None,
-        slai_required_agents=None,
-
-        allow_degraded_slai_readiness=False,
-        retain_slai_shared_memory=False,
-        expose_health_details=False,
-    )
-
-    bootstrap = Bootstrap(
-        infrastructure=infrastructure,
-        configuration=configuration,
-        audit_components=(
-            _build_audit_components()
-        ),
-    )
-
-    logger.info(
-        {
-            "event":
-                "bimap_local_bootstrap_constructed",
-            "deployment_mode":
-                "development",
-            "payment_enabled":
-                False,
-            "durable_persistence":
-                False,
-            "durable_queue":
-                False,
-            "trusted_upload_override":
-                trust_uploads,
-        }
-    )
-
     return bootstrap
 
 
