@@ -37,7 +37,7 @@ import tempfile
 from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
-from fastapi import Request
+from fastapi import Request # type: ignore
 
 from applications.bimap.api.routes.auth import SESSION_COOKIE_NAME  # type: ignore
 from applications.bimap.api.utils.api_errors import (  # type: ignore
@@ -73,6 +73,7 @@ from applications.bimap.domain.products.models import ( # type: ignore
     ProductDefinition,
 )
 from applications.bimap.utils.plan_loader import load_account_plan_catalog # type: ignore
+from applications.bimap.utils.config_loader import load_bimap_config  # type: ignore
 from applications.bimap.infra.local import ( # type: ignore
     CalendarUTCRenewalWindowResolver,
     DevelopmentMalware,
@@ -142,10 +143,24 @@ def _environment_bool(name: str, *, default: bool = False) -> bool:
 
 
 def _allowed_hosts() -> tuple[str, ...]:
-    raw = os.getenv(_ALLOWED_HOSTS_ENV)
+    raw = os.getenv(
+        _ALLOWED_HOSTS_ENV
+    )
 
     if raw is None:
-        return ("127.0.0.1", "localhost")
+        config = (
+            load_bimap_config()
+        )
+
+        return tuple(
+            config[
+                "api"
+            ][
+                "security"
+            ][
+                "allowed_hosts"
+            ]
+        )
 
     hosts: list[str] = []
     seen: set[str] = set()
@@ -153,7 +168,10 @@ def _allowed_hosts() -> tuple[str, ...]:
     for item in raw.split(","):
         host = item.strip()
 
-        if not host or host in seen:
+        if (
+            not host
+            or host in seen
+        ):
             continue
 
         seen.add(host)
@@ -161,7 +179,9 @@ def _allowed_hosts() -> tuple[str, ...]:
 
     if not hosts:
         raise RuntimeError(
-            f"{_ALLOWED_HOSTS_ENV} must contain at least one hostname when set."
+            f"{_ALLOWED_HOSTS_ENV} "
+            "must contain at least one "
+            "hostname when set."
         )
 
     return tuple(hosts)
