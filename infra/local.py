@@ -32,32 +32,27 @@ from __future__ import annotations
 
 import hashlib
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from threading import RLock
 from typing import BinaryIO
 
 from ..app.ports.clock import Clock
-from ..app.ports.malware import Malware, MalwareScanResult, MalwareVerdict
-from ..app.ports.payment import Payment, PaymentCheckout, PaymentEvent
+from ..app.ports.malware import *
+from ..app.ports.payment import *
 from ..app.ports.queue import Queue, QueueReceipt
 from ..app.ports.repositories import Repository
 from ..app.ports.storage import Storage, StoredObject
-from ..app.utils.app_errors import (
-    PaymentUnavailableError,
-    QueueIntegrityError,
-    RepositoryConflictError,
-    StorageIntegrityError,
-    StorageNotFoundError,
-)
+from ..app.services.entitlement_service import *
+from ..app.utils.app_errors import *
 from ..contracts.audit_job import AuditJob
 from ..contracts.report_manifest import ReportManifest
+from ..domain.accounts.plans import *
 from ..domain.evidence.models import EvidenceItem
 from ..domain.findings.models import Finding
 from ..domain.governance.review import Review
 from ..domain.orders.models import Order
 from ..domain.products.models import ProductTier
-
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
 
 
@@ -82,9 +77,460 @@ class SystemClock(Clock):
 
 
 # ---------------------------------------------------------------------------
-# Repository
+# Account entitlements
 # ---------------------------------------------------------------------------
 
+class InMemoryEntitlementStore:
+    """
+    Thread-safe local entitlement persistence.
+
+    Production must replace this with an atomic durable implementation.
+    """
+
+    def __init__(self) -> None:
+        printer.status("BIMAP", "Initializing local entitlement store", "info")
+
+        self._lock = RLock()
+        self._consumptions: list[dict[str, object]] = []
+        self._bonus: dict[tuple[str, UsageKind], int] = {}
+
+    def find_by_source(self, *, account_id: str, kind: UsageKind, source_id: str) -> dict[str, object] | None:
+        with self._lock:
+            for record in self._consumptions:
+                if (
+                    record["account_id"]
+                    == account_id
+                    and record["kind"]
+                    is kind
+                    and record["source_id"]
+                    == source_id
+                ):
+                    return dict(record)
+
+        return None
+
+    def find_by_idempotency_key(self, *, account_id: str, idempotency_key: str) -> dict[str, object] | None:
+        with self._lock:
+            for record in self._consumptions:
+                if (
+                    record["account_id"]
+                    == account_id
+                    and record[
+                        "idempotency_key"
+                    ]
+                    == idempotency_key
+                ):
+                    return dict(record)
+
+        return None
+
+    def _existing_locked(
+        self,
+        *,
+        account_id: str,
+        kind: UsageKind,
+        source_id: str,
+        idempotency_key: str,
+    ) -> dict[str, object] | None:
+        for record in self._consumptions:
+            if (
+                record["account_id"]
+                == account_id
+                and record["kind"]
+                is kind
+                and record["source_id"]
+                == source_id
+            ):
+                return dict(record)
+
+            if (
+                record["account_id"]
+                == account_id
+                and record[
+                    "idempotency_key"
+                ]
+                == idempotency_key
+            ):
+                if (
+                    record["kind"]
+                    is not kind
+                    or record["source_id"]
+                    != source_id
+                ):
+                    raise RuntimeError(
+                        "Entitlement idempotency key "
+                        "is already bound to another source."
+                    )
+
+                return dict(record)
+
+        return None
+
+    def try_consume_recurring(
+        self,
+        *,
+        account_id: str,
+        kind: UsageKind,
+        plan_code: AccountPlanCode,
+        source_id: str,
+        idempotency_key: str,
+        occurred_at: datetime,
+        period_start: datetime,
+        period_end: datetime,
+        limit: int,
+    ) -> dict[str, object] | None:
+        with self._lock:
+            existing = self._existing_locked(
+                account_id=account_id,
+                kind=kind,
+                source_id=source_id,
+                idempotency_key=(
+                    idempotency_key
+                ),
+            )
+
+            if existing is not None:
+                return existing
+
+            used = sum(
+                1
+                for record
+                in self._consumptions
+                if (
+                    record["account_id"]
+                    == account_id
+                    and record["kind"]
+                    is kind
+                    and record["source"]
+                    == (
+                        EntitlementSource
+                        .RECURRING_QUOTA
+                        .value
+                    )
+                    and record[
+                        "period_start"
+                    ]
+                    == period_start
+                    and record[
+                        "period_end"
+                    ]
+                    == period_end
+                )
+            )
+
+            if used >= limit:
+                return None
+
+            record: dict[str, object] = {
+                "account_id": account_id,
+                "kind": kind,
+                "source_id": source_id,
+                "idempotency_key": idempotency_key,
+                "source": EntitlementSource.RECURRING_QUOTA.value,
+                "plan_code": plan_code,
+                "occurred_at": occurred_at,
+                "period_start": period_start,
+                "period_end": period_end,
+            }
+
+            self._consumptions.append(
+                record
+            )
+
+            return dict(record)
+
+    def try_consume_bonus(
+        self,
+        *,
+        account_id: str,
+        kind: UsageKind,
+        plan_code: AccountPlanCode,
+        source_id: str,
+        idempotency_key: str,
+        occurred_at: datetime,
+    ) -> dict[str, object] | None:
+        with self._lock:
+            existing = self._existing_locked(
+                account_id=account_id,
+                kind=kind,
+                source_id=source_id,
+                idempotency_key=(
+                    idempotency_key
+                ),
+            )
+
+            if existing is not None:
+                return existing
+
+            key = (
+                account_id,
+                kind,
+            )
+
+            balance = self._bonus.get(
+                key,
+                0,
+            )
+
+            if balance <= 0:
+                return None
+
+            self._bonus[key] = (
+                balance - 1
+            )
+
+            record: dict[
+                str,
+                object,
+            ] = {
+                "account_id":
+                    account_id,
+                "kind":
+                    kind,
+                "source_id":
+                    source_id,
+                "idempotency_key":
+                    idempotency_key,
+                "source":
+                    EntitlementSource
+                    .BONUS_CREDIT
+                    .value,
+                "plan_code":
+                    plan_code,
+                "occurred_at":
+                    occurred_at,
+                "period_start":
+                    None,
+                "period_end":
+                    None,
+            }
+
+            self._consumptions.append(
+                record
+            )
+
+            return dict(record)
+
+    def record_unlimited(
+        self,
+        *,
+        account_id: str,
+        kind: UsageKind,
+        plan_code: AccountPlanCode,
+        source_id: str,
+        idempotency_key: str,
+        occurred_at: datetime,
+    ) -> dict[str, object]:
+        with self._lock:
+            existing = self._existing_locked(
+                account_id=account_id,
+                kind=kind,
+                source_id=source_id,
+                idempotency_key=(
+                    idempotency_key
+                ),
+            )
+
+            if existing is not None:
+                return existing
+
+            record: dict[
+                str,
+                object,
+            ] = {
+                "account_id":
+                    account_id,
+                "kind":
+                    kind,
+                "source_id":
+                    source_id,
+                "idempotency_key":
+                    idempotency_key,
+                "source":
+                    EntitlementSource
+                    .UNLIMITED
+                    .value,
+                "plan_code":
+                    plan_code,
+                "occurred_at":
+                    occurred_at,
+                "period_start":
+                    None,
+                "period_end":
+                    None,
+            }
+
+            self._consumptions.append(
+                record
+            )
+
+            return dict(record)
+
+    def grant_bonus(
+        self,
+        account_id: str,
+        kind: UsageKind,
+        *,
+        units: int = 1,
+    ) -> None:
+        if (
+            isinstance(units, bool)
+            or not isinstance(units, int)
+            or units <= 0
+        ):
+            raise ValueError(
+                "units must be a positive integer"
+            )
+
+        with self._lock:
+            key = (
+                account_id,
+                kind,
+            )
+
+            self._bonus[key] = (
+                self._bonus.get(
+                    key,
+                    0,
+                )
+                + units
+            )
+
+
+class LocalAccountPlanResolver:
+    """Explicit local-development account-plan assignment."""
+
+    def __init__(
+        self,
+        *,
+        default_plan:
+            AccountPlanCode
+            = AccountPlanCode.BASIC,
+    ) -> None:
+        self._default_plan = (
+            AccountPlanCode.parse(
+                default_plan
+            )
+        )
+
+        self._plans: dict[
+            str,
+            AccountPlanCode,
+        ] = {}
+
+    def resolve_plan_code(
+        self,
+        account_id: str,
+    ) -> AccountPlanCode:
+        return self._plans.get(
+            account_id,
+            self._default_plan,
+        )
+
+    def set_plan(
+        self,
+        account_id: str,
+        plan: AccountPlanCode | str,
+    ) -> None:
+        self._plans[
+            account_id
+        ] = AccountPlanCode.parse(
+            plan
+        )
+
+
+class CalendarUTCRenewalWindowResolver:
+    """
+    Explicit local-development calendar renewal policy.
+
+    Weekly:
+        ISO-style Monday 00:00 UTC -> next Monday.
+
+    Monthly:
+        first day 00:00 UTC -> first day of next month.
+
+    A production subscription may replace this with account-anniversary
+    boundaries without changing the entitlement service.
+    """
+
+    def resolve(
+        self,
+        *,
+        account_id: str,
+        plan: AccountPlan,
+        quota: UsageQuota,
+        at: datetime,
+    ) -> EntitlementWindow:
+        del account_id, plan
+
+        if at.tzinfo is None:
+            raise ValueError(
+                "at must be timezone-aware"
+            )
+
+        current = at.astimezone(
+            timezone.utc
+        )
+
+        if (
+            quota.renewal
+            is RenewalCadence.WEEKLY
+        ):
+            start = current.replace(
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
+            ) - timedelta(
+                days=current.weekday()
+            )
+
+            end = (
+                start
+                + timedelta(days=7)
+            )
+
+            return EntitlementWindow(
+                start=start,
+                end=end,
+            )
+
+        if (
+            quota.renewal
+            is RenewalCadence.MONTHLY
+        ):
+            start = current.replace(
+                day=1,
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+
+            if start.month == 12:
+                end = start.replace(
+                    year=start.year + 1,
+                    month=1,
+                )
+            else:
+                end = start.replace(
+                    month=start.month + 1,
+                )
+
+            return EntitlementWindow(
+                start=start,
+                end=end,
+            )
+
+        raise ValueError(
+            "Finite entitlement requires "
+            "weekly or monthly renewal."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Repository
+# ---------------------------------------------------------------------------
 
 class InMemoryRepository(Repository):
     """
@@ -192,7 +638,6 @@ class InMemoryRepository(Repository):
 # Storage
 # ---------------------------------------------------------------------------
 
-
 class InMemoryStorage(Storage):
     """Thread-safe process-local binary storage with integrity checking."""
 
@@ -299,7 +744,6 @@ class InMemoryStorage(Storage):
 # Queue
 # ---------------------------------------------------------------------------
 
-
 class InProcessQueue(Queue):
     """
     Idempotent process-local AuditJob submission adapter.
@@ -361,7 +805,6 @@ class InProcessQueue(Queue):
 # Payment
 # ---------------------------------------------------------------------------
 
-
 class DisabledPayment(Payment):
     """
     Fail-closed payment adapter for deployments without a payment provider.
@@ -408,7 +851,6 @@ class DisabledPayment(Payment):
 # ---------------------------------------------------------------------------
 # Malware
 # ---------------------------------------------------------------------------
-
 
 class DevelopmentMalware(Malware):
     """
@@ -466,6 +908,9 @@ class DevelopmentMalware(Malware):
 
 __all__ = [
     "SystemClock",
+    "InMemoryEntitlementStore",
+    "LocalAccountPlanResolver",
+    "CalendarUTCRenewalWindowResolver",
     "InMemoryRepository",
     "InMemoryStorage",
     "InProcessQueue",
