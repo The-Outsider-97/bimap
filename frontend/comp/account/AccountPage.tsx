@@ -441,6 +441,316 @@ export function AccountPage() {
   className="section account-section"
   id="account-plan"
 >
+<section
+  className="section account-section"
+  id="account-audits"
+>
+  <div className="content-width">
+    <div className="account-section__heading">
+      <div>
+        <p className="eyebrow">
+          <span
+            aria-hidden="true"
+          >
+            ●
+          </span>
+
+          Audit activity
+        </p>
+
+        <h2>
+          Your audits
+        </h2>
+      </div>
+
+      <div className="account-tabs">
+        <button
+          type="button"
+          data-active={
+            auditTab ===
+            "inProgress"
+          }
+          onClick={() =>
+            setAuditTab(
+              "inProgress",
+            )
+          }
+        >
+          In progress
+        </button>
+
+        <button
+          type="button"
+          data-active={
+            auditTab ===
+            "done"
+          }
+          onClick={() =>
+            setAuditTab(
+              "done",
+            )
+          }
+        >
+          Done
+        </button>
+
+        <button
+          type="button"
+          data-active={
+            auditTab ===
+            "cancelled"
+          }
+          onClick={() =>
+            setAuditTab(
+              "cancelled",
+            )
+          }
+        >
+          Cancelled
+        </button>
+      </div>
+    </div>
+
+    <div className="account-record-list">
+      {audits.length >
+      0 ? (
+        audits.map(
+          (audit) => (
+            <article
+              key={
+                audit.id
+              }
+            >
+              <span>
+                {
+                  audit.status
+                    .replace(
+                      "_",
+                      " ",
+                    )
+                }
+              </span>
+
+              <div>
+                <h3>
+                  {
+                    audit.product
+                  }
+                </h3>
+
+                <p>
+                  {
+                    audit.projectAlias ||
+                    audit.id
+                  }
+                </p>
+              </div>
+
+              <small>
+                {
+                  audit.updatedAt ||
+                  "No update timestamp"
+                }
+              </small>
+            </article>
+          ),
+        )
+      ) : (
+        <div className="account-empty-state">
+          <span>
+            00
+          </span>
+
+          <div>
+            <h3>
+              No audits in this state.
+            </h3>
+
+            <p>
+              Audit records appear
+              here when they are
+              associated with your
+              account.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  </div>
+</section>
+
+<section
+  className="
+    section
+    account-section
+    account-section--surface
+  "
+  id="account-purchases"
+>
+  <div className="content-width">
+    <div className="account-section__heading">
+      <div>
+        <p className="eyebrow">
+          <span
+            aria-hidden="true"
+          >
+            ●
+          </span>
+
+          Digital library
+        </p>
+
+        <h2>
+          Your purchases
+        </h2>
+      </div>
+    </div>
+
+    <div className="account-purchase-columns">
+      <div>
+        <h3>
+          3D content
+        </h3>
+
+        <div className="account-record-list">
+          {summary &&
+          summary
+            .purchases
+            .threeD
+            .length >
+            0 ? (
+            summary
+              .purchases
+              .threeD
+              .map(
+                (
+                  purchase,
+                ) => (
+                  <article
+                    key={
+                      purchase.id
+                    }
+                  >
+                    <span>
+                      {
+                        purchase.format
+                      }
+                    </span>
+
+                    <div>
+                      <h4>
+                        {
+                          purchase.title
+                        }
+                      </h4>
+
+                      <p>
+                        3D purchase
+                      </p>
+                    </div>
+
+                    {
+                      purchase.downloadHref
+                        ? (
+                          <a
+                            href={
+                              purchase.downloadHref
+                            }
+                          >
+                            Download
+                          </a>
+                        )
+                        : (
+                          <small>
+                            Download unavailable
+                          </small>
+                        )
+                    }
+                  </article>
+                ),
+              )
+          ) : (
+            <p className="account-inline-empty">
+              No 3D purchases
+              recorded.
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <h3>
+          2D content
+        </h3>
+
+        <div className="account-record-list">
+          {summary &&
+          summary
+            .purchases
+            .twoD
+            .length >
+            0 ? (
+            summary
+              .purchases
+              .twoD
+              .map(
+                (
+                  purchase,
+                ) => (
+                  <article
+                    key={
+                      purchase.id
+                    }
+                  >
+                    <span>
+                      {
+                        purchase.format
+                      }
+                    </span>
+
+                    <div>
+                      <h4>
+                        {
+                          purchase.title
+                        }
+                      </h4>
+
+                      <p>
+                        2D purchase
+                      </p>
+                    </div>
+
+                    {
+                      purchase.downloadHref
+                        ? (
+                          <a
+                            href={
+                              purchase.downloadHref
+                            }
+                          >
+                            Download
+                          </a>
+                        )
+                        : (
+                          <small>
+                            Download unavailable
+                          </small>
+                        )
+                    }
+                  </article>
+                ),
+              )
+          ) : (
+            <p className="account-inline-empty">
+              No 2D purchases
+              recorded.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
   <div className="content-width">
     <div className="account-section__heading">
       <div>
