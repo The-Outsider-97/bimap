@@ -6,6 +6,7 @@ import {
   useAccount,
 } from "./AccountProvider";
 
+
 export function UserButton() {
   const {
     account,
@@ -13,10 +14,17 @@ export function UserButton() {
     openAuth,
   } = useAccount();
 
+
   const imageSource =
     account?.avatarUrl ||
     "/default-user.png";
 
+
+  /*
+   * Authenticated:
+   * clicking the circular avatar
+   * opens the account page.
+   */
   if (
     status === "signed-in" &&
     account
@@ -24,62 +32,65 @@ export function UserButton() {
     return (
       <Link
         href="/account"
-        className="user-access-button"
+
+        className="user-button"
+
         aria-label={
-          `Open ${account.username}'s account`
+          `Open ${account.username}'s BIMAP account`
+        }
+
+        title={
+          `Account: ${account.username}`
         }
       >
-        <span className="user-access-button__avatar">
-          <img
-            src={imageSource}
-            alt=""
-          />
-        </span>
-
-        <span className="user-access-button__copy">
-          <small>
-            Account
-          </small>
-
-          <strong>
-            {account.username}
-          </strong>
-        </span>
+        <img
+          src={imageSource}
+          alt=""
+        />
       </Link>
     );
   }
 
+
+  /*
+   * Signed out:
+   * clicking the same circular
+   * control opens login/signup.
+   */
   return (
     <button
       type="button"
-      className="user-access-button"
+
+      className="user-button"
+
       data-loading={
         status === "loading"
       }
-      onClick={() =>
-        openAuth("login")
+
+      onClick={() => {
+        if (
+          status !== "loading"
+        ) {
+          openAuth("login");
+        }
+      }}
+
+      aria-label={
+        status === "loading"
+          ? "Checking BIMAP account"
+          : "Log in or create a BIMAP account"
       }
-      aria-label=
-        "Log in or create a BIMAP account"
+
+      title={
+        status === "loading"
+          ? "Checking account..."
+          : "Log in / Sign up"
+      }
     >
-      <span className="user-access-button__avatar">
-        <img
-          src="/default-user.png"
-          alt=""
-        />
-      </span>
-
-      <span className="user-access-button__copy">
-        <small>
-          BIMAP account
-        </small>
-
-        <strong>
-          {status === "loading"
-            ? "Checking..."
-            : "Log in / Sign up"}
-        </strong>
-      </span>
+      <img
+        src="/default-user.png"
+        alt=""
+      />
     </button>
   );
 }

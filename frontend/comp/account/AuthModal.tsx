@@ -8,8 +8,10 @@ import {
 
 import {
   getApiErrorMessage,
+  getSignupPasswordError,
   login,
   resendSignupCodes,
+  SIGNUP_PASSWORD_MIN_LENGTH,
   signUp,
   verifySignup,
   type AuthMode,
@@ -226,6 +228,18 @@ export function AuthModal({
       event.preventDefault();
 
       setMessage("");
+      const passwordError =
+        getSignupPasswordError(
+          signup.password,
+        );
+
+      if (passwordError) {
+        setMessage(
+          passwordError,
+        );
+
+        return;
+      }
 
       if (
         signup.password !==

@@ -107,6 +107,22 @@ function resolveRequestUrl(
 }
 
 
+function isJsonMediaType(
+  contentType: string,
+): boolean {
+  const mediaType =
+    contentType
+      .split(";", 1)[0]
+      .trim()
+      .toLowerCase();
+
+  return (
+    mediaType === "application/json" ||
+    mediaType.endsWith("+json")
+  );
+}
+
+
 async function readErrorPayload(
   response: Response,
 ): Promise<unknown> {
@@ -115,14 +131,15 @@ async function readErrorPayload(
 
   try {
     if (
-      contentType
-        .toLowerCase()
-        .includes("application/json")
+      isJsonMediaType(
+        contentType,
+      )
     ) {
       return await response.json();
     }
 
-    const text = await response.text();
+    const text =
+      await response.text();
 
     return text || null;
   } catch {

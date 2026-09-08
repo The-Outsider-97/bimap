@@ -311,3 +311,45 @@ export function uploadAvatar(
     },
   );
 }
+
+export const SIGNUP_PASSWORD_MIN_LENGTH =
+  15;
+
+export const SIGNUP_PASSWORD_REQUIREMENTS =
+  "Password must contain at least 15 characters, including an uppercase letter, a lowercase letter, a number, and a symbol.";
+
+export function getSignupPasswordError(
+  password: string,
+): string | null {
+  if (
+    password.length <
+    SIGNUP_PASSWORD_MIN_LENGTH
+  ) {
+    return (
+      "Password must be at least " +
+      `${SIGNUP_PASSWORD_MIN_LENGTH} characters long.`
+    );
+  }
+
+  if (!/[A-Z]/.test(password)) {
+    return "Password must include at least one uppercase letter.";
+  }
+
+  if (!/[a-z]/.test(password)) {
+    return "Password must include at least one lowercase letter.";
+  }
+
+  if (!/[0-9]/.test(password)) {
+    return "Password must include at least one number.";
+  }
+
+  if (
+    !/[^A-Za-z0-9\s]/.test(
+      password,
+    )
+  ) {
+    return "Password must include at least one symbol.";
+  }
+
+  return null;
+}
