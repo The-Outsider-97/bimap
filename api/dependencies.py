@@ -31,11 +31,10 @@ route implementations at runtime, workers, or provider SDKs.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
-
 from fastapi import FastAPI, Request # type: ignore
 
 from .utils.api_errors import APIConfigurationError
@@ -52,8 +51,11 @@ from ..app.queries.get_order import GetOrder
 from ..app.queries.get_products import GetProducts
 from ..app.queries.list_orders import ListOrders
 from ..app.queries.list_reports import ListReports
+from ..app.services.account_service import AccountService
+from ..app.services.authentication_service import AuthenticationService
 from ..app.services.review_service import ReviewService
 from ..app.ports.slai import SLAIPort
+from ..domain.accounts.models import Account
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
 
 if TYPE_CHECKING:
@@ -68,6 +70,14 @@ printer = PrettyPrinter()
 
 _COMPONENT = "api_dependencies"
 _CONTAINER_STATE_ATTRIBUTE = "container"
+AccountSummaryResolver = Callable[
+    [Request, Account],
+    Mapping[str, Any] | Awaitable[Mapping[str, Any]],
+]
+AccountAvatarUploader = Callable[
+    [Request, Account],
+    str | None | Awaitable[str | None],
+]
 
 
 def _require_handler(value: Any, expected: type[Any], *, field: str) -> Any:
@@ -353,6 +363,56 @@ class APIHealthDependencies:
 
 
 @dataclass(frozen=True, slots=True)
+class APIAuthDependencies:
+    service: AuthenticationService
+
+    def __post_init__(self) -> None:
+        announce_api_action(
+            printer,
+            logger,
+            component=_COMPONENT,
+            action="Validating authentication API dependencies",
+            event="api_auth_dependencies_validate_start",
+        )
+        _require_handler(
+            self.service,
+            AuthenticationService,
+            field="authentication_service",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class APIAccountDependencies:
+    service: AccountService
+    summary_resolver: AccountSummaryResolver | None = None
+    avatar_uploader: AccountAvatarUploader | None = None
+
+    def __post_init__(self) -> None:
+        announce_api_action(
+            printer,
+            logger,
+            component=_COMPONENT,
+            action="Validating account API dependencies",
+            event="api_account_dependencies_validate_start",
+        )
+        _require_handler(
+            self.service,
+            AccountService,
+            field="account_service",
+        )
+        if self.summary_resolver is not None:
+            _require_hook(
+                self.summary_resolver,
+                field="account_summary_resolver",
+            )
+        if self.avatar_uploader is not None:
+            _require_hook(
+                self.avatar_uploader,
+                field="account_avatar_uploader",
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class APIAdminDependencies:
     """Optional internal-admin route dependencies.
 
@@ -383,11 +443,11 @@ class APIAdminDependencies:
 
 @dataclass(frozen=True, slots=True)
 class APIDependencies:
-    """Complete already-constructed dependency set consumed by ``create_app``."""
-
     use_cases: APIUseCases
     route_hooks: APIRouteHooks
     health: APIHealthDependencies
+    auth: APIAuthDependencies
+    account: APIAccountDependencies
     admin: APIAdminDependencies | None = None
 
     def __post_init__(self) -> None:
@@ -402,6 +462,8 @@ class APIDependencies:
             ("use_cases", self.use_cases, APIUseCases),
             ("route_hooks", self.route_hooks, APIRouteHooks),
             ("health", self.health, APIHealthDependencies),
+            ("auth", self.auth, APIAuthDependencies),
+            ("account", self.account, APIAccountDependencies),
         )
         for field, value, expected_type in expected:
             if not isinstance(value, expected_type):
@@ -420,10 +482,13 @@ class APIDependencies:
                 field="admin",
                 context={"received_type": type(self.admin).__name__},
             )
+
         logger.info(
             {
                 "event": "api_dependencies_validated",
                 "admin_routes_configured": self.admin is not None,
+                "account_summary_configured": self.account.summary_resolver is not None,
+                "account_avatar_upload_configured": self.account.avatar_uploader is not None,
             }
         )
 
@@ -525,4 +590,8 @@ __all__ = [
     "APIDependencies",
     "install_api_dependencies",
     "get_api_dependencies",
+    "AccountSummaryResolver",
+    "AccountAvatarUploader",
+    "APIAuthDependencies",
+    "APIAccountDependencies",
 ]

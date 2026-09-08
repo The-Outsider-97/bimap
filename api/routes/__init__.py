@@ -1,7 +1,9 @@
 """FastAPI route groups for BIMAP."""
 
 from ._shared import *
+from .account import *
 from .admin import *
+from .auth import *
 from .checkout import *
 from .deletion import *
 from .downloads import *
@@ -14,7 +16,9 @@ from .uploads import *
 from .webhooks import *
 
 from ._shared import __all__ as _shared_exports
+from .account import __all__ as _account_exports
 from .admin import __all__ as _admin_exports
+from .auth import __all__ as _auth_exports
 from .checkout import __all__ as _checkout_exports
 from .deletion import __all__ as _deletion_exports
 from .downloads import __all__ as _downloads_exports
@@ -28,7 +32,9 @@ from .webhooks import __all__ as _webhooks_exports
 
 __all__ = [
     *_shared_exports,
+    *_account_exports,
     *_admin_exports,
+    *_auth_exports,
     *_checkout_exports,
     *_deletion_exports,
     *_downloads_exports,

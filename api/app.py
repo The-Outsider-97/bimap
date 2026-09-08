@@ -51,6 +51,8 @@ from .routes.products import RouteProducts
 from .routes.reports import RouteReports
 from .routes.uploads import RouteUploads
 from .routes.webhooks import RouteWebhooks
+from .routes.account import RouteAccount
+from .routes.auth import RouteAuth
 from .utils.api_errors import *
 from .utils.api_helpers import *
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
@@ -450,6 +452,8 @@ def _construct_route_groups(dependencies: APIDependencies) -> tuple[Any, ...]:
     use_cases = dependencies.use_cases
     hooks = dependencies.route_hooks
     health = dependencies.health
+    auth = dependencies.auth
+    account = dependencies.account
 
     route_groups: list[Any] = [
         RouteHealth(
@@ -458,6 +462,13 @@ def _construct_route_groups(dependencies: APIDependencies) -> tuple[Any, ...]:
             expose_details=health.expose_details,
         ),
         RouteProducts(use_cases.get_products),
+        RouteAuth(auth.service),
+        RouteAccount(
+            account.service,
+            auth.service,
+            summary_resolver=account.summary_resolver,
+            avatar_uploader=account.avatar_uploader,
+        ),
         RouteOrders(
             use_cases.create_order,
             use_cases.cancel_order,

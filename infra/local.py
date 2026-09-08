@@ -30,23 +30,47 @@ implementations while preserving the same application-port contracts.
 
 from __future__ import annotations
 
+from abc import abstractmethod
 import hashlib
+import secrets
+import phonenumbers  # type: ignore
 
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from threading import RLock
 from typing import BinaryIO
 
+from src.functions.auth import AuthService as SLAIAuthService  # type: ignore
+from src.functions.email import EmailBackend, EmailMessage  # type: ignore
+from src.functions.phone_verification import PhoneVerificationService  # type: ignore
+from src.functions.utils.functions_error import (  # type: ignore
+    AccountLockedError,
+    CredentialPolicyError,
+    EmailError,
+    InvalidCountryCodeError,
+    InvalidCredentialsError,
+    InvalidPhoneNumberError,
+    PhoneCountryMismatchError,
+    SMSError,
+    UserAlreadyExistsError,
+    VerificationAttemptsExceededError,
+    VerificationCodeExpiredError,
+    VerificationNotFoundError,
+    VerificationRateLimitError,
+)
 from ..app.ports.clock import Clock
 from ..app.ports.malware import *
 from ..app.ports.payment import *
 from ..app.ports.queue import Queue, QueueReceipt
 from ..app.ports.repositories import Repository
 from ..app.ports.storage import Storage, StoredObject
+from ..app.ports.accounts import Accounts
+from ..app.ports.authentication import *
 from ..app.services.entitlement_service import *
 from ..app.utils.app_errors import *
 from ..contracts.audit_job import AuditJob
 from ..contracts.report_manifest import ReportManifest
+from ..domain.accounts.models import Account
 from ..domain.accounts.plans import *
 from ..domain.evidence.models import EvidenceItem
 from ..domain.findings.models import Finding
@@ -74,6 +98,404 @@ class SystemClock(Clock):
 
     def _read_utc_now(self) -> datetime:
         return datetime.now(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Canonical account repository
+# ---------------------------------------------------------------------------
+
+
+class InMemoryAccounts(Accounts):
+    """Thread-safe process-local canonical account repository."""
+
+    def __init__(self) -> None:
+        printer.status("BIMAP", "Initializing local account repository", "info")
+        self._lock = RLock()
+        self._accounts: dict[str, Account] = {}
+        self._auth_index: dict[str, str] = {}
+        self._username_index: dict[str, str] = {}
+        self._email_index: dict[str, str] = {}
+        self._phone_index: dict[str, str] = {}
+        super().__init__()
+
+    def _get_account(self, account_id: str) -> Account | None:
+        with self._lock:
+            return self._accounts.get(account_id)
+
+    def _get_by_auth_user_id(self, auth_user_id: str) -> Account | None:
+        with self._lock:
+            account_id = self._auth_index.get(auth_user_id)
+            return None if account_id is None else self._accounts.get(account_id)
+
+    def _get_by_username(self, username_key: str) -> Account | None:
+        with self._lock:
+            account_id = self._username_index.get(username_key)
+            return None if account_id is None else self._accounts.get(account_id)
+
+    def _get_by_email(self, normalized_email: str) -> Account | None:
+        with self._lock:
+            account_id = self._email_index.get(normalized_email)
+            return None if account_id is None else self._accounts.get(account_id)
+
+    def _get_by_phone(self, phone_e164: str) -> Account | None:
+        with self._lock:
+            account_id = self._phone_index.get(phone_e164)
+            return None if account_id is None else self._accounts.get(account_id)
+
+    def _save_account(
+        self,
+        account: Account,
+        *,
+        expected_version: int | None,
+    ) -> Account:
+        with self._lock:
+            current = self._accounts.get(account.account_id)
+
+            if expected_version is None:
+                if current is not None:
+                    raise RepositoryConflictError(
+                        "Account already exists.",
+                        component="local_accounts",
+                        operation="save_account",
+                        field="account_id",
+                        context={"account_id": account.account_id},
+                    )
+            elif current is None or current.version != expected_version:
+                raise RepositoryConflictError(
+                    "Account optimistic-concurrency precondition failed.",
+                    component="local_accounts",
+                    operation="save_account",
+                    field="expected_version",
+                    context={
+                        "account_id": account.account_id,
+                        "expected_version": expected_version,
+                        "actual_version": None if current is None else current.version,
+                    },
+                )
+
+            identities = (
+                ("auth_user_id", account.auth_user_id, self._auth_index),
+                ("username", Account.username_lookup_key(account.username), self._username_index),
+                ("email", account.email, self._email_index),
+                ("phone_e164", account.phone_e164, self._phone_index),
+            )
+            for field, key, index in identities:
+                owner = index.get(key)
+                if owner is not None and owner != account.account_id:
+                    raise RepositoryConflictError(
+                        "Account identity is already bound to another account.",
+                        component="local_accounts",
+                        operation="save_account",
+                        field=field,
+                    )
+
+            if current is not None:
+                previous = (
+                    (current.auth_user_id, self._auth_index),
+                    (Account.username_lookup_key(current.username), self._username_index),
+                    (current.email, self._email_index),
+                    (current.phone_e164, self._phone_index),
+                )
+                for key, index in previous:
+                    if index.get(key) == account.account_id:
+                        index.pop(key, None)
+
+            self._accounts[account.account_id] = account
+            self._auth_index[account.auth_user_id] = account.account_id
+            self._username_index[Account.username_lookup_key(account.username)] = account.account_id
+            self._email_index[account.email] = account.account_id
+            self._phone_index[account.phone_e164] = account.account_id
+            return account
+
+
+class LocalSLAIAuthentication(Authentication):
+    """Local BIMAP adapter over SLAI authentication, email, and SMS services."""
+
+    _EMAIL_PURPOSE = "signup_verification"
+
+    def __init__(
+        self,
+        auth_service: SLAIAuthService,
+        email_backend: EmailBackend,
+        phone_verification: PhoneVerificationService,
+        *,
+        email_code_ttl_minutes: int = 30,
+    ) -> None:
+        printer.status("BIMAP", "Initializing SLAI authentication adapter", "info")
+        if not isinstance(auth_service, SLAIAuthService):
+            raise TypeError("auth_service must be an SLAI AuthService")
+        if not isinstance(email_backend, EmailBackend):
+            raise TypeError("email_backend must implement SLAI EmailBackend")
+        if not isinstance(phone_verification, PhoneVerificationService):
+            raise TypeError("phone_verification must be a PhoneVerificationService")
+        if isinstance(email_code_ttl_minutes, bool) or not isinstance(email_code_ttl_minutes, int) or email_code_ttl_minutes <= 0:
+            raise ValueError("email_code_ttl_minutes must be a positive integer")
+
+        self._auth = auth_service
+        self._email = email_backend
+        self._phone = phone_verification
+        self._email_code_ttl_minutes = email_code_ttl_minutes
+        self._lock = RLock()
+        self._usernames_by_auth_id: dict[str, str] = {}
+        self._contacts_by_auth_id: dict[str, tuple[str, str, str, str]] = {}
+        self._sessions: dict[str, SessionPrincipal] = {}
+        super().__init__()
+
+    @staticmethod
+    def _mask_email(email: str) -> str:
+        local, domain = email.rsplit("@", 1)
+        return f"{local[:1]}***@{domain}"
+
+    @staticmethod
+    def _mask_phone(phone_e164: str) -> str:
+        return f"{phone_e164[:3]}***{phone_e164[-4:]}"
+
+    def _create_identity(
+        self,
+        *,
+        username: str,
+        password: str,
+        email: str,
+    ) -> IdentityCreationResult:
+        try:
+            auth_user_id = self._auth.sign_up(username=username, password=password, email=email)
+        except UserAlreadyExistsError:
+            return IdentityCreationResult(status=IdentityCreationStatus.USERNAME_EXISTS)
+        except CredentialPolicyError as exc:
+            raise AppValidationError(
+                "Password does not satisfy the configured credential policy.",
+                component="local_slai_authentication",
+                operation="create_identity",
+                field="password",
+                cause=exc,
+            ) from exc
+
+        identity = AuthenticationIdentity(
+            auth_user_id=auth_user_id,
+            username=username,
+            email=email,
+        )
+        with self._lock:
+            self._usernames_by_auth_id[auth_user_id] = username
+        return IdentityCreationResult(
+            status=IdentityCreationStatus.CREATED,
+            identity=identity,
+        )
+
+    def _delete_identity(self, auth_user_id: str) -> None:
+        raise AppPortOperationError(
+            "SLAI AuthService does not expose an identity-deletion operation.",
+            component="local_slai_authentication",
+            operation="delete_identity",
+            field="auth_user_id",
+        )
+
+    def _issue_signup_verification(
+        self,
+        *,
+        auth_user_id: str,
+        username: str,
+        email: str,
+        phone_e164: str,
+        country: str,
+    ) -> VerificationDispatch:
+        try:
+            email_code = self._auth.create_verification_challenge(
+                username=username,
+                purpose=self._EMAIL_PURPOSE,
+                expires_in_minutes=self._email_code_ttl_minutes,
+                invalidate_existing=True,
+            )
+            self._email.send(
+                EmailMessage(
+                    to=email,
+                    subject="BIMAP account verification",
+                    body_html=f"<p>Your BIMAP verification code is <strong>{email_code}</strong>.</p>",
+                    body_text=f"Your BIMAP verification code is: {email_code}",
+                )
+            )
+        except EmailError as exc:
+            raise AppPortUnavailableError(
+                "Email verification delivery is unavailable.",
+                component="local_slai_authentication",
+                operation="issue_signup_verification",
+                cause=exc,
+            ) from exc
+
+        try:
+            parsed = phonenumbers.parse(phone_e164, None)
+            phone_request = self._phone.send_verification_code(
+                phone_e164,
+                country_code=f"+{parsed.country_code}",
+                country_region=country,
+            )
+        except (InvalidPhoneNumberError, InvalidCountryCodeError, PhoneCountryMismatchError) as exc:
+            raise AppValidationError(
+                "Phone number does not match the selected country.",
+                component="local_slai_authentication",
+                operation="issue_signup_verification",
+                field="phone_e164",
+                cause=exc,
+            ) from exc
+        except VerificationRateLimitError as exc:
+            raise AppValidationError(
+                "Phone verification cannot be resent yet.",
+                component="local_slai_authentication",
+                operation="issue_signup_verification",
+                field="phone_e164",
+                cause=exc,
+            ) from exc
+        except SMSError as exc:
+            raise AppPortUnavailableError(
+                "SMS verification delivery is unavailable.",
+                component="local_slai_authentication",
+                operation="issue_signup_verification",
+                cause=exc,
+            ) from exc
+
+        with self._lock:
+            self._usernames_by_auth_id[auth_user_id] = username
+            self._contacts_by_auth_id[auth_user_id] = (
+                username,
+                email,
+                phone_e164,
+                country,
+            )
+
+        expires_in = min(
+            float(self._email_code_ttl_minutes * 60),
+            float(phone_request.expires_in_seconds),
+        )
+        return VerificationDispatch(
+            challenge_id=secrets.token_hex(16),
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=expires_in),
+            email_masked=self._mask_email(email),
+            phone_masked=self._mask_phone(phone_e164),
+        )
+
+    def _verify_signup(
+        self,
+        *,
+        auth_user_id: str,
+        username: str,
+        email_code: str,
+        sms_code: str,
+    ) -> SignupVerificationResult:
+        with self._lock:
+            contact = self._contacts_by_auth_id.get(auth_user_id)
+
+        if contact is None:
+            return SignupVerificationResult(
+                email_verified=False,
+                phone_verified=False,
+                failure=VerificationFailure.EXPIRED,
+            )
+
+        stored_username, _, phone_e164, country = contact
+        if stored_username != username:
+            raise AppIntegrityError(
+                "Verification identity does not match the bound username.",
+                component="local_slai_authentication",
+                operation="verify_signup",
+                field="username",
+            )
+
+        email_verified = self._auth.verify_passcode(
+            username=username,
+            passcode=email_code,
+            purpose=self._EMAIL_PURPOSE,
+        )
+
+        phone_failure: VerificationFailure | None = None
+        try:
+            phone_verified = self._phone.verify_code(
+                phone_e164,
+                sms_code,
+                default_region=country,
+            )
+        except VerificationAttemptsExceededError:
+            phone_verified = False
+            phone_failure = VerificationFailure.ATTEMPTS_EXHAUSTED
+        except (VerificationCodeExpiredError, VerificationNotFoundError):
+            phone_verified = False
+            phone_failure = VerificationFailure.EXPIRED
+        except (InvalidPhoneNumberError, InvalidCountryCodeError, PhoneCountryMismatchError) as exc:
+            raise AppIntegrityError(
+                "Stored phone-verification identity is invalid.",
+                component="local_slai_authentication",
+                operation="verify_signup",
+                field="phone_e164",
+                cause=exc,
+            ) from exc
+
+        if email_verified and phone_verified:
+            with self._lock:
+                self._contacts_by_auth_id.pop(auth_user_id, None)
+            return SignupVerificationResult(
+                email_verified=True,
+                phone_verified=True,
+            )
+
+        return SignupVerificationResult(
+            email_verified=email_verified,
+            phone_verified=phone_verified,
+            failure=phone_failure or VerificationFailure.INVALID_CODE,
+        )
+
+    def _verify_credentials(self, *, username: str, password: str) -> CredentialVerification:
+        try:
+            auth_user_id = self._auth.verify_credentials(username=username, password=password)
+        except InvalidCredentialsError:
+            return CredentialVerification(status=CredentialStatus.INVALID)
+        except AccountLockedError as exc:
+            return CredentialVerification(
+                status=CredentialStatus.LOCKED,
+                retry_after=getattr(exc, "lockout_until", None),
+            )
+
+        with self._lock:
+            self._usernames_by_auth_id[auth_user_id] = username
+        return CredentialVerification(
+            status=CredentialStatus.ACCEPTED,
+            auth_user_id=auth_user_id,
+        )
+
+    def _create_session(self, auth_user_id: str) -> AuthSession:
+        with self._lock:
+            username = self._usernames_by_auth_id.get(auth_user_id)
+        if username is None:
+            raise AppIntegrityError(
+                "Authentication identity cannot be resolved to a username.",
+                component="local_slai_authentication",
+                operation="create_session",
+                field="auth_user_id",
+            )
+
+        token = self._auth.complete_login(username)
+        session = AuthSession(
+            auth_user_id=auth_user_id,
+            access_token=token.token,
+            expires_at=token.expires_at,
+        )
+        with self._lock:
+            self._sessions[session.access_token] = SessionPrincipal(
+                auth_user_id=auth_user_id,
+                expires_at=session.expires_at,
+            )
+        return session
+
+    def _resolve_session(self, access_token: str) -> SessionPrincipal | None:
+        if not self._auth.is_token_valid(access_token):
+            with self._lock:
+                self._sessions.pop(access_token, None)
+            return None
+        with self._lock:
+            return self._sessions.get(access_token)
+
+    def _revoke_session(self, access_token: str) -> None:
+        self._auth.log_out(access_token)
+        with self._lock:
+            self._sessions.pop(access_token, None)
 
 
 # ---------------------------------------------------------------------------
@@ -366,77 +788,40 @@ class InMemoryEntitlementStore:
 
             return dict(record)
 
-    def grant_bonus(
-        self,
-        account_id: str,
-        kind: UsageKind,
-        *,
-        units: int = 1,
-    ) -> None:
+    def grant_bonus(self, account_id: str, kind: UsageKind, *, units: int = 1) -> None:
         if (
             isinstance(units, bool)
             or not isinstance(units, int)
             or units <= 0
         ):
-            raise ValueError(
-                "units must be a positive integer"
-            )
+            raise ValueError("units must be a positive integer")
 
         with self._lock:
-            key = (
-                account_id,
-                kind,
-            )
+            key = (account_id, kind)
+            self._bonus[key] = (self._bonus.get(key, 0) + units)
 
-            self._bonus[key] = (
-                self._bonus.get(
-                    key,
-                    0,
-                )
-                + units
-            )
-
-
-class LocalAccountPlanResolver:
-    """Explicit local-development account-plan assignment."""
-
-    def __init__(
+    def recurring_usage_count(
         self,
         *,
-        default_plan:
-            AccountPlanCode
-            = AccountPlanCode.BASIC,
-    ) -> None:
-        self._default_plan = (
-            AccountPlanCode.parse(
-                default_plan
+        account_id: str,
+        kind: UsageKind,
+        period_start: datetime,
+        period_end: datetime,
+    ) -> int:
+        with self._lock:
+            return sum(
+                1
+                for record in self._consumptions
+                if record["account_id"] == account_id
+                and record["kind"] is kind
+                and record["source"] == EntitlementSource.RECURRING_QUOTA.value
+                and record["period_start"] == period_start
+                and record["period_end"] == period_end
             )
-        )
 
-        self._plans: dict[
-            str,
-            AccountPlanCode,
-        ] = {}
-
-    def resolve_plan_code(
-        self,
-        account_id: str,
-    ) -> AccountPlanCode:
-        return self._plans.get(
-            account_id,
-            self._default_plan,
-        )
-
-    def set_plan(
-        self,
-        account_id: str,
-        plan: AccountPlanCode | str,
-    ) -> None:
-        self._plans[
-            account_id
-        ] = AccountPlanCode.parse(
-            plan
-        )
+    def bonus_balance(self, *, account_id: str, kind: UsageKind) -> int:
+        with self._lock:
+            return self._bonus.get((account_id, kind), 0)
 
 
 class CalendarUTCRenewalWindowResolver:
@@ -453,24 +838,13 @@ class CalendarUTCRenewalWindowResolver:
     boundaries without changing the entitlement service.
     """
 
-    def resolve(
-        self,
-        *,
-        account_id: str,
-        plan: AccountPlan,
-        quota: UsageQuota,
-        at: datetime,
-    ) -> EntitlementWindow:
+    def resolve(self, *, account_id: str, plan: AccountPlan, quota: UsageQuota, at: datetime) -> EntitlementWindow:
         del account_id, plan
 
         if at.tzinfo is None:
-            raise ValueError(
-                "at must be timezone-aware"
-            )
+            raise ValueError("at must be timezone-aware")
 
-        current = at.astimezone(
-            timezone.utc
-        )
+        current = at.astimezone(timezone.utc)
 
         if (
             quota.renewal
@@ -485,15 +859,9 @@ class CalendarUTCRenewalWindowResolver:
                 days=current.weekday()
             )
 
-            end = (
-                start
-                + timedelta(days=7)
-            )
+            end = (start + timedelta(days=7))
 
-            return EntitlementWindow(
-                start=start,
-                end=end,
-            )
+            return EntitlementWindow(start=start, end=end)
 
         if (
             quota.renewal
@@ -508,19 +876,11 @@ class CalendarUTCRenewalWindowResolver:
             )
 
             if start.month == 12:
-                end = start.replace(
-                    year=start.year + 1,
-                    month=1,
-                )
+                end = start.replace(year=start.year + 1, month=1)
             else:
-                end = start.replace(
-                    month=start.month + 1,
-                )
+                end = start.replace(month=start.month + 1)
 
-            return EntitlementWindow(
-                start=start,
-                end=end,
-            )
+            return EntitlementWindow(start=start, end=end)
 
         raise ValueError(
             "Finite entitlement requires "
@@ -551,6 +911,16 @@ class InMemoryRepository(Repository):
         self._reports: dict[str, ReportManifest] = {}
 
         super().__init__()
+
+    def list_orders_for_account(self, account_id: str) -> tuple[Order, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    (order for order in self._orders.values() if order.account_id == account_id),
+                    key=lambda order: (order.updated_at, order.order_id),
+                    reverse=True,
+                )
+            )
 
     def _get_order(self, order_id: str) -> Order | None:
         with self._lock:
@@ -908,8 +1278,9 @@ class DevelopmentMalware(Malware):
 
 __all__ = [
     "SystemClock",
+    "InMemoryAccounts",
+    "LocalSLAIAuthentication",
     "InMemoryEntitlementStore",
-    "LocalAccountPlanResolver",
     "CalendarUTCRenewalWindowResolver",
     "InMemoryRepository",
     "InMemoryStorage",

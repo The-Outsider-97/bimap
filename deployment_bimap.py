@@ -32,12 +32,24 @@ Production mode fails closed rather than silently using development adapters.
 from __future__ import annotations
 
 import os
+import tempfile
 
 from collections.abc import Mapping
 from typing import Any
-
+from uuid import uuid4
 from fastapi import Request
 
+from applications.bimap.api.routes.auth import SESSION_COOKIE_NAME  # type: ignore
+from applications.bimap.api.utils.api_errors import (  # type: ignore
+    APIServiceUnavailableError,
+    APIUnauthorizedError,
+)
+from applications.bimap.domain.accounts.models import Account  # type: ignore
+from applications.bimap.domain.accounts.plans import AccountPlanCatalog, QuotaMode, UsageKind  # type: ignore
+from applications.bimap.domain.orders.states import EXCEPTION_STATES, OrderState  # type: ignore
+from src.functions.auth import AuthService as SLAIAuthService  # type: ignore
+from src.functions.email import ConsoleBackend  # type: ignore
+from src.functions.phone_verification import ConsoleSMSBackend, PhoneVerificationService  # type: ignore
 from applications.bimap.api.app import APISettings # type: ignore
 from applications.bimap.api.dependencies import APIRouteHooks # type: ignore
 from applications.bimap.api.middleware.request_limits import RequestLimitPolicy # type: ignore
@@ -159,14 +171,159 @@ def _allowed_hosts() -> tuple[str, ...]:
 # ---------------------------------------------------------------------------
 
 
-async def _local_authorizer(
-    request: Request,
-    operation: str,
-    resource_id: str | None,
-) -> str:
-    """Development-only route admission identity."""
-    del request, operation, resource_id
-    return "local-development"
+def _local_authorizer_factory(authentication, accounts):
+    async def _local_authorizer(
+        request: Request,
+        operation: str,
+        resource_id: str | None,
+    ) -> str:
+        del operation, resource_id
+        raw = request.cookies.get(SESSION_COOKIE_NAME)
+        if not raw or not raw.strip():
+            raise APIUnauthorizedError(
+                "BIMAP authentication session is required.",
+                component="deployment_bimap",
+                operation="authorize_request",
+            )
+
+        principal = authentication.resolve_session(raw.strip())
+        if principal is None:
+            raise APIUnauthorizedError(
+                "BIMAP authentication session is invalid or expired.",
+                component="deployment_bimap",
+                operation="authorize_request",
+            )
+
+        account = accounts.get_by_auth_user_id(principal.auth_user_id)
+        if account is None or not account.can_authenticate:
+            raise APIUnauthorizedError(
+                "BIMAP authentication session has no active account.",
+                component="deployment_bimap",
+                operation="authorize_request",
+            )
+
+        return account.account_id
+
+    return _local_authorizer
+
+
+def _build_route_hooks(authentication, accounts) -> APIRouteHooks:
+    printer.status("BIMAP", "Building local API route hooks", "info")
+    return APIRouteHooks(
+        authorizer=_local_authorizer_factory(authentication, accounts),
+        upload_manifest_validator=_local_upload_manifest_validator,
+        report_id_resolver=_local_report_id_resolver,
+        download_url_issuer=_local_download_url_issuer,
+        deletion_admission_gate=_local_deletion_admission_gate,
+        deletion_object_resolver=_local_deletion_object_resolver,
+        payment_signature_header="x-bimap-payment-signature",
+    )
+
+
+def _format_utc(value) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _build_local_account_summary_resolver(
+    *,
+    repository,
+    entitlement_store,
+    renewal_window_resolver,
+    clock,
+    plan_catalog: AccountPlanCatalog,
+):
+    async def _resolve(request: Request, account: Account):
+        del request
+        plan = plan_catalog.get(account.plan_code)
+        now = clock.now()
+
+        def usage(kind: UsageKind) -> dict[str, Any]:
+            quota = plan.quota_for(kind)
+            bonus = entitlement_store.bonus_balance(
+                account_id=account.account_id,
+                kind=kind,
+            )
+
+            if quota.mode is QuotaMode.UNLIMITED:
+                return {
+                    "used": None,
+                    "limit": None,
+                    "remaining": None,
+                    "unlimited": True,
+                    "renewal": quota.renewal.value,
+                    "periodStart": None,
+                    "periodEnd": None,
+                    "bonusCredits": bonus,
+                }
+
+            window = renewal_window_resolver.resolve(
+                account_id=account.account_id,
+                plan=plan,
+                quota=quota,
+                at=now,
+            )
+            used = entitlement_store.recurring_usage_count(
+                account_id=account.account_id,
+                kind=kind,
+                period_start=window.start,
+                period_end=window.end,
+            )
+            assert quota.limit is not None
+            return {
+                "used": used,
+                "limit": quota.limit,
+                "remaining": max(quota.limit - used, 0),
+                "unlimited": False,
+                "renewal": quota.renewal.value,
+                "periodStart": _format_utc(window.start),
+                "periodEnd": _format_utc(window.end),
+                "bonusCredits": bonus,
+            }
+
+        audits = {
+            "inProgress": [],
+            "done": [],
+            "cancelled": [],
+        }
+        for order in repository.list_orders_for_account(account.account_id):
+            if order.state is OrderState.DELIVERED:
+                bucket = "done"
+                public_status = "done"
+            elif order.state in EXCEPTION_STATES:
+                bucket = "cancelled"
+                public_status = "cancelled"
+            else:
+                bucket = "inProgress"
+                public_status = "in_progress"
+
+            audits[bucket].append(
+                {
+                    "id": order.order_id,
+                    "product": order.product_code,
+                    "projectAlias": order.project_alias,
+                    "status": public_status,
+                    "updatedAt": _format_utc(order.updated_at),
+                }
+            )
+
+        return {
+            "audits": audits,
+            "purchases": {"threeD": [], "twoD": []},
+            "currentPlan": account.plan_code.value,
+            "usage": {
+                "audit": usage(UsageKind.AUDIT),
+                "conversion": usage(UsageKind.CONVERSION),
+                "dataExtraction": usage(UsageKind.DATA_EXTRACTION),
+            },
+            "rewards": {
+                "points": 0,
+                "basePurchaseDiscountPercent": float(plan.base_purchase_discount_percent),
+                "maxEffectivePurchaseDiscountPercent": float(plan.max_effective_purchase_discount_percent),
+                "maxRewardDiscountPercent": float(plan.max_reward_discount_percent),
+            },
+        }
+
+    return _resolve
 
 
 async def _local_upload_manifest_validator(
@@ -229,19 +386,6 @@ async def _local_deletion_object_resolver(
     del request, order_id, actor
     return ()
 
-
-def _build_route_hooks() -> APIRouteHooks:
-    printer.status("BIMAP", "Building local API route hooks", "info")
-
-    return APIRouteHooks(
-        authorizer=_local_authorizer,
-        upload_manifest_validator=_local_upload_manifest_validator,
-        report_id_resolver=_local_report_id_resolver,
-        download_url_issuer=_local_download_url_issuer,
-        deletion_admission_gate=_local_deletion_admission_gate,
-        deletion_object_resolver=_local_deletion_object_resolver,
-        payment_signature_header="x-bimap-payment-signature",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -358,12 +502,84 @@ def _create_local_bootstrap() -> Bootstrap:
     if trust_uploads:
         logger.warning(
             {
-                "event":
-                    "bimap_development_upload_trust_enabled",
-                "environment":
-                    _TRUST_UPLOADS_ENV,
+                "event": "bimap_development_upload_trust_enabled",
+                "environment": _TRUST_UPLOADS_ENV,
             }
         )
+
+    plan_catalog = load_account_plan_catalog()
+    clock = SystemClock()
+    repository = InMemoryRepository()
+    accounts = InMemoryAccounts()
+    entitlement_store = InMemoryEntitlementStore()
+    renewal_window_resolver = CalendarUTCRenewalWindowResolver()
+
+    auth_memory_path = os.path.join(
+        tempfile.gettempdir(),
+        f"bimap-auth-{os.getpid()}-{uuid4().hex}.json",
+    )
+    authentication = LocalSLAIAuthentication(
+        SLAIAuthService(memory_path=auth_memory_path),
+        ConsoleBackend(),
+        PhoneVerificationService(ConsoleSMSBackend()),
+    )
+
+    account_summary_resolver = _build_local_account_summary_resolver(
+        repository=repository,
+        entitlement_store=entitlement_store,
+        renewal_window_resolver=renewal_window_resolver,
+        clock=clock,
+        plan_catalog=plan_catalog,
+    )
+
+    infrastructure = BootstrapInfrastructure(
+        repository=repository,
+        payment=DisabledPayment(),
+        clock=clock,
+        malware=DevelopmentMalware(trust_uploads=trust_uploads),
+        storage=InMemoryStorage(),
+        queue=InProcessQueue(),
+        accounts=accounts,
+        authentication=authentication,
+        entitlement_store=entitlement_store,
+        renewal_window_resolver=renewal_window_resolver,
+        shared_memory=SharedMemory(),
+        route_hooks=_build_route_hooks(authentication, accounts),
+        account_summary_resolver=account_summary_resolver,
+        account_avatar_uploader=None,
+        close_shared_memory_on_shutdown=True,
+    )
+
+    configuration = BootstrapConfiguration(
+        catalog=_build_catalog(),
+        api_settings=_build_api_settings(),
+        account_plans=plan_catalog,
+        product_limits=(),
+        slai_profile=None,
+        slai_required_agents=None,
+        allow_degraded_slai_readiness=False,
+        retain_slai_shared_memory=False,
+        expose_health_details=False,
+    )
+
+    bootstrap = Bootstrap(
+        infrastructure=infrastructure,
+        configuration=configuration,
+        audit_components=_build_audit_components(),
+    )
+
+    logger.info(
+        {
+            "event": "bimap_local_bootstrap_constructed",
+            "deployment_mode": "development",
+            "payment_enabled": False,
+            "durable_persistence": False,
+            "durable_queue": False,
+            "authentication_enabled": True,
+            "trusted_upload_override": trust_uploads,
+        }
+    )
+    return bootstrap
 
     # ---------------------------------------------------------
     # Local account-entitlement infrastructure

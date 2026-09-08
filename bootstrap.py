@@ -66,6 +66,8 @@ from .app.commands.handle_payment import HandlePayment
 from .app.commands.release_report import ReleaseReport
 from .app.commands.request_deletion import RequestDeletion
 from .app.commands.validate_uploads import ValidateUploads
+from .app.ports.accounts import Accounts
+from .app.ports.authentication import Authentication
 from .app.ports.clock import Clock
 from .app.ports.malware import Malware
 from .app.ports.notifications import Notifications
@@ -78,6 +80,8 @@ from .app.queries.get_order import GetOrder
 from .app.queries.get_products import GetProducts
 from .app.queries.list_orders import ListOrders
 from .app.queries.list_reports import ListReports
+from .app.services.account_service import AccountService
+from .app.services.authentication_service import AuthenticationService
 from .app.services.audit_service import AuditService
 from .app.services.entitlement_service import EntitlementService
 from .app.services.fulfilment_service import FulfilmentService
@@ -197,13 +201,17 @@ class BootstrapInfrastructure:
     # InMemoryEntitlementStore / LocalAccountPlanResolver /
     # CalendarUTCRenewalWindowResolver, while production may supply durable
     # provider-backed implementations.
-    entitlement_store: Any
+    shared_memory: SharedMemory
+
     account_plan_resolver: Any
+    route_hooks: APIRouteHooks
+    accounts: Accounts
+    authentication: Authentication
+    entitlement_store: Any
     renewal_window_resolver: Any
 
-    shared_memory: SharedMemory
-    route_hooks: APIRouteHooks
-
+    account_summary_resolver: AccountSummaryResolver | None = None
+    account_avatar_uploader: AccountAvatarUploader | None = None
     notifications: Notifications | None = None
     agent_factory: AgentFactory | None = None
     rate_limiter: RateLimiter | None = None
@@ -222,6 +230,8 @@ class BootstrapInfrastructure:
         )
 
         required = (
+            ("accounts", self.accounts, Accounts),
+            ("authentication", self.authentication, Authentication),
             ("repository", self.repository, Repository),
             ("payment", self.payment, Payment),
             ("clock", self.clock, Clock),
@@ -383,13 +393,6 @@ class BootstrapInfrastructure:
                 ),
             ),
             (
-                "account_plan_resolver",
-                self.account_plan_resolver,
-                (
-                    "resolve_plan_code",
-                ),
-            ),
-            (
                 "renewal_window_resolver",
                 self.renewal_window_resolver,
                 (
@@ -397,6 +400,26 @@ class BootstrapInfrastructure:
                 ),
             ),
         )
+
+        if (
+            self.account_summary_resolver is not None
+            and not callable(self.account_summary_resolver)
+        ):
+            raise BootstrapConfigurationError(
+                "account_summary_resolver must be callable or None.",
+                operation="validate_infrastructure",
+                field="account_summary_resolver",
+            )
+
+        if (
+            self.account_avatar_uploader is not None
+            and not callable(self.account_avatar_uploader)
+        ):
+            raise BootstrapConfigurationError(
+                "account_avatar_uploader must be callable or None.",
+                operation="validate_infrastructure",
+                field="account_avatar_uploader",
+            )
 
         for (
             field,
@@ -406,14 +429,7 @@ class BootstrapInfrastructure:
             missing = tuple(
                 method
                 for method in required_methods
-                if not callable(
-                    getattr(
-                        value,
-                        method,
-                        None,
-                    )
-                )
-            )
+                if not callable(getattr(value, method, None)))
 
             if missing:
                 raise BootstrapConfigurationError(
@@ -641,6 +657,8 @@ class BootstrapServices:
     entitlement: EntitlementService
     fulfilment: FulfilmentService
     review: ReviewService
+    account: AccountService
+    authentication: AuthenticationService
 
 
 @dataclass(frozen=True, slots=True)
@@ -928,6 +946,17 @@ class Bootstrap:
 
                 stage = "application_services"
 
+                account_service = AccountService(
+                    self.infrastructure.accounts,
+                    self.infrastructure.clock,
+                    plan_catalog=self.configuration.account_plans,
+                )
+
+                authentication_service = AuthenticationService(
+                    self.infrastructure.authentication,
+                    account_service,
+                )
+
                 order_service = OrderService(
                     self.infrastructure.repository,
                     self.infrastructure.payment,
@@ -944,9 +973,7 @@ class Bootstrap:
                     catalog=(
                         self.configuration.account_plans
                     ),
-                    plan_resolver=(
-                        self.infrastructure.account_plan_resolver
-                    ),
+                    plan_resolver=self.infrastructure.accounts,
                     renewal_window_resolver=(
                         self.infrastructure.renewal_window_resolver
                     ),
@@ -981,7 +1008,9 @@ class Bootstrap:
                 )
 
                 services = BootstrapServices(
+                    account=account_service,
                     audit=audit_service,
+                    authentication=authentication_service,
                     order=order_service,
                     upload=upload_service,
                     entitlement=entitlement_service,
@@ -1120,6 +1149,16 @@ class Bootstrap:
                     ),
                 )
 
+                api_auth = APIAuthDependencies(
+                    service=authentication_service,
+                )
+
+                api_account = APIAccountDependencies(
+                    service=account_service,
+                    summary_resolver=self.infrastructure.account_summary_resolver,
+                    avatar_uploader=self.infrastructure.account_avatar_uploader,
+                )
+
                 api_admin = (
                     None
                     if self.infrastructure.admin_authorizer is None
@@ -1133,6 +1172,8 @@ class Bootstrap:
                 )
 
                 api_dependencies = APIDependencies(
+                    auth=api_auth,
+                    account=api_account,
                     use_cases=api_use_cases,
                     route_hooks=(
                         self.infrastructure.route_hooks
