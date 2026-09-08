@@ -1,0 +1,68 @@
+# =============================================================================
+# R3D BIM Audit Platform
+# Global application configuration
+# =============================================================================
+
+schema_version: 1
+
+api:
+  api_prefix: "/api/v1"
+  title: "R3D BIM Audit Platform API"
+
+  correlation_header: "x-correlation-id"
+  request_id_header: "x-request-id"
+  max_correlation_id_length: 128
+  reject_invalid_correlation: true
+
+  # API documentation is intentionally disabled by default.
+  openapi_url: null
+  docs_url: null
+  redoc_url: null
+
+  request_limits:
+    # Deployment-specific transport limits have not yet been defined by the
+    # BIMAP product policy. Null therefore preserves the current API policy
+    # instead of inventing unsupported thresholds.
+    max_body_bytes: null
+    max_header_count: null
+    max_header_bytes: null
+
+  security:
+    # Empty means that the application-level host allow-list is not enforced.
+    # Production deployment should populate this with the actual deployed
+    # hostname(s), not URL origins.
+    allowed_hosts: []
+
+    # False is required for the current local HTTP development topology.
+    # Set true only when the production ASGI/proxy stack supplies a trustworthy
+    # HTTPS scheme to BIMAP.
+    require_https: false
+
+    add_nosniff: true
+
+    referrer_policy: null
+    frame_options: null
+    content_security_policy: null
+    permissions_policy: null
+
+    # HSTS is deployment-specific and must not be enabled with an invented
+    # duration or before HTTPS/proxy handling is correctly configured.
+    hsts_max_age_seconds: null
+    hsts_include_subdomains: false
+    hsts_preload: false
+
+
+bootstrap:
+  # Null intentionally delegates the authoritative required-agent selection
+  # to SLAIAgentPolicy.required_agents(), preventing duplication between
+  # bimap.yaml and slai_profile.yaml.
+  slai_required_agents: null
+
+  # Strict readiness is the normal BIMAP behavior.
+  allow_degraded_slai_readiness: false
+
+  # BIMAP-owned SLAI shared-memory records should be cleaned up after use.
+  retain_slai_shared_memory: false
+
+  # Public health endpoints must not expose internal runtime diagnostics.
+  expose_health_details: false

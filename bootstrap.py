@@ -28,10 +28,17 @@ injected SLAI ``SharedMemory`` during shutdown.
 
 Configuration
 -------------
-No YAML files are parsed in this module. BIMAP's current ``configs/`` files do
-not yet define a stable configuration-loading contract. The composition root
-therefore consumes already-validated BIMAP configuration/domain objects rather
-than inventing an implicit configuration schema.
+``utils/config_loader.py`` is BIMAP's authoritative YAML I/O and
+structural-validation boundary for global, retention, and SLAI-profile
+configuration.
+
+This composition root does not parse YAML directly. It continues to receive
+already-resolved and validated domain/configuration objects so that filesystem
+I/O and configuration syntax remain outside the composition graph.
+
+Commercial plan/reward configuration is loaded separately through
+``utils/plan_loader.py`` and translated into the canonical account-domain
+models before Bootstrap receives it.
 """
 
 from __future__ import annotations

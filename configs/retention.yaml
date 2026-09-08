@@ -1,0 +1,57 @@
+# =============================================================================
+# R3D BIM Audit Platform
+# Retention and data-lifecycle policy
+#
+# IMPORTANT:
+# Exact retention durations remain null until Remy3Design approves and
+# discloses concrete durations. Application code must never infer a duration
+# from these null values.
+# =============================================================================
+
+schema_version: 1
+
+retention:
+
+  account_order_metadata:
+    policy: "legal_accounting_period_as_required"
+    duration_days: null
+
+  staging_uploads:
+    policy: "short_disclosed_staging_window"
+    duration_days: null
+
+    delete_on_abandoned_checkout: true
+    delete_on_failed_checkout: true
+
+  project_uploads:
+    policy: "short_product_retention"
+    duration_days: null
+
+    encrypted_private_storage: true
+    delete_on_expiry: true
+
+  derived_evidence:
+    policy: "retain_only_while_required_for_order_or_review"
+    duration_days: null
+
+    delete_on_expiry: true
+
+  reports:
+    policy: "customer_visible_retention_window"
+    duration_days: null
+
+    retention_clock_event: "delivered"
+    customer_visible_expiry: true
+    delete_on_expiry: true
+
+  telemetry:
+    policy: "content_free_or_pseudonymized"
+    duration_days: null
+
+    raw_project_content_allowed: false
+
+  training_evaluation_data:
+    policy: "opt_in_or_separate_lawful_contractual_basis"
+    duration_days: null
+
+    implicit_customer_data_reuse_allowed: false
