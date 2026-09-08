@@ -30,28 +30,14 @@ from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime
 from typing import Any, NoReturn
 
-from .utils.contracts_errors import (
-    ContractDeserializationError,
-    ContractIntegrityError,
-    ContractValidationError,
-)
-from .utils.contracts_helpers import (
-    canonical_json_dumps,
-    canonical_json_loads,
-    ensure_supported_schema_version,
-    to_json_primitive,
-    validate_contract_fields,
-)
-from .versions import (
-    ORDER_SCHEMA_VERSION,
-    SUPPORTED_SCHEMA_VERSIONS,
-    ContractName,
-)
+from .utils.contracts_errors import *
+from .utils.contracts_helpers import *
+from .versions import *
 from ..domain.orders.events import OrderEvent
 from ..domain.orders.models import Order
 from ..domain.orders.states import OrderState
 from ..domain.products.models import ProductCode
-from ..domain.utils.domain_errors import DomainError, DomainInvariantError
+from ..domain.utils.domain_errors import *
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
 
 
@@ -68,12 +54,7 @@ def _announce(action: str) -> None:
     logger.debug({"event": "order_contract_method_start", "action": action})
 
 
-def _translate_domain_error(
-    message: str,
-    *,
-    field: str | None = None,
-    cause: BaseException,
-) -> NoReturn:
+def _translate_domain_error(message: str, *, field: str | None = None, cause: BaseException) -> NoReturn:
     if isinstance(cause, DomainInvariantError):
         raise ContractIntegrityError(
             message,
@@ -107,21 +88,17 @@ class OrderEventContract:
     def __post_init__(self) -> None:
         _announce("Validating order-event contract")
         try:
-            occurred_at = (
+            occurred_at: datetime = (
                 self.occurred_at
                 if isinstance(self.occurred_at, datetime)
                 else datetime.fromisoformat(self.occurred_at)
             )
-            from_state = (
+            from_state: OrderState | None = (
                 self.from_state
-                if self.from_state is None or isinstance(self.from_state, OrderState)
-                else OrderState(self.from_state)
+                if self.from_state is None
+                else OrderState.parse(self.from_state)
             )
-            to_state = (
-                self.to_state
-                if isinstance(self.to_state, OrderState)
-                else OrderState(self.to_state)
-            )
+            to_state: OrderState = OrderState.parse(self.to_state)
             domain_event = OrderEvent(
                 event_id=self.event_id,
                 order_id=self.order_id,
@@ -154,15 +131,19 @@ class OrderEventContract:
     def to_dict(self) -> dict[str, Any]:
         """Return the nested JSON-ready lifecycle-event representation."""
         _announce("Serializing order-event contract")
+        from_state = (
+            None
+            if self.from_state is None
+            else OrderState.parse(self.from_state)
+        )
+        to_state = OrderState.parse(self.to_state)
         return {
             "event_id": self.event_id,
             "order_id": self.order_id,
             "idempotency_key": self.idempotency_key,
             "occurred_at": self.occurred_at,
-            "from_state": (
-                self.from_state.value if isinstance(self.from_state, OrderState) else None
-            ),
-            "to_state": self.to_state.value,
+            "from_state": from_state.value if from_state is not None else None,
+            "to_state": to_state.value,
             "reason": self.reason,
             "actor": self.actor,
             "metadata": to_json_primitive(
@@ -176,13 +157,24 @@ class OrderEventContract:
         """Convert the nested contract to the canonical domain OrderEvent."""
         _announce("Converting order-event contract to domain")
         try:
+            occurred_at = (
+                self.occurred_at
+                if isinstance(self.occurred_at, datetime)
+                else datetime.fromisoformat(self.occurred_at)
+            )
+            from_state = (
+                None
+                if self.from_state is None
+                else OrderState.parse(self.from_state)
+            )
+            to_state = OrderState.parse(self.to_state)
             return OrderEvent(
                 event_id=self.event_id,
                 order_id=self.order_id,
                 idempotency_key=self.idempotency_key,
-                occurred_at=self.occurred_at,
-                from_state=self.from_state,
-                to_state=self.to_state,
+                occurred_at=occurred_at,
+                from_state=from_state,
+                to_state=to_state,
                 reason=self.reason,
                 actor=self.actor,
                 metadata=self.metadata,
@@ -255,6 +247,7 @@ class OrderContract:
     """Stable versioned representation of the canonical BIMAP Order aggregate."""
 
     order_id: str
+    account_id: str
     product_code: ProductCode | str
     state: OrderState | str
     created_at: str | datetime
@@ -324,16 +317,36 @@ class OrderContract:
             normalized_events.append(normalized)
 
         try:
+            created_at: datetime = (
+                self.created_at
+                if isinstance(self.created_at, datetime)
+                else datetime.fromisoformat(self.created_at)
+            )
+            updated_at: datetime = (
+                self.updated_at
+                if isinstance(self.updated_at, datetime)
+                else datetime.fromisoformat(self.updated_at)
+            )
+            retention_expires_at: datetime | None = (
+                None
+                if self.retention_expires_at is None
+                else (
+                    self.retention_expires_at
+                    if isinstance(self.retention_expires_at, datetime)
+                    else datetime.fromisoformat(self.retention_expires_at)
+                )
+            )
             domain_order = Order(
                 order_id=self.order_id,
+                account_id=self.account_id,
                 product_code=product_code.value,
                 tier_code=self.tier_code,
                 project_alias=self.project_alias,
                 state=state,
-                created_at=self.created_at,
-                updated_at=self.updated_at,
+                created_at=created_at,
+                updated_at=updated_at,
                 upload_session_id=self.upload_session_id,
-                retention_expires_at=self.retention_expires_at,
+                retention_expires_at=retention_expires_at,
                 version=self.version,
                 metadata=self.metadata,
                 events=tuple(event.to_domain() for event in normalized_events),
@@ -347,6 +360,7 @@ class OrderContract:
         payload = domain_order.to_dict()
         object.__setattr__(self, "schema_version", str(self.schema_version).strip())
         object.__setattr__(self, "order_id", payload["order_id"])
+        object.__setattr__(self, "account_id", payload["account_id"])
         object.__setattr__(self, "product_code", product_code)
         object.__setattr__(self, "tier_code", payload["tier_code"])
         object.__setattr__(self, "project_alias", payload["project_alias"])
@@ -415,6 +429,7 @@ class OrderContract:
         return {
             "schema_version": self.schema_version,
             "order_id": self.order_id,
+            "account_id": self.account_id,
             "product_code": product_code.value,
             "tier_code": self.tier_code,
             "project_alias": self.project_alias,
@@ -454,6 +469,7 @@ class OrderContract:
                 retention_expires_at = self._resolve_datetime(retention_expires_at)
             return Order(
                 order_id=self.order_id,
+                account_id=self.account_id,
                 product_code=product_code.value,
                 tier_code=self.tier_code,
                 project_alias=self.project_alias,
@@ -493,6 +509,7 @@ class OrderContract:
         return cls(
             schema_version=schema_version,
             order_id=payload["order_id"],
+            account_id=payload["account_id"],
             product_code=payload["product_code"],
             tier_code=payload["tier_code"],
             project_alias=payload["project_alias"],
@@ -515,6 +532,7 @@ class OrderContract:
             required=(
                 "schema_version",
                 "order_id",
+                "account_id",
                 "product_code",
                 "state",
                 "created_at",
@@ -555,6 +573,7 @@ class OrderContract:
         return cls(
             schema_version=data["schema_version"],
             order_id=data["order_id"],
+            account_id=payload["account_id"],
             product_code=data["product_code"],
             tier_code=data.get("tier_code"),
             project_alias=data.get("project_alias"),
@@ -599,6 +618,7 @@ if __name__ == "__main__":
 
     contract = OrderContract(
         order_id="ORD-0001",
+        account_id="ACCOUNT-0001",
         product_code="family_audit",
         state="draft",
         created_at="2026-09-01T00:00:00Z",
