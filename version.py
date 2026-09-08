@@ -60,49 +60,29 @@ class Version:
             "patch",
             "serial",
         ):
-            value = getattr(
-                self,
-                field_name,
-            )
+            value = getattr(self, field_name)
 
             if (
                 isinstance(value, bool)
                 or not isinstance(value, int)
             ):
-                raise TypeError(
-                    f"{field_name} must be an integer."
-                )
+                raise TypeError(f"{field_name} must be an integer.")
 
             if value < 0:
-                raise ValueError(
-                    f"{field_name} must be non-negative."
-                )
+                raise ValueError(f"{field_name} must be non-negative.")
 
-        level = str(
-            self.release_level
-        ).strip().lower()
+        level = str(self.release_level).strip().lower()
 
         if level not in _RELEASE_LEVELS:
-            raise ValueError(
-                "release_level must be one of: "
-                + ", ".join(
-                    sorted(_RELEASE_LEVELS)
-                )
-            )
+            raise ValueError("release_level must be one of: " + ", ".join(sorted(_RELEASE_LEVELS)))
 
         if (
             level == "final"
             and self.serial != 0
         ):
-            raise ValueError(
-                "Final releases must use serial=0."
-            )
+            raise ValueError("Final releases must use serial=0.")
 
-        object.__setattr__(
-            self,
-            "release_level",
-            level,
-        )
+        object.__setattr__(self, "release_level", level)
 
     @property
     def base_version(self) -> str:

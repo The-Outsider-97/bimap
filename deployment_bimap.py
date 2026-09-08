@@ -60,15 +60,18 @@ from applications.bimap.domain.products.models import ( # type: ignore
     ProductCode,
     ProductDefinition,
 )
+from applications.bimap.utils.plan_loader import load_account_plan_catalog # type: ignore
 from applications.bimap.infra.local import ( # type: ignore
+    CalendarUTCRenewalWindowResolver,
     DevelopmentMalware,
     DisabledPayment,
+    InMemoryEntitlementStore,
     InMemoryRepository,
     InMemoryStorage,
     InProcessQueue,
+    LocalAccountPlanResolver,
     SystemClock,
 )
-
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
 from src.agents.collaborative.shared_memory import SharedMemory  # type: ignore
 
@@ -344,7 +347,6 @@ def _build_api_settings() -> APISettings:
 # Deployment modes
 # ---------------------------------------------------------------------------
 
-
 def _create_local_bootstrap() -> Bootstrap:
     printer.status("BIMAP", "Constructing local BIMAP deployment", "info")
 
@@ -356,10 +358,24 @@ def _create_local_bootstrap() -> Bootstrap:
     if trust_uploads:
         logger.warning(
             {
-                "event": "bimap_development_upload_trust_enabled",
-                "environment": _TRUST_UPLOADS_ENV,
+                "event":
+                    "bimap_development_upload_trust_enabled",
+                "environment":
+                    _TRUST_UPLOADS_ENV,
             }
         )
+
+    # ---------------------------------------------------------
+    # Local account-entitlement infrastructure
+    # ---------------------------------------------------------
+
+    entitlement_store = InMemoryEntitlementStore()
+    account_plan_resolver = LocalAccountPlanResolver()
+    renewal_window_resolver = CalendarUTCRenewalWindowResolver()
+
+    # ---------------------------------------------------------
+    # Local infrastructure
+    # ---------------------------------------------------------
 
     infrastructure = BootstrapInfrastructure(
         repository=InMemoryRepository(),
@@ -370,17 +386,40 @@ def _create_local_bootstrap() -> Bootstrap:
         ),
         storage=InMemoryStorage(),
         queue=InProcessQueue(),
+
+        entitlement_store=(
+            entitlement_store
+        ),
+        account_plan_resolver=(
+            account_plan_resolver
+        ),
+        renewal_window_resolver=(
+            renewal_window_resolver
+        ),
+
         shared_memory=SharedMemory(),
         route_hooks=_build_route_hooks(),
+
         close_shared_memory_on_shutdown=True,
     )
+
+    # ---------------------------------------------------------
+    # Validated BIMAP configuration
+    # ---------------------------------------------------------
 
     configuration = BootstrapConfiguration(
         catalog=_build_catalog(),
         api_settings=_build_api_settings(),
+
+        account_plans=(
+            load_account_plan_catalog()
+        ),
+
         product_limits=(),
+
         slai_profile=None,
         slai_required_agents=None,
+
         allow_degraded_slai_readiness=False,
         retain_slai_shared_memory=False,
         expose_health_details=False,
@@ -389,17 +428,25 @@ def _create_local_bootstrap() -> Bootstrap:
     bootstrap = Bootstrap(
         infrastructure=infrastructure,
         configuration=configuration,
-        audit_components=_build_audit_components(),
+        audit_components=(
+            _build_audit_components()
+        ),
     )
 
     logger.info(
         {
-            "event": "bimap_local_bootstrap_constructed",
-            "deployment_mode": "development",
-            "payment_enabled": False,
-            "durable_persistence": False,
-            "durable_queue": False,
-            "trusted_upload_override": trust_uploads,
+            "event":
+                "bimap_local_bootstrap_constructed",
+            "deployment_mode":
+                "development",
+            "payment_enabled":
+                False,
+            "durable_persistence":
+                False,
+            "durable_queue":
+                False,
+            "trusted_upload_override":
+                trust_uploads,
         }
     )
 

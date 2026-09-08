@@ -54,6 +54,7 @@ from .app.commands.cancel_order import CancelOrder
 from .app.commands.create_order import CreateOrder
 from .app.commands.create_upload_slot import CreateUploadSlot
 from .app.commands.enqueue_audit import EnqueueAudit
+from .app.commands.grant_entitlement import GrantEntitlement
 from .app.commands.handle_payment import HandlePayment
 from .app.commands.release_report import ReleaseReport
 from .app.commands.request_deletion import RequestDeletion
@@ -71,6 +72,7 @@ from .app.queries.get_products import GetProducts
 from .app.queries.list_orders import ListOrders
 from .app.queries.list_reports import ListReports
 from .app.services.audit_service import AuditService
+from .app.services.entitlement_service import EntitlementService
 from .app.services.fulfilment_service import FulfilmentService
 from .app.services.order_service import OrderService
 from .app.services.review_service import ReviewService
@@ -79,6 +81,7 @@ from .audit_engine.bim_qa.auditor import BIMQAAuditor
 from .audit_engine.combined.auditor import CombinedAuditor
 from .audit_engine.engine import AuditEngine
 from .audit_engine.rfa.auditor import RFAAuditor
+from .domain.accounts.plans import AccountPlanCatalog
 from .domain.products.limits import ProductLimits
 from .domain.products.models import ProductCatalog
 from .reporting.package_builder import PackageBuilder
@@ -93,6 +96,8 @@ from .workers.jobs.deletion import JobDeletion
 from .workers.jobs.report import JobReport
 from .workers.jobs.retention import JobRetention
 from .workers.runner import Runner
+from .utils.bimap_errors import *
+from .utils.bimap_helpers import *
 
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
 from src.agents.agent_factory import AgentFactory  # type: ignore
@@ -102,145 +107,7 @@ from src.agents.collaborative.shared_memory import SharedMemory  # type: ignore
 logger = get_logger("BIMAP Bootstrap")
 printer = PrettyPrinter()
 
-_COMPONENT = "bootstrap"
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _announce(action: str, *, event: str, context: Mapping[str, Any] | None = None) -> None:
-    """
-    Emit one bounded method-start diagnostic.
-
-    Customer evidence, report content, access tokens, credentials, and raw
-    payloads must never be supplied in ``context``.
-    """
-
-    printer.status("BOOTSTRAP", action, "info")
-
-    payload: dict[str, Any] = {
-        "event": event,
-        "component": _COMPONENT,
-        "action": action,
-    }
-
-    if context:
-        payload["context"] = dict(context)
-
-    logger.debug(payload)
-
-
-def _safe_context(context: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    """Return a shallow immutable operator-safe diagnostic context."""
-
-    if context is None:
-        return MappingProxyType({})
-
-    safe: dict[str, Any] = {}
-
-    for key, value in context.items():
-        safe[str(key)] = (
-            value
-            if value is None or isinstance(value, (bool, int, float, str))
-            else f"<{type(value).__name__}>"
-        )
-
-    return MappingProxyType(safe)
-
-
-# ---------------------------------------------------------------------------
-# Bootstrap errors
-# ---------------------------------------------------------------------------
-
-
-class BootstrapError(RuntimeError):
-    """Base exception for BIMAP composition and lifecycle failures."""
-
-    code = "BIMAP.BOOTSTRAP.ERROR"
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        operation: str,
-        field: str | None = None,
-        context: Mapping[str, Any] | None = None,
-        cause: BaseException | None = None,
-    ) -> None:
-        normalized_message = str(message).strip() or self.__class__.__name__
-        normalized_operation = str(operation).strip() or "unknown"
-
-        self.message = normalized_message
-        self.operation = normalized_operation
-        self.field = (
-            None
-            if field is None
-            else str(field).strip() or None
-        )
-        self.context = _safe_context(context)
-        self.cause = cause
-
-        rendered = (
-            f"{normalized_message} "
-            f"[operation={normalized_operation}"
-        )
-
-        if self.field:
-            rendered += f", field={self.field}"
-
-        rendered += "]"
-
-        super().__init__(rendered)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return a bounded machine-readable diagnostic representation."""
-
-        payload: dict[str, Any] = {
-            "code": self.code,
-            "type": self.__class__.__name__,
-            "message": self.message,
-            "operation": self.operation,
-        }
-
-        if self.field:
-            payload["field"] = self.field
-
-        if self.context:
-            payload["context"] = dict(self.context)
-
-        if self.cause is not None:
-            payload["cause_type"] = type(self.cause).__name__
-
-        return payload
-
-
-class BootstrapConfigurationError(BootstrapError):
-    """Raised when bootstrap inputs are structurally invalid."""
-
-    code = "BIMAP.BOOTSTRAP.CONFIGURATION"
-
-
-class BootstrapCompositionError(BootstrapError):
-    """Raised when the runtime graph cannot be composed."""
-
-    code = "BIMAP.BOOTSTRAP.COMPOSITION"
-
-
-class BootstrapStateError(BootstrapError):
-    """Raised when a lifecycle operation is invalid for the current state."""
-
-    code = "BIMAP.BOOTSTRAP.STATE"
-
-
-class BootstrapShutdownError(BootstrapError):
-    """Raised when BIMAP-owned runtime resources cannot close cleanly."""
-
-    code = "BIMAP.BOOTSTRAP.SHUTDOWN"
-
-
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Lifecycle
 # ---------------------------------------------------------------------------
 
@@ -316,18 +183,25 @@ class BootstrapInfrastructure:
     storage: Storage
     queue: Queue
 
+    # Commercial account-entitlement infrastructure.
+    #
+    # These remain structural deployment-owned dependencies here rather than
+    # concrete local implementations. Local development may supply
+    # InMemoryEntitlementStore / LocalAccountPlanResolver /
+    # CalendarUTCRenewalWindowResolver, while production may supply durable
+    # provider-backed implementations.
+    entitlement_store: Any
+    account_plan_resolver: Any
+    renewal_window_resolver: Any
+
     shared_memory: SharedMemory
     route_hooks: APIRouteHooks
 
     notifications: Notifications | None = None
-
     agent_factory: AgentFactory | None = None
-
     rate_limiter: RateLimiter | None = None
     report_renderer: ReportRenderer | None = None
-
     admin_authorizer: RouteAuthorizer | None = None
-
     slai_health_check: SLAIHealthCheck | None = None
     slai_governance: SLAIGovernance | None = None
     slai_task_builder: AgentTaskBuilder | None = None
@@ -489,6 +363,65 @@ class BootstrapInfrastructure:
                 field="close_shared_memory_on_shutdown",
             )
 
+        entitlement_dependencies = (
+            (
+                "entitlement_store",
+                self.entitlement_store,
+                (
+                    "find_by_source",
+                    "find_by_idempotency_key",
+                    "try_consume_recurring",
+                    "try_consume_bonus",
+                    "record_unlimited",
+                ),
+            ),
+            (
+                "account_plan_resolver",
+                self.account_plan_resolver,
+                (
+                    "resolve_plan_code",
+                ),
+            ),
+            (
+                "renewal_window_resolver",
+                self.renewal_window_resolver,
+                (
+                    "resolve",
+                ),
+            ),
+        )
+
+        for (
+            field,
+            value,
+            required_methods,
+        ) in entitlement_dependencies:
+            missing = tuple(
+                method
+                for method in required_methods
+                if not callable(
+                    getattr(
+                        value,
+                        method,
+                        None,
+                    )
+                )
+            )
+
+            if missing:
+                raise BootstrapConfigurationError(
+                    "Entitlement infrastructure dependency "
+                    "does not satisfy its required contract.",
+                    operation="validate_infrastructure",
+                    field=field,
+                    context={
+                        "received_type":
+                            type(value).__name__,
+                        "missing_methods":
+                            missing,
+                    },
+                )
+
 
 @dataclass(frozen=True, slots=True)
 class BootstrapConfiguration:
@@ -502,12 +435,10 @@ class BootstrapConfiguration:
 
     catalog: ProductCatalog
     api_settings: APISettings
-
+    account_plans: AccountPlanCatalog
     product_limits: tuple[ProductLimits, ...] = ()
-
     slai_profile: Mapping[str, Any] | None = None
     slai_required_agents: tuple[str, ...] | None = None
-
     allow_degraded_slai_readiness: bool = False
     retain_slai_shared_memory: bool = False
     expose_health_details: bool = False
@@ -523,9 +454,7 @@ class BootstrapConfiguration:
                 "catalog must be a ProductCatalog.",
                 operation="validate_configuration",
                 field="catalog",
-                context={
-                    "received_type": type(self.catalog).__name__,
-                },
+                context={"received_type": type(self.catalog).__name__},
             )
 
         if not isinstance(self.api_settings, APISettings):
@@ -533,11 +462,18 @@ class BootstrapConfiguration:
                 "api_settings must be an APISettings instance.",
                 operation="validate_configuration",
                 field="api_settings",
-                context={
-                    "received_type": type(
-                        self.api_settings
-                    ).__name__,
-                },
+                context={"received_type": type(self.api_settings).__name__},
+            )
+
+        if not isinstance(
+            self.account_plans,
+            AccountPlanCatalog,
+        ):
+            raise BootstrapConfigurationError(
+                "account_plans must be an AccountPlanCatalog.",
+                operation="validate_configuration",
+                field="account_plans",
+                context={"received_type": type(self.account_plans).__name__},
             )
 
         if isinstance(
@@ -548,11 +484,7 @@ class BootstrapConfiguration:
                 "product_limits must be an iterable of ProductLimits.",
                 operation="validate_configuration",
                 field="product_limits",
-                context={
-                    "received_type": type(
-                        self.product_limits
-                    ).__name__,
-                },
+                context={"received_type": type(self.product_limits).__name__},
             )
 
         try:
@@ -562,13 +494,7 @@ class BootstrapConfiguration:
                 "product_limits must be iterable.",
                 operation="validate_configuration",
                 field="product_limits",
-                context={
-                    "received_type": type(
-                        self.product_limits
-                    ).__name__,
-                },
-                cause=exc,
-            ) from exc
+                context={"received_type": type(self.product_limits).__name__}, cause=exc) from exc
 
         seen_limit_keys: set[tuple[Any, str | None]] = set()
 
@@ -578,15 +504,10 @@ class BootstrapConfiguration:
                     "product_limits may contain ProductLimits values only.",
                     operation="validate_configuration",
                     field=f"product_limits[{index}]",
-                    context={
-                        "received_type": type(configured).__name__,
-                    },
+                    context={"received_type": type(configured).__name__},
                 )
 
-            key = (
-                configured.product_code,
-                configured.tier_code,
-            )
+            key = (configured.product_code, configured.tier_code)
 
             if key in seen_limit_keys:
                 raise BootstrapConfigurationError(
@@ -610,11 +531,7 @@ class BootstrapConfiguration:
                     "slai_profile must be a mapping or None.",
                     operation="validate_configuration",
                     field="slai_profile",
-                    context={
-                        "received_type": type(
-                            self.slai_profile
-                        ).__name__,
-                    },
+                    context={"received_type": type(self.slai_profile).__name__},
                 )
 
             # Defensive top-level snapshot.
@@ -625,10 +542,7 @@ class BootstrapConfiguration:
         required_agents: tuple[str, ...] | None = None
 
         if self.slai_required_agents is not None:
-            if isinstance(
-                self.slai_required_agents,
-                (str, bytes, bytearray),
-            ):
+            if isinstance(self.slai_required_agents, (str, bytes, bytearray)):
                 raise BootstrapConfigurationError(
                     "slai_required_agents must be a sequence of names "
                     "or None.",
@@ -645,11 +559,7 @@ class BootstrapConfiguration:
                     "slai_required_agents must be iterable.",
                     operation="validate_configuration",
                     field="slai_required_agents",
-                    context={
-                        "received_type": type(
-                            self.slai_required_agents
-                        ).__name__,
-                    },
+                    context={"received_type": type(self.slai_required_agents).__name__},
                     cause=exc,
                 ) from exc
 
@@ -666,11 +576,7 @@ class BootstrapConfiguration:
                         "non-empty strings.",
                         operation="validate_configuration",
                         field=f"slai_required_agents[{index}]",
-                        context={
-                            "received_type": type(
-                                raw_name
-                            ).__name__,
-                        },
+                        context={"received_type": type(raw_name).__name__},
                     )
 
                 name = raw_name.strip().lower()
@@ -680,9 +586,7 @@ class BootstrapConfiguration:
                         "slai_required_agents contains a duplicate name.",
                         operation="validate_configuration",
                         field="slai_required_agents",
-                        context={
-                            "agent": name,
-                        },
+                        context={"agent": name},
                     )
 
                 seen_agents.add(name)
@@ -727,6 +631,7 @@ class BootstrapServices:
     audit: AuditService
     order: OrderService
     upload: UploadService
+    entitlement: EntitlementService
     fulfilment: FulfilmentService
     review: ReviewService
 
@@ -744,6 +649,7 @@ class BootstrapCommands:
     begin_checkout: BeginCheckout
     handle_payment: HandlePayment
 
+    grant_entitlement: GrantEntitlement
     enqueue_audit: EnqueueAudit
 
     release_report: ReleaseReport
@@ -925,9 +831,7 @@ class Bootstrap:
         _announce(
             "Building BIMAP runtime",
             event="bootstrap_build_start",
-            context={
-                "state": self._state.value,
-            },
+            context={"state": self._state.value},
         )
 
         with self._lock:
@@ -944,26 +848,17 @@ class Bootstrap:
                         "ASGI lifespan.",
                         operation="build",
                         field="lifespan",
-                        context={
-                            "state": self._state.value,
-                        },
+                        context={"state": self._state.value},
                     )
             
-                logger.debug(
-                    {
-                        "event": "bootstrap_build_reused",
-                    }
-                )
-            
+                logger.debug({"event": "bootstrap_build_reused"})
                 return self._runtime
 
             if self._state is BootstrapState.CLOSED:
                 raise BootstrapStateError(
                     "A closed Bootstrap instance cannot be rebuilt.",
                     operation="build",
-                    context={
-                        "state": self._state.value,
-                    },
+                    context={"state": self._state.value},
                 )
 
             stage = "audit_engine"
@@ -987,38 +882,19 @@ class Bootstrap:
                 # ---------------------------------------------------------
 
                 stage = "slai_policy"
-
-                policy = SLAIAgentPolicy(
-                    self.configuration.slai_profile
-                )
-
+                policy = SLAIAgentPolicy(self.configuration.slai_profile)
                 stage = "slai_orchestrator"
 
                 orchestrator = SLAIOrchestrator(
                     policy=policy,
                     factory=self.infrastructure.agent_factory,
                     shared_memory=self.infrastructure.shared_memory,
-                    health_check=(
-                        self.infrastructure.slai_health_check
-                    ),
-                    governance=(
-                        self.infrastructure.slai_governance
-                    ),
-                    task_builder=(
-                        self.infrastructure.slai_task_builder
-                    ),
-                    allow_degraded_readiness=(
-                        self.configuration
-                        .allow_degraded_slai_readiness
-                    ),
-                    retain_shared_memory=(
-                        self.configuration
-                        .retain_slai_shared_memory
-                    ),
-                    close_shared_memory=(
-                        self.infrastructure
-                        .close_shared_memory_on_shutdown
-                    ),
+                    health_check=(self.infrastructure.slai_health_check),
+                    governance=(self.infrastructure.slai_governance),
+                    task_builder=(self.infrastructure.slai_task_builder),
+                    allow_degraded_readiness=(self.configuration.allow_degraded_slai_readiness),
+                    retain_shared_memory=(self.configuration.retain_slai_shared_memory),
+                    close_shared_memory=(self.infrastructure.close_shared_memory_on_shutdown),
                 )
 
                 stage = "slai_adapter"
@@ -1036,10 +912,7 @@ class Bootstrap:
 
                 stage = "reporting"
 
-                report_builder = ReportBuilder(
-                    renderer=self.infrastructure.report_renderer,
-                )
-
+                report_builder = ReportBuilder(renderer=self.infrastructure.report_renderer)
                 package_builder = PackageBuilder()
 
                 # ---------------------------------------------------------
@@ -1055,6 +928,20 @@ class Bootstrap:
                     catalog=self.configuration.catalog,
                     product_limits=(
                         self.configuration.product_limits
+                    ),
+                )
+
+                entitlement_service = EntitlementService(
+                    self.infrastructure.entitlement_store,
+                    self.infrastructure.clock,
+                    catalog=(
+                        self.configuration.account_plans
+                    ),
+                    plan_resolver=(
+                        self.infrastructure.account_plan_resolver
+                    ),
+                    renewal_window_resolver=(
+                        self.infrastructure.renewal_window_resolver
                     ),
                 )
 
@@ -1090,6 +977,7 @@ class Bootstrap:
                     audit=audit_service,
                     order=order_service,
                     upload=upload_service,
+                    entitlement=entitlement_service,
                     fulfilment=fulfilment_service,
                     review=review_service,
                 )
@@ -1124,6 +1012,11 @@ class Bootstrap:
                     order_service
                 )
 
+                grant_entitlement = GrantEntitlement(
+                    entitlement_service,
+                    order_service,
+                )
+
                 enqueue_audit = EnqueueAudit(
                     order_service,
                     audit_service,
@@ -1144,6 +1037,7 @@ class Bootstrap:
                     validate_uploads=validate_uploads,
                     begin_checkout=begin_checkout,
                     handle_payment=handle_payment,
+                    grant_entitlement=grant_entitlement,
                     enqueue_audit=enqueue_audit,
                     release_report=release_report,
                     request_deletion=request_deletion,
@@ -1202,6 +1096,7 @@ class Bootstrap:
                     validate_uploads=validate_uploads,
                     begin_checkout=begin_checkout,
                     handle_payment=handle_payment,
+                    grant_entitlement=grant_entitlement,
                     list_reports=list_reports,
                     request_deletion=request_deletion,
                 )
@@ -1357,10 +1252,7 @@ class Bootstrap:
                 orchestrator.close()
 
         except Exception as exc:
-            logger.warning(
-                "BIMAP failed-build cleanup encountered %s",
-                type(exc).__name__,
-            )
+            logger.warning("BIMAP failed-build cleanup encountered %s", type(exc).__name__)
 
     def close(self) -> None:
         """
@@ -1462,11 +1354,6 @@ class Bootstrap:
 
 
 __all__ = [
-    "BootstrapError",
-    "BootstrapConfigurationError",
-    "BootstrapCompositionError",
-    "BootstrapStateError",
-    "BootstrapShutdownError",
     "BootstrapState",
     "BootstrapAuditComponents",
     "BootstrapInfrastructure",
