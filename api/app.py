@@ -44,6 +44,7 @@ from .routes.admin import RouteAdmin
 from .routes.checkout import RouteCheckout
 from .routes.deletion import RouteDeletion
 from .routes.downloads import RouteDownloads
+from .routes.entitlements import RouteEntitlements
 from .routes.health import RouteHealth
 from .routes.orders import RouteOrders
 from .routes.products import RouteProducts
@@ -469,6 +470,10 @@ def _construct_route_groups(dependencies: APIDependencies) -> tuple[Any, ...]:
             use_cases.validate_uploads,
             authorizer=hooks.authorizer,
             manifest_validator=hooks.upload_manifest_validator,
+        ),
+        RouteEntitlements(
+            use_cases.grant_entitlement,
+            authorizer=hooks.authorizer,
         ),
         RouteCheckout(
             use_cases.begin_checkout,

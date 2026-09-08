@@ -44,6 +44,7 @@ from ..app.commands.begin_checkout import BeginCheckout
 from ..app.commands.cancel_order import CancelOrder
 from ..app.commands.create_order import CreateOrder
 from ..app.commands.create_upload_slot import CreateUploadSlot
+from ..app.commands.grant_entitlement import GrantEntitlement
 from ..app.commands.handle_payment import HandlePayment
 from ..app.commands.request_deletion import RequestDeletion
 from ..app.commands.validate_uploads import ValidateUploads
@@ -130,6 +131,7 @@ class APIUseCases:
     validate_uploads: ValidateUploads
     begin_checkout: BeginCheckout
     handle_payment: HandlePayment
+    grant_entitlement: GrantEntitlement
     list_reports: ListReports
     request_deletion: RequestDeletion
 
@@ -151,6 +153,7 @@ class APIUseCases:
             ("validate_uploads", self.validate_uploads, ValidateUploads),
             ("begin_checkout", self.begin_checkout, BeginCheckout),
             ("handle_payment", self.handle_payment, HandlePayment),
+            ("grant_entitlement", self.grant_entitlement, GrantEntitlement),
             ("list_reports", self.list_reports, ListReports),
             ("request_deletion", self.request_deletion, RequestDeletion),
         )
