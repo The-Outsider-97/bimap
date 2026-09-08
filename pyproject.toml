@@ -12,7 +12,11 @@ dynamic = ["version"]
 description = "R3D BIM Audit Platform: evidence-grounded deterministic BIM auditing with governed SLAI integration."
 readme = "README.md"
 
-requires-python = ">=3.10"
+python-version:
+  - "3.10"
+  - "3.11"
+  - "3.12"
+  - "3.13"
 
 license = "MIT"
 license-files = ["LICENSE"]
@@ -44,6 +48,7 @@ classifiers = [
 dependencies = [
     "fastapi~=0.141.1",
     "uvicorn[standard]~=0.52.4",
+    "PyYAML>=6.0,<7",
 ]
 
 
@@ -109,6 +114,7 @@ packages = [
     "applications.bimap.contracts.utils",
 
     "applications.bimap.domain",
+    "applications.bimap.domain.accounts",
     "applications.bimap.domain.evidence",
     "applications.bimap.domain.findings",
     "applications.bimap.domain.governance",
@@ -128,6 +134,8 @@ packages = [
     "applications.bimap.workers",
     "applications.bimap.workers.jobs",
     "applications.bimap.workers.utils",
+
+    "applications.bimap.utils",
 ]
 
 
