@@ -1151,7 +1151,7 @@ class Bootstrap:
 
                 stage = "workers"
 
-                worker_audit = WorkerAudit(audit_service)
+                worker_audit = WorkerAudit(audit_service, order_service)
                 worker_report = JobReport(fulfilment_service)
                 worker_retention = JobRetention(fulfilment_service)
                 worker_deletion = JobDeletion(request_deletion)
