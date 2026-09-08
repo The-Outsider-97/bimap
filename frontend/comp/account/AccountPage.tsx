@@ -52,6 +52,36 @@ type AuditTab =
   | "done"
   | "cancelled";
 
+function formatUsage(
+  usage:
+    | AccountSummary["usage"]["audit"]
+    | AccountSummary["usage"]["conversion"]
+    | AccountSummary["usage"]["dataExtraction"],
+) {
+  if (usage.unlimited) {
+    return "Unlimited";
+  }
+
+  return `${usage.used ?? 0} / ${usage.limit ?? 0}`;
+}
+
+function renewalLabel(
+  renewal:
+    | "weekly"
+    | "monthly"
+    | "none",
+) {
+  if (renewal === "weekly") {
+    return "this week";
+  }
+
+  if (renewal === "monthly") {
+    return "this month";
+  }
+
+  return "";
+}
+
 export function AccountPage() {
   const {
     account,
@@ -407,388 +437,349 @@ export function AccountPage() {
           </div>
         </section>
 
-        <section
-          className="section account-section"
-          id="account-audits"
-        >
-          <div className="content-width">
-            <div className="account-section__heading">
-              <div>
-                <p className="eyebrow">
-                  <span
-                    aria-hidden="true"
-                  >
-                    ●
-                  </span>
+<section
+  className="section account-section"
+  id="account-plan"
+>
+  <div className="content-width">
+    <div className="account-section__heading">
+      <div>
+        <p className="eyebrow">
+          <span aria-hidden="true">
+            ●
+          </span>
 
-                  Audit activity
-                </p>
+          Subscription & usage
+        </p>
 
-                <h2>
-                  Your audits
-                </h2>
-              </div>
+        <h2>
+          Your plan
+        </h2>
+      </div>
+    </div>
 
-              <div className="account-tabs">
-                <button
-                  type="button"
-                  data-active={
-                    auditTab ===
-                    "inProgress"
-                  }
-                  onClick={() =>
-                    setAuditTab(
-                      "inProgress",
-                    )
-                  }
-                >
-                  In progress
-                </button>
+    {summary ? (
+      <>
+        <div className="account-current-plan">
+          <div className="account-current-plan__identity">
+            <span>
+              Current plan
+            </span>
 
-                <button
-                  type="button"
-                  data-active={
-                    auditTab ===
-                    "done"
-                  }
-                  onClick={() =>
-                    setAuditTab(
-                      "done",
-                    )
-                  }
-                >
-                  Done
-                </button>
+            <h3>
+              {
+                PLAN_OPTIONS.find(
+                  (
+                    plan,
+                  ) =>
+                    plan.code ===
+                    currentPlan,
+                )?.name ??
+                currentPlan
+              }
+            </h3>
 
-                <button
-                  type="button"
-                  data-active={
-                    auditTab ===
-                    "cancelled"
-                  }
-                  onClick={() =>
-                    setAuditTab(
-                      "cancelled",
-                    )
-                  }
-                >
-                  Cancelled
-                </button>
-              </div>
-            </div>
+            <p>
+              Your recurring usage
+              automatically renews
+              according to each
+              entitlement period.
+            </p>
+          </div>
 
-            <div className="account-record-list">
-              {audits.length > 0 ? (
-                audits.map(
-                  (audit) => (
-                    <article
-                      key={audit.id}
-                    >
-                      <span>
-                        {audit.status
-                          .replace(
-                            "_",
-                            " ",
-                          )}
-                      </span>
+          <div className="account-current-plan__discount">
+            <span>
+              Purchase discount
+            </span>
 
-                      <div>
-                        <h3>
-                          {
-                            audit.product
-                          }
-                        </h3>
+            <strong>
+              {
+                summary
+                  .rewards
+                  .basePurchaseDiscountPercent
+              }
+              %
+            </strong>
 
-                        <p>
-                          {
-                            audit.projectAlias ||
-                            audit.id
-                          }
-                        </p>
-                      </div>
+            <small>
+              Up to{" "}
+              {
+                summary
+                  .rewards
+                  .maxEffectivePurchaseDiscountPercent
+              }
+              % with points
+            </small>
+          </div>
 
-                      <small>
-                        {
-                          audit.updatedAt ||
-                          "No update timestamp"
-                        }
-                      </small>
-                    </article>
-                  ),
-                )
-              ) : (
-                <div className="account-empty-state">
+          <div className="account-current-plan__points">
+            <span>
+              Reward points
+            </span>
+
+            <strong>
+              {
+                summary
+                  .rewards
+                  .points
+                  .toLocaleString()
+              }
+            </strong>
+
+            <small>
+              Available balance
+            </small>
+          </div>
+        </div>
+
+        <div className="account-usage-grid">
+          {[
+            {
+              label:
+                "Audits",
+              usage:
+                summary
+                  .usage
+                  .audit,
+            },
+            {
+              label:
+                "Model conversions",
+              usage:
+                summary
+                  .usage
+                  .conversion,
+            },
+            {
+              label:
+                "Data extractions",
+              usage:
+                summary
+                  .usage
+                  .dataExtraction,
+            },
+          ].map(
+            (
+              item,
+            ) => (
+              <article
+                className="account-usage-card"
+                key={
+                  item.label
+                }
+              >
+                <div className="account-usage-card__heading">
                   <span>
-                    00
-                  </span>
-
-                  <div>
-                    <h3>
-                      No audits in
-                      this state.
-                    </h3>
-
-                    <p>
-                      Audit records
-                      appear here when
-                      they are associated
-                      with your account.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </section>
-
-        <section
-          className="section account-section account-section--surface"
-          id="account-purchases"
-        >
-          <div className="content-width">
-            <div className="account-section__heading">
-              <div>
-                <p className="eyebrow">
-                  <span
-                    aria-hidden="true"
-                  >
-                    ●
-                  </span>
-
-                  Digital library
-                </p>
-
-                <h2>
-                  Your purchases
-                </h2>
-              </div>
-            </div>
-
-            <div className="account-purchase-columns">
-              <div>
-                <h3>
-                  3D content
-                </h3>
-
-                <div className="account-record-list">
-                  {summary &&
-                  summary
-                    .purchases
-                    .threeD
-                    .length > 0 ? (
-                    summary
-                      .purchases
-                      .threeD
-                      .map(
-                        (
-                          purchase,
-                        ) => (
-                          <article
-                            key={
-                              purchase.id
-                            }
-                          >
-                            <span>
-                              {
-                                purchase.format
-                              }
-                            </span>
-
-                            <div>
-                              <h4>
-                                {
-                                  purchase.title
-                                }
-                              </h4>
-
-                              <p>
-                                3D
-                                purchase
-                              </p>
-                            </div>
-
-                            {purchase.downloadHref ? (
-                              <a
-                                href={
-                                  purchase.downloadHref
-                                }
-                              >
-                                Download
-                              </a>
-                            ) : (
-                              <small>
-                                Download
-                                unavailable
-                              </small>
-                            )}
-                          </article>
-                        ),
-                      )
-                  ) : (
-                    <p className="account-inline-empty">
-                      No 3D purchases
-                      recorded.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <h3>
-                  2D content
-                </h3>
-
-                <div className="account-record-list">
-                  {summary &&
-                  summary
-                    .purchases
-                    .twoD
-                    .length > 0 ? (
-                    summary
-                      .purchases
-                      .twoD
-                      .map(
-                        (
-                          purchase,
-                        ) => (
-                          <article
-                            key={
-                              purchase.id
-                            }
-                          >
-                            <span>
-                              {
-                                purchase.format
-                              }
-                            </span>
-
-                            <div>
-                              <h4>
-                                {
-                                  purchase.title
-                                }
-                              </h4>
-
-                              <p>
-                                2D
-                                purchase
-                              </p>
-                            </div>
-
-                            {purchase.downloadHref ? (
-                              <a
-                                href={
-                                  purchase.downloadHref
-                                }
-                              >
-                                Download
-                              </a>
-                            ) : (
-                              <small>
-                                Download
-                                unavailable
-                              </small>
-                            )}
-                          </article>
-                        ),
-                      )
-                  ) : (
-                    <p className="account-inline-empty">
-                      No 2D purchases
-                      recorded.
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section
-          className="section account-section"
-          id="account-plan"
-        >
-          <div className="content-width">
-            <div className="account-section__heading">
-              <div>
-                <p className="eyebrow">
-                  <span
-                    aria-hidden="true"
-                  >
-                    ●
-                  </span>
-
-                  Subscription
-                </p>
-
-                <h2>
-                  Your plan
-                </h2>
-              </div>
-            </div>
-
-            <div className="account-plan-grid">
-              {PLAN_OPTIONS.map(
-                (plan) => (
-                  <article
-                    className="account-plan-card"
-                    data-active={
-                      currentPlan ===
-                      plan.code
+                    {
+                      item.label
                     }
-                    key={
-                      plan.code
-                    }
-                  >
-                    <div>
-                      <span>
-                        {plan.name}
-                      </span>
+                  </span>
 
-                      {currentPlan ===
-                      plan.code ? (
-                        <strong>
-                          Current
-                          plan
-                        </strong>
-                      ) : null}
+                  <small>
+                    {
+                      renewalLabel(
+                        item
+                          .usage
+                          .renewal,
+                      )
+                    }
+                  </small>
+                </div>
+
+                <strong>
+                  {
+                    formatUsage(
+                      item.usage,
+                    )
+                  }
+                </strong>
+
+                {!item
+                  .usage
+                  .unlimited ? (
+                  <>
+                    <div
+                      className="account-usage-meter"
+                      aria-hidden="true"
+                    >
+                      <span
+                        style={{
+                          width:
+                            `${
+                              Math.min(
+                                100,
+                                (
+                                  (
+                                    item
+                                      .usage
+                                      .used ??
+                                    0
+                                  ) /
+                                  Math.max(
+                                    1,
+                                    item
+                                      .usage
+                                      .limit ??
+                                    1,
+                                  )
+                                ) *
+                                  100,
+                              )
+                            }%`,
+                        }}
+                      />
                     </div>
 
-                    <h3>
-                      {
-                        plan.discount
-                      }
-                      %
-                    </h3>
+                    <div className="account-usage-card__meta">
+                      <span>
+                        Remaining{" "}
+                        {
+                          item
+                            .usage
+                            .remaining ??
+                          0
+                        }
+                      </span>
 
-                    <p>
-                      Purchase
-                      discount
-                    </p>
+                      <span>
+                        Bonus{" "}
+                        {
+                          item
+                            .usage
+                            .bonusCredits
+                        }
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <p>
+                    No recurring
+                    usage limit.
+                  </p>
+                )}
+              </article>
+            ),
+          )}
+        </div>
 
-                    <small>
-                      {
-                        plan.description
-                      }
-                    </small>
-                  </article>
-                ),
-              )}
-            </div>
+        <div className="account-reward-summary">
+          <div>
+            <span>
+              Base discount
+            </span>
 
-            <div className="account-actions-row">
-              <button
-                type="button"
-                className="account-secondary-action"
-                onClick={() => {
-                  void logout();
-                }}
-              >
-                Log out
-              </button>
-            </div>
+            <strong>
+              {
+                summary
+                  .rewards
+                  .basePurchaseDiscountPercent
+              }
+              %
+            </strong>
           </div>
-        </section>
+
+          <div>
+            <span>
+              Points discount capacity
+            </span>
+
+            <strong>
+              +
+              {
+                summary
+                  .rewards
+                  .maxRewardDiscountPercent
+              }
+              %
+            </strong>
+          </div>
+
+          <div>
+            <span>
+              Maximum combined discount
+            </span>
+
+            <strong>
+              {
+                summary
+                  .rewards
+                  .maxEffectivePurchaseDiscountPercent
+              }
+              %
+            </strong>
+          </div>
+        </div>
+      </>
+    ) : (
+      <div className="account-inline-empty">
+        Account usage information
+        is unavailable.
+      </div>
+    )}
+
+    <div className="account-plan-grid">
+      {PLAN_OPTIONS.map(
+        (
+          plan,
+        ) => (
+          <article
+            className="account-plan-card"
+            data-active={
+              currentPlan ===
+              plan.code
+            }
+            key={
+              plan.code
+            }
+          >
+            <div>
+              <span>
+                {plan.name}
+              </span>
+
+              {currentPlan ===
+              plan.code ? (
+                <strong>
+                  Current plan
+                </strong>
+              ) : null}
+            </div>
+
+            <h3>
+              {
+                plan.discount
+              }
+              %
+            </h3>
+
+            <p>
+              Base purchase
+              discount
+            </p>
+
+            <small>
+              {
+                plan.description
+              }
+            </small>
+          </article>
+        ),
+      )}
+    </div>
+
+    <div className="account-actions-row">
+      <button
+        type="button"
+        className="account-secondary-action"
+        onClick={() => {
+          void logout();
+        }}
+      >
+        Log out
+      </button>
+    </div>
+  </div>
+</section>
       </main>
     </SiteShell>
   );
