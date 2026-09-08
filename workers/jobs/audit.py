@@ -24,8 +24,10 @@ from typing import Any
 from ..utils.workers_errors import *
 from ..utils.workers_helpers import *
 from ...app.services.audit_service import *
+from ...app.services.order_service import OrderService
 from ...audit_engine.engine import *
 from ...contracts.audit_job import AuditJob
+from ...domain.orders.states import OrderState
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
 
 
@@ -38,9 +40,9 @@ _COMPONENT = "worker_audit"
 class WorkerAudit:
     """Execute one validated active ``AuditJob`` through ``AuditService``."""
 
-    __slots__ = ("_service",)
+    __slots__ = ("_service", "_order_service",)
 
-    def __init__(self, service: AuditService) -> None:
+    def __init__(self, service: AuditService, order_service: OrderService) -> None:
         announce_worker_action(
             printer,
             logger,
@@ -48,19 +50,50 @@ class WorkerAudit:
             action="Initializing audit worker job",
             event="worker_audit_init_start",
         )
-        if not isinstance(service, AuditService):
+
+        if not isinstance(service, AuditService,):
             raise WorkerConfigurationError(
                 "service must be an AuditService.",
                 component=_COMPONENT,
                 operation="initialize",
                 field="service",
-                context={"received_type": type(service).__name__},
+                context={
+                    "received_type":
+                        type(service).__name__,
+                },
             )
+
+        if not isinstance(order_service, OrderService,):
+            raise WorkerConfigurationError(
+                "order_service must be an OrderService.",
+                component=_COMPONENT,
+                operation="initialize",
+                field="order_service",
+                context={
+                    "received_type":
+                        type(
+                            order_service
+                        ).__name__,
+                },
+            )
+
         self._service = service
+        self._order_service = (
+            order_service
+        )
+
         logger.debug(
             {
-                "event": "worker_audit_initialized",
-                "service_type": type(service).__name__,
+                "event":
+                    "worker_audit_initialized",
+                "service_type":
+                    type(
+                        service
+                    ).__name__,
+                "order_service_type":
+                    type(
+                        order_service
+                    ).__name__,
             }
         )
 
@@ -104,6 +137,50 @@ class WorkerAudit:
                 context={"received_type": type(job).__name__},
             )
 
+        order = (self._order_service.get_order(job.order_id))
+
+        if (order.state is OrderState.QUEUED):
+            order = (
+                self._order_service
+                .transition(
+                    order.order_id,
+                    OrderState.INGESTING,
+                    idempotency_key=(
+                        f"{job.job_id}:ingesting"
+                    ),
+                    actor="bimap-worker",
+                )
+            )
+
+        if (order.state is OrderState.INGESTING):
+            order = (
+                self._order_service
+                .transition(
+                    order.order_id,
+                    OrderState.ANALYZING,
+                    idempotency_key=(
+                        f"{job.job_id}:analyzing"
+                    ),
+                    actor="bimap-worker",
+                )
+            )
+
+        if (order.state is not OrderState.ANALYZING):
+            raise WorkerValidationError(
+                "Audit worker requires an analyzing order.",
+                component=_COMPONENT,
+                operation="execute",
+                field="order.state",
+                job_type="audit",
+                job_id=job.job_id,
+                context={
+                    "order_id":
+                        order.order_id,
+                    "state":
+                        order.state.value,
+                },
+            )
+
         result = run_worker_dependency(
             lambda: self._service.run_audit(
                 job,
@@ -132,6 +209,13 @@ class WorkerAudit:
             component=_COMPONENT,
             operation="execute",
             message="AuditService returned an unsupported audit execution result.",
+        )
+
+        self._order_service.transition(
+            job.order_id,
+            OrderState.GOVERNANCE_REVIEW,
+            idempotency_key=(f"{job.job_id}:governance-review"),
+            actor="bimap-worker",
         )
 
         if validated.job.job_id != job.job_id or validated.job.order_id != job.order_id:
