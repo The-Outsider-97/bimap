@@ -29,17 +29,17 @@ plans:
 
     usage:
       audit:
-        mode: unconfigured
+        mode: finite
         limit: 15
         renewal: monthly
 
       conversion:
-        mode: unconfigured
+        mode: finite
         limit: 9
         renewal: weekly
 
       data_extraction:
-        mode: unconfigured
+        mode: finite
         limit: 15
         renewal: weekly
 
@@ -50,17 +50,17 @@ plans:
 
     usage:
       audit:
-        mode: unconfigured
+        mode: finite
         limit: 25
         renewal: monthly
 
       conversion:
-        mode: unconfigured
+        mode: finite
         limit: 15
         renewal: weekly
 
       data_extraction:
-        mode: unconfigured
+        mode: finite
         limit: 25
         renewal: weekly
 
