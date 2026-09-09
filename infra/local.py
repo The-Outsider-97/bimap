@@ -43,7 +43,7 @@ from typing import BinaryIO
 from src.functions.auth import AuthService as SLAIAuthService  # type: ignore
 from ..notifications.email_models import EmailVerificationData
 from ..notifications.email_service import EmailService
-from ..notifications.utils.email_errors import EmailError as BIMAPEmailError
+from ..notifications.utils.email_errors import EmailError as BIMAPEmailError, EmailTransportTimeoutError
 from src.functions.phone_verification import PhoneVerificationService  # type: ignore
 from src.functions.utils.functions_error import (  # type: ignore
     AccountLockedError,
@@ -344,12 +344,52 @@ class LocalSLAIAuthentication(Authentication):
                 correlation_id=challenge_id,
             )
 
+        except EmailTransportTimeoutError as exc:
+            raise AppPortTimeoutError(
+                "Email verification delivery timed out.",
+                component="local_slai_authentication",
+                operation="issue_signup_verification",
+                context={
+                    "email_error_type": type(exc).__name__,
+                    "email_error_code": getattr(
+                        exc,
+                        "code",
+                        None,
+                    ),
+                },
+                cause=exc,
+            ) from exc
+
         except BIMAPEmailError as exc:
-            raise AppPortUnavailableError(
-                "Email verification delivery "
-                "is unavailable.",
-                component=("local_slai_authentication"),
-                operation=("issue_signup_verification"),
+            context = {
+                "email_error_type": type(exc).__name__,
+                "email_error_code": getattr(
+                    exc,
+                    "code",
+                    None,
+                ),
+            }
+
+            if bool(
+                getattr(
+                    exc,
+                    "retryable",
+                    False,
+                )
+            ):
+                raise AppPortUnavailableError(
+                    "Email verification delivery is unavailable.",
+                    component="local_slai_authentication",
+                    operation="issue_signup_verification",
+                    context=context,
+                    cause=exc,
+                ) from exc
+
+            raise AppPortOperationError(
+                "Email verification delivery failed.",
+                component="local_slai_authentication",
+                operation="issue_signup_verification",
+                context=context,
                 cause=exc,
             ) from exc
 

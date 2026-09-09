@@ -20,7 +20,7 @@ _MAX_LOCAL_LENGTH = 64
 _MAX_DOMAIN_LENGTH = 253
 _MAX_HEADER_LENGTH = 998
 _MAX_TEXT_LENGTH = 16_384
-_VERIFICATION_CODE_RE = re.compile(r"^[A-Za-z0-9]{24}$")
+_VERIFICATION_CODE_RE = re.compile(r"^[A-Za-z0-9!@#$%^&*()\-_=+\[\]{};:,.?/]{24}$")
 _LOCAL_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+$")
 _DOMAIN_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -177,14 +177,28 @@ def require_header_value(value: Any, *, field: str, max_length: int = _MAX_HEADE
 
 
 def require_verification_code(value: Any, *, field: str = "verification_code") -> str:
+    """
+    Validate the canonical 24-character SLAI verification passcode.
+
+    The authentication subsystem generates verification passcodes from
+    ASCII letters, digits, and the supported symbol alphabet. The email
+    layer validates that contract without modifying the passcode because
+    the original value must be returned unchanged to SLAI for verification.
+    """
     code = require_text(value, field=field, max_length=24, allow_newlines=False)
+
     if not _VERIFICATION_CODE_RE.fullmatch(code):
         raise EmailValidationError(
-            "Verification code must contain exactly 24 ASCII letters or digits.",
+            (
+                "Verification code must contain exactly "
+                "24 characters from the supported "
+                "verification alphabet."
+            ),
             component="email_helpers",
             operation="require_verification_code",
             field=field,
         )
+
     return code
 
 
