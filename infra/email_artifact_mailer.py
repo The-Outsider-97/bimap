@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from ..app.ports.artifact_mailer import ArtifactEmailReceipt, ArtifactMailer
 from ..app.utils.app_errors import *
 from ..app.utils.app_helpers import *
-from ..notifications.email_models import EmailAttachment, ServiceResultData
+from ..notifications.email_models import ServiceResultData, EmailAttachment
 from ..notifications.email_service import EmailService
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
 
@@ -14,6 +16,7 @@ logger = get_logger("BIMAP Email Artifact Mailer")
 printer = PrettyPrinter()
 
 _COMPONENT = "email_artifact_mailer"
+
 
 
 class EmailArtifactMailer(ArtifactMailer):
@@ -114,7 +117,7 @@ class EmailArtifactMailer(ArtifactMailer):
             data,
             recipient_name=recipient_name,
             idempotency_key=idempotency_key,
-            attachments=(attachment,),
+            attachments=(attachment,), # type: ignore
         )
 
         return ArtifactEmailReceipt(
