@@ -12,6 +12,7 @@ from fastapi import APIRouter, Request, Response, status # type: ignore
 from ._shared import *
 from ..utils.api_errors import *
 from ..utils.api_helpers import *
+from ...app.utils.app_errors import AppValidationError
 from ...app.ports.authentication import AuthSession, VerificationFailure
 from ...app.services.account_service import AccountProfileView
 from ...app.services.authentication_service import AuthenticationService, LoginFailure
@@ -60,11 +61,7 @@ def account_profile_to_public_dict(profile: AccountProfileView) -> dict[str, Any
     }
 
 
-def session_token_from_request(
-    request: Request,
-    *,
-    required: bool = True,
-) -> str | None:
+def session_token_from_request(request: Request, *, required: bool = True) -> str | None:
     """Read the opaque HttpOnly BIMAP session cookie."""
     announce_api_action(
         printer,
@@ -109,10 +106,7 @@ def session_token_from_request(
     )
 
 
-def resolve_authenticated_account(
-    authentication: AuthenticationService,
-    request: Request,
-) -> Account:
+def resolve_authenticated_account(authentication: AuthenticationService, request: Request) -> Account:
     """Resolve the request cookie to one active verified BIMAP account."""
     announce_api_action(
         printer,
@@ -141,11 +135,7 @@ def resolve_authenticated_account(
     return account
 
 
-def _set_session_cookie(
-    response: Response,
-    request: Request,
-    session: AuthSession,
-) -> None:
+def _set_session_cookie(response: Response, request: Request, session: AuthSession) -> None:
     announce_api_action(
         printer,
         logger,
@@ -206,6 +196,35 @@ def _require_password(value: Any) -> str:
         )
     return value
 
+def _signup_validation_message(error: AppValidationError) -> str:
+    """
+    Map signup validation fields to safe actionable client messages.
+
+    Messages intentionally avoid disclosing which existing account owns
+    an identifier.
+    """
+    field = getattr(error, "field", None)
+
+    if field == "password":
+        return ("Password does not satisfy the required security policy.")
+
+    if field == "phone_e164":
+        return (
+            "Phone verification could not be started. "
+            "Check the selected country and phone number, "
+            "then try again."
+        )
+
+    if field in {
+        "username",
+        "email",
+    }:
+        return (
+            "An account already exists for one or more "
+            "of the supplied sign-up identifiers."
+        )
+
+    return ("One or more sign-up fields are invalid.")
 
 def _signup_response_payload(result: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -309,17 +328,82 @@ class RouteAuth:
             optional=("occupation", "business"),
         )
 
-        result = self._authentication.sign_up(
-            name=require_api_text(payload["name"], field="name", component=_COMPONENT, operation="signup", max_length=128),
-            surname=require_api_text(payload["surname"], field="surname", component=_COMPONENT, operation="signup", max_length=128),
-            occupation=optional_route_text(payload.get("occupation"), field="occupation", max_length=256),
-            business=optional_route_text(payload.get("business"), field="business", max_length=256),
-            country=require_api_text(payload["country"], field="country", component=_COMPONENT, operation="signup", max_length=2),
-            phone_e164=require_api_text(payload["phoneE164"], field="phoneE164", component=_COMPONENT, operation="signup", max_length=16),
-            username=require_api_text(payload["username"], field="username", component=_COMPONENT, operation="signup", max_length=64),
-            email=require_api_text(payload["email"], field="email", component=_COMPONENT, operation="signup", max_length=254),
-            password=_require_password(payload["password"]),
-        )
+        try:
+            result = self._authentication.sign_up(
+                name=require_api_text(
+                    payload["name"],
+                    field="name",
+                    component=_COMPONENT,
+                    operation="signup",
+                    max_length=128,
+                ),
+                surname=require_api_text(
+                    payload["surname"],
+                    field="surname",
+                    component=_COMPONENT,
+                    operation="signup",
+                    max_length=128,
+                ),
+                occupation=optional_route_text(
+                    payload.get("occupation"),
+                    field="occupation",
+                    max_length=256,
+                ),
+                business=optional_route_text(
+                    payload.get("business"),
+                    field="business",
+                    max_length=256,
+                ),
+                country=require_api_text(
+                    payload["country"],
+                    field="country",
+                    component=_COMPONENT,
+                    operation="signup",
+                    max_length=2,
+                ),
+                phone_e164=require_api_text(
+                    payload["phoneE164"],
+                    field="phoneE164",
+                    component=_COMPONENT,
+                    operation="signup",
+                    max_length=16,
+                ),
+                username=require_api_text(
+                    payload["username"],
+                    field="username",
+                    component=_COMPONENT,
+                    operation="signup",
+                    max_length=64,
+                ),
+                email=require_api_text(
+                    payload["email"],
+                    field="email",
+                    component=_COMPONENT,
+                    operation="signup",
+                    max_length=254,
+                ),
+                password=_require_password(
+                    payload["password"]
+                ),
+            )
+
+        except AppValidationError as exc:
+            raise APIValidationError(
+                "Signup validation was rejected.",
+                public_message=(
+                    _signup_validation_message(
+                        exc
+                    )
+                ),
+                component=_COMPONENT,
+                operation="signup",
+                field=getattr(
+                    exc,
+                    "field",
+                    None,
+                ),
+                cause=exc,
+            ) from exc
 
         return json_response(
             _signup_response_payload(result),
