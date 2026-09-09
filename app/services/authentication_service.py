@@ -379,11 +379,68 @@ class AuthenticationService:
                 cause=exc,
             ) from exc
 
+        pending_account = (
+            self.account_service.find_by_username(
+                normalized_username
+            )
+        )
+
+        if (
+            pending_account is not None
+            and pending_account.status
+            is AccountStatus.PENDING_VERIFICATION
+            and pending_account.email
+            == normalized_email
+            and pending_account.phone_e164
+            == normalized_phone
+            and pending_account.country
+            == normalized_country
+        ):
+            logger.info(
+                {
+                    "event":
+                        "authentication_service_signup_resuming_pending",
+                    "account_id":
+                        pending_account.account_id,
+                }
+            )
+
+            return self.resend_signup_codes(
+                pending_account.username
+            )
+
         self._assert_signup_identity_available(
             username=normalized_username,
             email=normalized_email,
             phone_e164=normalized_phone,
         )
+
+        if pending_account is not None:
+            verification = (
+                self.authentication.issue_signup_verification(
+                    auth_user_id=pending_account.auth_user_id,
+                    username=pending_account.username,
+                    email=pending_account.email,
+                    phone_e164=pending_account.phone_e164,
+                    country=pending_account.country,
+                )
+            )
+
+            logger.info(
+                {
+                    "event":
+                        "authentication_service_signup_resumed",
+                    "account_id":
+                        pending_account.account_id,
+                    "status":
+                        pending_account.status.value,
+                }
+            )
+
+            return SignupStartResult(
+                account=pending_account,
+                verification=verification,
+            )
 
         identity_result = self.authentication.create_identity(
             username=normalized_username,
@@ -472,13 +529,7 @@ class AuthenticationService:
         )
         return SignupStartResult(account=account, verification=verification)
 
-    def verify_signup(
-        self,
-        *,
-        username: str,
-        email_code: str,
-        sms_code: str,
-    ) -> SignupCompletionResult:
+    def verify_signup(self, *, username: str, email_code: str, sms_code: str) -> SignupCompletionResult:
         """Verify signup channels, persist channel state, and issue first session."""
         announce_app_action(
             printer,
@@ -707,12 +758,7 @@ class AuthenticationService:
         )
         self.authentication.revoke_session(access_token)
 
-    def _account_for_principal(
-        self,
-        principal: SessionPrincipal,
-        *,
-        operation: str,
-    ) -> Account:
+    def _account_for_principal(self, principal: SessionPrincipal, *, operation: str) -> Account:
         announce_app_action(
             printer,
             logger,
@@ -738,40 +784,81 @@ class AuthenticationService:
             )
         return account
 
-    def _assert_signup_identity_available(
-        self,
-        *,
-        username: str,
-        email: str,
-        phone_e164: str,
-    ) -> None:
+    def _assert_signup_identity_available(self, *, username: str, email: str, phone_e164: str)-> Account | None:
+        """
+        Resolve whether signup may proceed or resume an existing pending account.
+
+        A retry of the exact same pending signup is recoverable. Identity
+        collisions involving another account or changed signup identifiers remain
+        validation failures.
+        """
         announce_app_action(
             printer,
             logger,
             component=_COMPONENT,
-            action="Checking signup identity availability",
+            action="Resolving signup identity availability",
             event="authentication_service_signup_availability_start",
         )
+
         checks = (
             ("username", self.account_service.find_by_username(username)),
             ("email", self.account_service.find_by_email(email)),
             ("phone_e164", self.account_service.find_by_phone(phone_e164)),
         )
-        for field, account in checks:
-            if account is not None:
-                raise AppValidationError(
-                    "An account already exists for the supplied signup identity.",
-                    component=_COMPONENT,
-                    operation="sign_up",
-                    field=field,
+
+        matched = tuple(
+            (field, account)
+            for field, account in checks
+            if account is not None
+        )
+
+        if not matched:
+            return None
+
+        account_ids = {
+            account.account_id
+            for _, account in matched
+        }
+
+        if len(account_ids) == 1:
+            account = matched[0][1]
+
+            same_identity = (
+                Account.username_lookup_key(account.username) == Account.username_lookup_key(username)
+                and account.email == email
+                and account.phone_e164 == phone_e164
                 )
 
-    def _compensate_identity(
-        self,
-        auth_user_id: str,
-        *,
-        initial_error: BaseException,
-    ) -> None:
+            if (
+                same_identity
+                and account.status
+                is AccountStatus.PENDING_VERIFICATION
+            ):
+                logger.info(
+                    {"event": "authentication_service_signup_pending_resolved",
+                     "account_id": account.account_id,
+                     "status": account.status.value,
+                    }
+                )
+
+                return account
+
+        # Either:
+        # - the supplied identifiers belong to different accounts; or
+        # - an identifier belongs to an already-established account; or
+        # - the caller changed part of an existing pending identity.
+        #
+        # Do not expose which account owns the identifier.
+        conflict_field = matched[0][0]
+
+        raise AppValidationError(
+            "An account already exists for the supplied signup identity.",
+            component=_COMPONENT,
+            operation="sign_up",
+            field=conflict_field,
+        )
+
+    def _compensate_identity(self, auth_user_id: str, *, initial_error: BaseException) -> None:
         """Best-effort compensation after identity creation but before account durability."""
         announce_app_action(
             printer,
