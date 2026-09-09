@@ -28,6 +28,16 @@ class EmailDeliveryStatus(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class EmailAttachment:
+    """Attachment payload accepted by the email service."""
+
+    filename: str
+    content_type: str
+    payload: bytes
+    content_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
 class EmailAddress:
     email: str = field(repr=False)
     name: str | None = None
