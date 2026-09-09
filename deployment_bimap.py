@@ -48,8 +48,14 @@ from applications.bimap.domain.accounts.models import Account  # type: ignore
 from applications.bimap.domain.accounts.plans import AccountPlanCatalog, QuotaMode, UsageKind  # type: ignore
 from applications.bimap.domain.orders.states import EXCEPTION_STATES, OrderState  # type: ignore
 from src.functions.auth import AuthService as SLAIAuthService  # type: ignore
-from src.functions.email import ConsoleBackend  # type: ignore
 from src.functions.phone_verification import ConsoleSMSBackend, PhoneVerificationService  # type: ignore
+from applications.bimap.notifications import ( # type: ignore
+    EmailAddress,
+    EmailBranding,
+    EmailRenderer,
+    EmailService,
+)
+from applications.bimap.notifications.providers import SMTPProvider # type: ignore
 from applications.bimap.api.app import APISettings # type: ignore
 from applications.bimap.api.dependencies import APIRouteHooks # type: ignore
 from applications.bimap.api.middleware.request_limits import RequestLimitPolicy # type: ignore
@@ -102,6 +108,34 @@ _ALLOWED_HOSTS_ENV = "BIMAP_ALLOWED_HOSTS"
 _LOCAL_MODES = frozenset({"development", "dev", "local"})
 _PRODUCTION_MODES = frozenset({"production", "prod"})
 
+
+def _build_email_service() -> EmailService:
+    printer.status(
+        "BIMAP",
+        "Building transactional email service",
+        "info",
+    )
+
+    provider = SMTPProvider.from_env()
+
+    renderer = EmailRenderer(
+        EmailBranding(
+            product_name="BIMAP",
+            team_name="The Remy3Design Team",
+            support_email=(
+                "info.remy3design@gmail.com"
+            ),
+        )
+    )
+
+    return EmailService(
+        renderer,
+        provider,
+        reply_to=EmailAddress(
+            "info.remy3design@gmail.com",
+            "Remy3Design",
+        ),
+    )
 
 # ---------------------------------------------------------------------------
 # Configuration helpers
@@ -544,10 +578,12 @@ def _create_local_bootstrap() -> Bootstrap:
         tempfile.gettempdir(),
         f"bimap-auth-{os.getpid()}-{uuid4().hex}.json",
     )
+    email_notifications = _build_email_service()
     authentication = LocalSLAIAuthentication(
         SLAIAuthService(memory_path=auth_memory_path),
-        ConsoleBackend(),
+        email_notifications,
         PhoneVerificationService(ConsoleSMSBackend()),
+        email_code_ttl_minutes=15,
     )
 
     account_summary_resolver = _build_local_account_summary_resolver(
@@ -566,30 +602,18 @@ def _create_local_bootstrap() -> Bootstrap:
         repository=repository,
         payment=DisabledPayment(),
         clock=clock,
-        malware=DevelopmentMalware(
-            trust_uploads=trust_uploads,
-        ),
+        malware=DevelopmentMalware(trust_uploads=trust_uploads),
         storage=InMemoryStorage(),
         queue=InProcessQueue(),
-
         accounts=accounts,
         authentication=authentication,
-
         entitlement_store=entitlement_store,
         renewal_window_resolver=renewal_window_resolver,
-
         shared_memory=SharedMemory(),
-
-        route_hooks=_build_route_hooks(
-            authentication,
-            accounts,
-        ),
-
-        account_summary_resolver=(
-            account_summary_resolver
-        ),
+        route_hooks=_build_route_hooks(authentication, accounts),
+        account_summary_resolver=account_summary_resolver,
         account_avatar_uploader=None,
-
+        notifications=email_notifications,
         close_shared_memory_on_shutdown=True,
     )
 

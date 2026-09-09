@@ -124,6 +124,10 @@ packages = [
     "applications.bimap.domain.requirements",
     "applications.bimap.domain.utils",
 
+    "applications.bimap.notifications",
+    "applications.bimap.notifications.providers",
+    "applications.bimap.notifications.utils",
+
     "applications.bimap.reporting",
     "applications.bimap.reporting.serializers",
     "applications.bimap.reporting.utils",

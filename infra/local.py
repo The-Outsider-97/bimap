@@ -30,18 +30,20 @@ implementations while preserving the same application-port contracts.
 
 from __future__ import annotations
 
-from abc import abstractmethod
 import hashlib
 import secrets
 import phonenumbers  # type: ignore
 
+from abc import abstractmethod
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from threading import RLock
 from typing import BinaryIO
 
 from src.functions.auth import AuthService as SLAIAuthService  # type: ignore
-from src.functions.email import EmailBackend, EmailMessage  # type: ignore
+from ..notifications.email_models import EmailVerificationData
+from ..notifications.email_service import EmailService
+from ..notifications.utils.email_errors import EmailError
 from src.functions.phone_verification import PhoneVerificationService  # type: ignore
 from src.functions.utils.functions_error import (  # type: ignore
     AccountLockedError,
@@ -216,23 +218,37 @@ class LocalSLAIAuthentication(Authentication):
     def __init__(
         self,
         auth_service: SLAIAuthService,
-        email_backend: EmailBackend,
+        email_service: EmailService,
         phone_verification: PhoneVerificationService,
         *,
-        email_code_ttl_minutes: int = 30,
+        email_code_ttl_minutes: int = 15,
     ) -> None:
         printer.status("BIMAP", "Initializing SLAI authentication adapter", "info")
+
         if not isinstance(auth_service, SLAIAuthService):
             raise TypeError("auth_service must be an SLAI AuthService")
-        if not isinstance(email_backend, EmailBackend):
-            raise TypeError("email_backend must implement SLAI EmailBackend")
+
+        if not isinstance(email_service, EmailService):
+            raise TypeError("email_service must be a BIMAP EmailService")
+
         if not isinstance(phone_verification, PhoneVerificationService):
-            raise TypeError("phone_verification must be a PhoneVerificationService")
-        if isinstance(email_code_ttl_minutes, bool) or not isinstance(email_code_ttl_minutes, int) or email_code_ttl_minutes <= 0:
-            raise ValueError("email_code_ttl_minutes must be a positive integer")
+            raise TypeError(
+                "phone_verification must be a "
+                "PhoneVerificationService"
+            )
+
+        if (
+            isinstance(email_code_ttl_minutes, bool)
+            or not isinstance(email_code_ttl_minutes, int)
+            or email_code_ttl_minutes <= 0
+        ):
+            raise ValueError(
+                "email_code_ttl_minutes must be "
+                "a positive integer"
+            )
 
         self._auth = auth_service
-        self._email = email_backend
+        self._email = email_service
         self._phone = phone_verification
         self._email_code_ttl_minutes = email_code_ttl_minutes
         self._lock = RLock()
@@ -299,57 +315,86 @@ class LocalSLAIAuthentication(Authentication):
         phone_e164: str,
         country: str,
     ) -> VerificationDispatch:
+        challenge_id = secrets.token_hex(16)
+
         try:
-            email_code = self._auth.create_verification_challenge(
-                username=username,
-                purpose=self._EMAIL_PURPOSE,
-                expires_in_minutes=self._email_code_ttl_minutes,
-                invalidate_existing=True,
-            )
-            self._email.send(
-                EmailMessage(
-                    to=email,
-                    subject="BIMAP account verification",
-                    body_html=f"<p>Your BIMAP verification code is <strong>{email_code}</strong>.</p>",
-                    body_text=f"Your BIMAP verification code is: {email_code}",
+            email_code = (
+                self._auth
+                .create_verification_challenge(
+                    username=username,
+                    purpose=self._EMAIL_PURPOSE,
+                    expires_in_minutes=(
+                        self._email_code_ttl_minutes
+                    ),
+                    invalidate_existing=True,
                 )
             )
+
+            self._email.send_verification_email(
+                email,
+                EmailVerificationData(
+                    user_name=username,
+                    verification_code=email_code,
+                    expires_in_minutes=(
+                        self._email_code_ttl_minutes
+                    ),
+                ),
+                idempotency_key=(
+                    f"signup:{challenge_id}:email"
+                ),
+                correlation_id=challenge_id,
+            )
+
         except EmailError as exc:
             raise AppPortUnavailableError(
-                "Email verification delivery is unavailable.",
-                component="local_slai_authentication",
-                operation="issue_signup_verification",
+                "Email verification delivery "
+                "is unavailable.",
+                component=("local_slai_authentication"),
+                operation=("issue_signup_verification"),
                 cause=exc,
             ) from exc
 
         try:
             parsed = phonenumbers.parse(phone_e164, None)
-            phone_request = self._phone.send_verification_code(
-                phone_e164,
-                country_code=f"+{parsed.country_code}",
-                country_region=country,
+            phone_request = (
+                self._phone
+                .send_verification_code(
+                    phone_e164,
+                    country_code=(f"+{parsed.country_code}"),
+                    country_region=country,
+                )
             )
-        except (InvalidPhoneNumberError, InvalidCountryCodeError, PhoneCountryMismatchError) as exc:
+
+        except (
+            InvalidPhoneNumberError,
+            InvalidCountryCodeError,
+            PhoneCountryMismatchError,
+        ) as exc:
             raise AppValidationError(
-                "Phone number does not match the selected country.",
-                component="local_slai_authentication",
-                operation="issue_signup_verification",
+                "Phone number does not match "
+                "the selected country.",
+                component=("local_slai_authentication"),
+                operation=("issue_signup_verification"),
                 field="phone_e164",
                 cause=exc,
             ) from exc
+
         except VerificationRateLimitError as exc:
             raise AppValidationError(
-                "Phone verification cannot be resent yet.",
-                component="local_slai_authentication",
-                operation="issue_signup_verification",
+                "Phone verification cannot "
+                "be resent yet.",
+                component=("local_slai_authentication"),
+                operation=("issue_signup_verification"),
                 field="phone_e164",
                 cause=exc,
             ) from exc
+
         except SMSError as exc:
             raise AppPortUnavailableError(
-                "SMS verification delivery is unavailable.",
-                component="local_slai_authentication",
-                operation="issue_signup_verification",
+                "SMS verification delivery "
+                "is unavailable.",
+                component=("local_slai_authentication"),
+                operation=("issue_signup_verification"),
                 cause=exc,
             ) from exc
 
@@ -362,15 +407,15 @@ class LocalSLAIAuthentication(Authentication):
                 country,
             )
 
-        expires_in = min(
-            float(self._email_code_ttl_minutes * 60),
+        expires_in = min(float(self._email_code_ttl_minutes * 60),
             float(phone_request.expires_in_seconds),
         )
+
         return VerificationDispatch(
-            challenge_id=secrets.token_hex(16),
-            expires_at=datetime.now(timezone.utc) + timedelta(seconds=expires_in),
-            email_masked=self._mask_email(email),
-            phone_masked=self._mask_phone(phone_e164),
+            challenge_id=challenge_id,
+            expires_at=(datetime.now(timezone.utc) + timedelta(seconds=expires_in)),
+            email_masked=(self._mask_email(email)),
+            phone_masked=(self._mask_phone(phone_e164)),
         )
 
     def _verify_signup(
