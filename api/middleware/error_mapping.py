@@ -60,12 +60,22 @@ def _report_mapped_error(
     failures. Server-side failures retain error-level visibility.
     """
 
+    source_cause = getattr(source, "cause", None)
     payload = {
-        "event": "api_exception_mapped",
-        "source_type": type(source).__name__,
+        "event": "api_exception_mapped", "source_type": type(source).__name__,
         "source_code": getattr(source, "code", None),
+        "source_component": getattr(source, "component", None),
         "source_operation": getattr(source, "operation", None),
         "source_field": getattr(source, "field", None),
+        # AppError.context is already sanitized by
+        # sanitize_app_context().
+        "source_context": dict(getattr(source, "context", {}) or {}),
+        "source_cause_type":
+            (
+                type(source_cause).__name__
+                if source_cause is not None
+                else None
+            ),
         "mapped_code": mapped.code,
         "status_code": mapped.status_code,
         "retryable": mapped.retryable,
