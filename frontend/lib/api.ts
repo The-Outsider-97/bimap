@@ -90,15 +90,6 @@ function resolveRequestUrl(
   const target =
     `${API_PREFIX}${normalizeApiPath(path)}`;
 
-  /*
-   * Browser:
-   *
-   *   /api/v1/... -> Next.js rewrite -> FastAPI
-   *
-   * Server component / route handler:
-   *
-   *   http://backend:8000/api/v1/... -> FastAPI directly
-   */
   if (typeof window !== "undefined") {
     return target;
   }
@@ -148,10 +139,10 @@ async function readErrorPayload(
 }
 
 
-export async function apiRequest<T>(
+export async function apiResponse(
   path: string,
   init: RequestInit = {},
-): Promise<T> {
+): Promise<Response> {
   const headers = new Headers(
     init.headers,
   );
@@ -159,7 +150,7 @@ export async function apiRequest<T>(
   if (!headers.has("Accept")) {
     headers.set(
       "Accept",
-      "application/json",
+      "application/json, application/octet-stream, model/gltf-binary, application/zip",
     );
   }
 
@@ -168,12 +159,7 @@ export async function apiRequest<T>(
     {
       ...init,
       headers,
-
-      // Customer/order/audit API data is operational state.
-      // Callers may explicitly override this when a future endpoint is safe
-      // to cache.
       cache: init.cache ?? "no-store",
-
       credentials:
         init.credentials ?? "same-origin",
     },
@@ -195,6 +181,19 @@ export async function apiRequest<T>(
       ),
     );
   }
+
+  return response;
+}
+
+
+export async function apiRequest<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const response = await apiResponse(
+    path,
+    init,
+  );
 
   if (
     response.status === 204 ||
