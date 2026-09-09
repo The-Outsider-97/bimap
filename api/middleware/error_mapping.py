@@ -63,21 +63,17 @@ def _report_mapped_error(
     payload = {
         "event": "api_exception_mapped",
         "source_type": type(source).__name__,
-        "source_code": getattr(
-            source,
-            "code",
-            None,
-        ),
+        "source_code": getattr(source, "code", None),
+        "source_operation": getattr(source, "operation", None),
+        "source_field": getattr(source, "field", None),
         "mapped_code": mapped.code,
         "status_code": mapped.status_code,
         "retryable": mapped.retryable,
         "correlation_id": correlation_id,
         "request_id": request_id,
-    }
+        }
 
-    status_code = int(
-        mapped.status_code
-    )
+    status_code = int(mapped.status_code)
 
     if status_code >= 500:
         logger.error(payload)
