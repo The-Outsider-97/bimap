@@ -6,6 +6,10 @@ import os
 import smtplib
 import socket
 import ssl
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -29,7 +33,9 @@ class SMTPSettings:
     from_email: str = field(repr=False)
     port: int = 587
     username: str | None = field(default=None, repr=False)
-    password: str | None = field(default=None, repr=False)
+    oauth_client_id: str | None = field(default=None, repr=False)
+    oauth_client_secret: str | None = field(default=None, repr=False)
+    oauth_refresh_token: str | None = field(default=None, repr=False)
     from_name: str = "BIMAP"
     reply_to: str | None = field(default=None, repr=False)
     use_starttls: bool = True
@@ -88,24 +94,58 @@ class SMTPSettings:
             max_length=512,
             allow_newlines=False,
         )
-        password = self.password
-        if password is not None:
-            if not isinstance(password, str) or not password or len(password) > 4096:
+
+        oauth_client_id = optional_text(
+            self.oauth_client_id,
+            field="oauth_client_id",
+            max_length=1024,
+            allow_newlines=False,
+        )
+
+        oauth_client_secret = optional_text(
+            self.oauth_client_secret,
+            field="oauth_client_secret",
+            max_length=4096,
+            allow_newlines=False,
+        )
+
+        oauth_refresh_token = optional_text(
+            self.oauth_refresh_token,
+            field="oauth_refresh_token",
+            max_length=8192,
+            allow_newlines=False,
+        )
+
+        oauth_values = (
+            oauth_client_id,
+            oauth_client_secret,
+            oauth_refresh_token,
+        )
+
+        if username is None:
+            if any(value is not None for value in oauth_values):
                 raise EmailConfigurationError(
-                    "SMTP password must be non-empty text within the allowed length.",
+                    "SMTP OAuth credentials require an SMTP username.",
                     component="smtp_provider",
                     operation="validate_settings",
-                    field="password",
+                    field="oauth_credentials",
                 )
-        if (username is None) != (password is None):
-            raise EmailConfigurationError(
-                "SMTP username and password must be configured together.",
-                component="smtp_provider",
-                operation="validate_settings",
-                field="credentials",
-            )
+        else:
+            if any(value is None for value in oauth_values):
+                raise EmailConfigurationError(
+                    (
+                        "SMTP XOAUTH2 requires oauth_client_id, "
+                        "oauth_client_secret, and oauth_refresh_token."
+                    ),
+                    component="smtp_provider",
+                    operation="validate_settings",
+                    field="oauth_credentials",
+                )
+
         object.__setattr__(self, "username", username)
-        object.__setattr__(self, "password", password)
+        object.__setattr__(self, "oauth_client_id", oauth_client_id)
+        object.__setattr__(self, "oauth_client_secret", oauth_client_secret)
+        object.__setattr__(self, "oauth_refresh_token", oauth_refresh_token)
         object.__setattr__(
             self,
             "local_hostname",
@@ -152,7 +192,9 @@ class SMTPSettings:
                 maximum=65535,
             ),
             username=env.get(f"{prefix}SMTP_USERNAME"),
-            password=env.get(f"{prefix}SMTP_PASSWORD"),
+            oauth_client_id=env.get(f"{prefix}GOOGLE_CLIENT_ID"),
+            oauth_client_secret=env.get(f"{prefix}GOOGLE_CLIENT_SECRET"),
+            oauth_refresh_token=env.get(f"{prefix}GOOGLE_REFRESH_TOKEN"),
             from_email=from_email,
             from_name=env.get(f"{prefix}EMAIL_FROM_NAME", "BIMAP"),
             reply_to=env.get(f"{prefix}EMAIL_REPLY_TO"),
@@ -198,6 +240,7 @@ class SMTPProvider:
                 "use_starttls": settings.use_starttls,
                 "use_ssl": settings.use_ssl,
                 "authentication_configured": settings.username is not None,
+                "authentication_mode": ("xoauth2" if settings.username is not None else "none"),
             }
         )
 
@@ -272,8 +315,8 @@ class SMTPProvider:
             if self.settings.use_starttls:
                 client.starttls(context=self._tls_context)
                 client.ehlo()
-            if self.settings.username is not None and self.settings.password is not None:
-                client.login(self.settings.username, self.settings.password)
+            if self.settings.username is not None:
+                self._authenticate_xoauth2(client)
             return client
         except Exception:
             if client is not None:
@@ -282,6 +325,211 @@ class SMTPProvider:
                 except OSError:
                     pass
             raise
+
+    def _refresh_oauth_access_token(self) -> str:
+        """
+        Exchange the configured Google OAuth refresh token for a short-lived
+        access token used by SMTP XOAUTH2.
+        """
+        printer.status("EMAIL", "Refreshing Google OAuth access token", "info")
+
+        settings = self.settings
+
+        if (
+            settings.oauth_client_id is None
+            or settings.oauth_client_secret is None
+            or settings.oauth_refresh_token is None
+        ):
+            raise EmailConfigurationError(
+                "Google OAuth credentials are incomplete.",
+                component="smtp_provider",
+                operation="refresh_oauth_access_token",
+                field="oauth_credentials",
+            )
+
+        body = urllib.parse.urlencode(
+            {
+                "client_id": settings.oauth_client_id,
+                "client_secret": settings.oauth_client_secret,
+                "refresh_token": settings.oauth_refresh_token,
+                "grant_type": "refresh_token",
+            }
+        ).encode("ascii")
+
+        request = urllib.request.Request(
+            "https://oauth2.googleapis.com/token",
+            data=body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=settings.timeout_seconds,
+                context=self._tls_context,
+            ) as response:
+                raw = response.read()
+
+        except urllib.error.HTTPError as exc:
+            raise SMTPAuthenticationError(
+                "Google OAuth token refresh was rejected.",
+                component="smtp_provider",
+                operation="refresh_oauth_access_token",
+                context={
+                    "http_status": int(exc.code),
+                    "oauth_stage": "token_refresh",
+                },
+                cause=exc,
+            ) from exc
+
+        except urllib.error.URLError as exc:
+            reason = getattr(
+                exc,
+                "reason",
+                None,
+            )
+
+            if isinstance(reason, (socket.timeout, TimeoutError)):
+                raise EmailTransportTimeoutError(
+                    "Google OAuth token refresh timed out.",
+                    component="smtp_provider",
+                    operation="refresh_oauth_access_token",
+                    cause=exc,
+                ) from exc
+
+            raise EmailTransportUnavailableError(
+                "Google OAuth token endpoint is unavailable.",
+                component="smtp_provider",
+                operation="refresh_oauth_access_token",
+                cause=exc,
+            ) from exc
+
+        except (
+            socket.timeout,
+            TimeoutError,
+        ) as exc:
+            raise EmailTransportTimeoutError(
+                "Google OAuth token refresh timed out.",
+                component="smtp_provider",
+                operation="refresh_oauth_access_token",
+                cause=exc,
+            ) from exc
+
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise SMTPAuthenticationError(
+                "Google OAuth token response is invalid.",
+                component="smtp_provider",
+                operation="refresh_oauth_access_token",
+                context={
+                    "oauth_stage":
+                        "token_response",
+                },
+                cause=exc,
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise SMTPAuthenticationError(
+                "Google OAuth token response is invalid.",
+                component="smtp_provider",
+                operation="refresh_oauth_access_token",
+                context={
+                    "oauth_stage":
+                        "token_response",
+                },
+            )
+
+        access_token = payload.get("access_token")
+
+        if (
+            not isinstance(access_token, str)
+            or not access_token.strip()
+        ):
+            raise SMTPAuthenticationError(
+                "Google OAuth response contains no access token.",
+                component="smtp_provider",
+                operation="refresh_oauth_access_token",
+                context={
+                    "oauth_stage":
+                        "token_response",
+                    "oauth_error":
+                        payload.get("error"),
+                },
+            )
+
+        access_token = access_token.strip()
+
+        if not access_token.isascii():
+            raise SMTPAuthenticationError(
+                "Google OAuth access token is not ASCII.",
+                component="smtp_provider",
+                operation="refresh_oauth_access_token",
+            )
+
+        logger.info(
+            {
+                "event":
+                    "smtp_oauth_access_token_refreshed",
+                "provider":
+                    "google",
+            }
+        )
+
+        return access_token
+
+    def _authenticate_xoauth2(self, client: smtplib.SMTP) -> None:
+        """
+        Authenticate an established SMTP connection using Google's
+        SASL XOAUTH2 mechanism.
+        """
+        printer.status(
+            "EMAIL",
+            "Authenticating SMTP with XOAUTH2",
+            "info",
+        )
+
+        username = self.settings.username
+
+        if username is None:
+            raise EmailConfigurationError(
+                "SMTP XOAUTH2 username is not configured.",
+                component="smtp_provider",
+                operation="authenticate_xoauth2",
+                field="username",
+            )
+
+        access_token = self._refresh_oauth_access_token()
+
+        initial_response = (
+            f"user={username}\x01"
+            f"auth=Bearer {access_token}\x01\x01"
+        )
+
+        def auth_object(challenge: bytes | None = None) -> str:
+            # Gmail returns a SASL challenge when authentication fails.
+            # RFC/SASL requires an empty response to terminate that exchange.
+            if challenge is not None:
+                return ""
+
+            return initial_response
+
+        client.auth("XOAUTH2", auth_object, initial_response_ok=True)
+
+        logger.info(
+            {
+                "event": "smtp_xoauth2_authenticated",
+                "host": self.settings.host,
+                "username": mask_email_address(username),
+            }
+        )
 
     def send(self, message: OutboundEmail) -> EmailDeliveryReceipt:
         printer.status("EMAIL", "Sending transactional email", "info")
@@ -346,7 +594,7 @@ class SMTPProvider:
                 context={"host": self.settings.host, "port": self.settings.port},
                 cause=exc,
             ) from exc
-        except (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected, ConnectionError, OSError) as exc:
+        except (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected, ConnectionError) as exc:
             smtp_code = getattr(exc, "smtp_code", None)
             if isinstance(smtp_code, int) and 400 <= smtp_code < 500:
                 raise SMTPTemporaryFailureError(
@@ -363,7 +611,7 @@ class SMTPProvider:
                 context={"host": self.settings.host, "port": self.settings.port},
                 cause=exc,
             ) from exc
-        except smtplib.SMTPException as exc:
+        except (smtplib.SMTPException, OSError) as exc:
             raise SMTPConnectionError(
                 "SMTP transport failed.",
                 component="smtp_provider",
