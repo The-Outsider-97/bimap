@@ -415,33 +415,6 @@ class AuthenticationService:
             phone_e164=normalized_phone,
         )
 
-        if pending_account is not None:
-            verification = (
-                self.authentication.issue_signup_verification(
-                    auth_user_id=pending_account.auth_user_id,
-                    username=pending_account.username,
-                    email=pending_account.email,
-                    phone_e164=pending_account.phone_e164,
-                    country=pending_account.country,
-                )
-            )
-
-            logger.info(
-                {
-                    "event":
-                        "authentication_service_signup_resumed",
-                    "account_id":
-                        pending_account.account_id,
-                    "status":
-                        pending_account.status.value,
-                }
-            )
-
-            return SignupStartResult(
-                account=pending_account,
-                verification=verification,
-            )
-
         identity_result = self.authentication.create_identity(
             username=normalized_username,
             password=password,
