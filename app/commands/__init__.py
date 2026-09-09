@@ -6,6 +6,7 @@ from .convert_model import *
 from .create_order import *
 from .create_upload_slot import *
 from .enqueue_audit import *
+from .extract_model_data import *
 from .grant_entitlement import *
 from .handle_payment import *
 from .release_report import *
@@ -18,6 +19,7 @@ from .convert_model import __all__ as _convert_model_exports
 from .create_order import __all__ as _create_order_exports
 from .create_upload_slot import __all__ as _create_upload_slot_exports
 from .enqueue_audit import __all__ as _enqueue_audit_exports
+from .extract_model_data import __all__ as _extract_model_data_exports
 from .grant_entitlement import __all__ as _grant_entitlement_exports
 from .handle_payment import __all__ as _handle_payment_exports
 from .release_report import __all__ as _release_report_exports
@@ -31,6 +33,7 @@ __all__ = [
     *_create_order_exports,
     *_create_upload_slot_exports,
     *_enqueue_audit_exports,
+    *_extract_model_data_exports,
     *_grant_entitlement_exports,
     *_handle_payment_exports,
     *_release_report_exports,
