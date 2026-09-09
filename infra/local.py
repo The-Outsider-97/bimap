@@ -43,12 +43,11 @@ from typing import BinaryIO
 from src.functions.auth import AuthService as SLAIAuthService  # type: ignore
 from ..notifications.email_models import EmailVerificationData
 from ..notifications.email_service import EmailService
-from ..notifications.utils.email_errors import EmailError
+from ..notifications.utils.email_errors import EmailError as BIMAPEmailError
 from src.functions.phone_verification import PhoneVerificationService  # type: ignore
 from src.functions.utils.functions_error import (  # type: ignore
     AccountLockedError,
     CredentialPolicyError,
-    EmailError,
     InvalidCountryCodeError,
     InvalidCredentialsError,
     InvalidPhoneNumberError,
@@ -345,7 +344,7 @@ class LocalSLAIAuthentication(Authentication):
                 correlation_id=challenge_id,
             )
 
-        except EmailError as exc:
+        except BIMAPEmailError as exc:
             raise AppPortUnavailableError(
                 "Email verification delivery "
                 "is unavailable.",
