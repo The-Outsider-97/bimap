@@ -49,6 +49,9 @@ dependencies = [
     "fastapi~=0.141.1",
     "uvicorn[standard]~=0.52.4",
     "PyYAML>=6.0,<7",
+    "ifcopenshell~=0.8.5",
+    "python-multipart~=0.0.32",
+    "twilio~=9.11.0",
 ]
 
 
@@ -123,6 +126,8 @@ packages = [
     "applications.bimap.domain.reports",
     "applications.bimap.domain.requirements",
     "applications.bimap.domain.utils",
+
+    "applications.bimap.infra",
 
     "applications.bimap.notifications",
     "applications.bimap.notifications.providers",
