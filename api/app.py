@@ -42,6 +42,8 @@ from .middleware.request_limits import RateLimiter, RequestLimitPolicy, RequestL
 from .middleware.security import Security, SecurityPolicy
 from .routes.admin import RouteAdmin
 from .routes.checkout import RouteCheckout
+from .routes.conversions import RouteConversions
+from .routes.data_extractions import RouteDataExtractions
 from .routes.deletion import RouteDeletion
 from .routes.downloads import RouteDownloads
 from .routes.entitlements import RouteEntitlements
@@ -510,6 +512,15 @@ def _construct_route_groups(dependencies: APIDependencies) -> tuple[Any, ...]:
         RouteWebhooks(
             use_cases.handle_payment,
             signature_header=hooks.payment_signature_header,
+        ),
+        RouteConversions(
+            cast(Any, use_cases).convert_model,
+            auth.service,
+        ),
+
+        RouteDataExtractions(
+            cast(Any, use_cases).extract_model_data,
+            auth.service,
         ),
     ]
 

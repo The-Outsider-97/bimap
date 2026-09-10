@@ -36,13 +36,14 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 from fastapi import FastAPI, Request # type: ignore
-
 from .utils.api_errors import APIConfigurationError
 from .utils.api_helpers import *
 from ..app.commands.begin_checkout import BeginCheckout
 from ..app.commands.cancel_order import CancelOrder
+from ..app.commands.convert_model import ConvertModel
 from ..app.commands.create_order import CreateOrder
 from ..app.commands.create_upload_slot import CreateUploadSlot
+from ..app.commands.extract_model_data import ExtractModelData
 from ..app.commands.grant_entitlement import GrantEntitlement
 from ..app.commands.handle_payment import HandlePayment
 from ..app.commands.request_deletion import RequestDeletion
@@ -144,6 +145,8 @@ class APIUseCases:
     grant_entitlement: GrantEntitlement
     list_reports: ListReports
     request_deletion: RequestDeletion
+    convert_model: ConvertModel
+    extract_model_data: ExtractModelData
 
     def __post_init__(self) -> None:
         announce_api_action(
@@ -166,6 +169,8 @@ class APIUseCases:
             ("grant_entitlement", self.grant_entitlement, GrantEntitlement),
             ("list_reports", self.list_reports, ListReports),
             ("request_deletion", self.request_deletion, RequestDeletion),
+            ("convert_model", self.convert_model, ConvertModel),
+            ("extract_model_data", self.extract_model_data, ExtractModelData),
         )
         for field, value, expected in dependencies:
             _require_handler(value, expected, field=field)
