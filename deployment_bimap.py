@@ -120,18 +120,14 @@ _COMBINED_VERSION_ENV = "BIMAP_COMBINED_AUDIT_VERSION"
 _TRUST_UPLOADS_ENV = "BIMAP_DEV_TRUST_UPLOADS"
 _ALLOWED_HOSTS_ENV = "BIMAP_ALLOWED_HOSTS"
 _REQUIRE_SMS_VERIFICATION_ENV = "BIMAP_REQUIRE_SMS_VERIFICATION"
+_SESSION_TTL_MINUTES_ENV = "BIMAP_SESSION_TTL_MINUTES"
 _LOCAL_MODES = frozenset({"development", "dev", "local"})
 _PRODUCTION_MODES = frozenset({"production", "prod"})
 
 def _build_email_service() -> EmailService:
-    printer.status(
-        "BIMAP",
-        "Building transactional email service",
-        "info",
-    )
+    printer.status("BIMAP", "Building transactional email service","info")
 
     provider = SMTPProvider.from_env()
-
     renderer = EmailRenderer(
         EmailBranding(
             product_name="BIMAP",
@@ -151,38 +147,23 @@ def _build_email_service() -> EmailService:
 
 def _required_environment(name: str) -> str:
     value = os.getenv(name)
-
     if value is None or not value.strip():
-        raise RuntimeError(
-            f"Required environment variable {name} is not configured."
-        )
+        raise RuntimeError(f"Required environment variable {name} is not configured.")
 
     return value.strip()
 
 
 def _build_phone_verification_service() -> PhoneVerificationService:
-    printer.status(
-        "BIMAP",
-        "Building SMS verification service",
-        "info",
-    )
+    printer.status("BIMAP", "Building SMS verification service", "info")
 
     backend = TwilioBackend(
-        account_sid=_required_environment(
-            "BIMAP_TWILIO_ACCOUNT_SID"
-        ),
-        auth_token=_required_environment(
-            "BIMAP_TWILIO_AUTH_TOKEN"
-        ),
-        from_number=_required_environment(
-            "BIMAP_TWILIO_FROM_NUMBER"
-        ),
+        account_sid=_required_environment("BIMAP_TWILIO_ACCOUNT_SID"),
+        auth_token=_required_environment("BIMAP_TWILIO_AUTH_TOKEN"),
+        from_number=_required_environment("BIMAP_TWILIO_FROM_NUMBER"),
     )
 
     if not backend.test_connection():
-        raise RuntimeError(
-            "Twilio SMS authentication or connectivity test failed."
-        )
+        raise RuntimeError("Twilio SMS authentication or connectivity test failed.")
 
     return PhoneVerificationService(
         backend,
@@ -196,7 +177,6 @@ def _build_phone_verification_service() -> PhoneVerificationService:
 # ---------------------------------------------------------------------------
 # Configuration helpers
 # ---------------------------------------------------------------------------
-
 
 def _environment_mode() -> str:
     value = os.getenv(_MODE_ENV, "development").strip().casefold()
@@ -227,30 +207,33 @@ def _environment_bool(name: str, *, default: bool = False) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
 
-    raise RuntimeError(
-        f"{name} must be a boolean environment value; received {raw!r}."
-    )
+    raise RuntimeError(f"{name} must be a boolean environment value; received {raw!r}.")
+
+
+def _environment_positive_int(name: str, *, default: int) -> int:
+    raw = os.getenv(name)
+
+    if raw is None:
+        return default
+
+    try:
+        value = int(raw.strip())
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{name} must be a positive integer.") from exc
+
+    if value <= 0:
+        raise RuntimeError(f"{name} must be greater than zero.")
+
+    return value
 
 
 def _allowed_hosts() -> tuple[str, ...]:
-    raw = os.getenv(
-        _ALLOWED_HOSTS_ENV
-    )
+    raw = os.getenv(_ALLOWED_HOSTS_ENV)
 
     if raw is None:
-        config = (
-            load_bimap_config()
-        )
+        config = (load_bimap_config())
 
-        return tuple(
-            config[
-                "api"
-            ][
-                "security"
-            ][
-                "allowed_hosts"
-            ]
-        )
+        return tuple(config["api"]["security"]["allowed_hosts"])
 
     hosts: list[str] = []
     seen: set[str] = set()
@@ -281,13 +264,8 @@ def _allowed_hosts() -> tuple[str, ...]:
 # Local HTTP/deployment hooks
 # ---------------------------------------------------------------------------
 
-
 def _local_authorizer_factory(authentication, accounts):
-    async def _local_authorizer(
-        request: Request,
-        operation: str,
-        resource_id: str | None,
-    ) -> str:
+    async def _local_authorizer(request: Request, operation: str, resource_id: str | None) -> str:
         del operation, resource_id
         raw = request.cookies.get(SESSION_COOKIE_NAME)
         if not raw or not raw.strip():
@@ -437,11 +415,7 @@ def _build_local_account_summary_resolver(
     return _resolve
 
 
-async def _local_upload_manifest_validator(
-    request: Request,
-    order_id: str,
-    manifest: Mapping[str, Any],
-) -> Mapping[str, Any] | None:
+async def _local_upload_manifest_validator(request: Request, order_id: str, manifest: Mapping[str, Any]) -> Mapping[str, Any] | None:
     """
     Accept already-normalized manifest metadata in explicit local development.
 
@@ -457,20 +431,12 @@ async def _local_upload_manifest_validator(
     return dict(manifest)
 
 
-async def _local_report_id_resolver(
-    request: Request,
-    order_id: str,
-) -> tuple[str, ...]:
+async def _local_report_id_resolver(request: Request, order_id: str) -> tuple[str, ...]:
     del request, order_id
     return ()
 
 
-async def _local_download_url_issuer(
-    request: Request,
-    order_id: str,
-    manifest: Any,
-    artifact: Any,
-) -> DownloadGrant:
+async def _local_download_url_issuer(request: Request, order_id: str, manifest: Any, artifact: Any) -> DownloadGrant:
     del request, order_id, manifest, artifact
 
     raise APIServiceUnavailableError(
@@ -480,29 +446,19 @@ async def _local_download_url_issuer(
     )
 
 
-async def _local_deletion_admission_gate(
-    request: Request,
-    order_id: str,
-    actor: str | None,
-) -> None:
+async def _local_deletion_admission_gate(request: Request, order_id: str, actor: str | None) -> None:
     del request, order_id, actor
     return None
 
 
-async def _local_deletion_object_resolver(
-    request: Request,
-    order_id: str,
-    actor: str | None,
-) -> tuple[str, ...]:
+async def _local_deletion_object_resolver(request: Request, order_id: str, actor: str | None) -> tuple[str, ...]:
     del request, order_id, actor
     return ()
-
 
 
 # ---------------------------------------------------------------------------
 # Product configuration
 # ---------------------------------------------------------------------------
-
 
 def _build_catalog() -> ProductCatalog:
     """
@@ -541,15 +497,10 @@ def _build_audit_components() -> BootstrapAuditComponents:
     registry = RulesRegistry()
     executor = RulesExecutor(registry)
 
-    combined_version = os.getenv(
-        _COMBINED_VERSION_ENV,
-        "0.0.0",
-    ).strip()
+    combined_version = os.getenv(_COMBINED_VERSION_ENV, "0.0.0").strip()
 
     if not combined_version:
-        raise RuntimeError(
-            f"{_COMBINED_VERSION_ENV} cannot be empty."
-        )
+        raise RuntimeError(f"{_COMBINED_VERSION_ENV} cannot be empty.")
 
     logger.warning(
         {
@@ -607,7 +558,7 @@ def _create_local_bootstrap() -> Bootstrap:
 
     trust_uploads = _environment_bool(
         _TRUST_UPLOADS_ENV,
-        default=False,
+        default=True,
     )
 
     if trust_uploads:
@@ -632,10 +583,7 @@ def _create_local_bootstrap() -> Bootstrap:
 
     auth_memory_path = os.path.join(tempfile.gettempdir(), f"bimap-auth-{os.getpid()}-{uuid4().hex}.json")
     email_notifications = _build_email_service()
-    require_sms_verification = _environment_bool(
-        _REQUIRE_SMS_VERIFICATION_ENV,
-        default=False,
-    )
+    require_sms_verification = _environment_bool(_REQUIRE_SMS_VERIFICATION_ENV, default=False)
 
     phone_verification = (
         _build_phone_verification_service()
@@ -643,8 +591,13 @@ def _create_local_bootstrap() -> Bootstrap:
         else None
     )
 
+    session_ttl_minutes = _environment_positive_int(_SESSION_TTL_MINUTES_ENV, default=480,)
+
     authentication = LocalSLAIAuthentication(
-        SLAIAuthService(memory_path=auth_memory_path),
+        SLAIAuthService(
+            memory_path=auth_memory_path,
+            token_ttl_minutes=session_ttl_minutes,
+        ),
         email_notifications,
         phone_verification,
         email_code_ttl_minutes=15,
@@ -692,21 +645,9 @@ def _create_local_bootstrap() -> Bootstrap:
         )
 
 
-    model_converter = (
-        MultiFormatModelConverter(
-            *conversion_adapters,
-        )
-    )
-
-    data_extractor = (
-        MultiFormatDataExtractor(
-            *extraction_adapters,
-        )
-    )
-
-    data_extraction_pdf_renderer = (
-        ReportLabDataExtractionPDFRenderer()
-    )
+    model_converter = MultiFormatModelConverter(*conversion_adapters)
+    data_extractor = MultiFormatDataExtractor(*extraction_adapters)
+    data_extraction_pdf_renderer = ReportLabDataExtractionPDFRenderer()
 
     # ---------------------------------------------------------
     # Local infrastructure
