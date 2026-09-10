@@ -492,32 +492,48 @@ export function allElementTargets(
   return result;
 }
 
+export type AuditSourceDto = {
+  readonly source_ref: string;
+  readonly filename: string;
+};
+
+
 export function startAudit(
   orderId: string,
   input: {
     jobId: string;
     idempotencyKey: string;
-    evidenceRefs?: readonly string[];
-    evidenceManifestRef?: string | null;
+    sources: readonly AuditSourceDto[];
     metadata?: Readonly<Record<string, unknown>>;
   },
 ): Promise<StartAuditResponseDto> {
+  if (input.sources.length === 0) {
+    throw new TypeError(
+      "At least one staged audit source is required.",
+    );
+  }
+
   return apiJsonRequest<StartAuditResponseDto>(
     `/orders/${encodeURIComponent(orderId)}/audit`,
     {
       method: "POST",
       headers: {
-        "Idempotency-Key": input.idempotencyKey,
+        "Idempotency-Key":
+          input.idempotencyKey,
       },
       body: {
-        job_id: input.jobId,
-        ...(input.evidenceRefs && input.evidenceRefs.length > 0
-          ? { evidence_refs: input.evidenceRefs }
+        job_id:
+          input.jobId,
+
+        sources:
+          input.sources,
+
+        ...(input.metadata
+          ? {
+              metadata:
+                input.metadata,
+            }
           : {}),
-        ...(input.evidenceManifestRef
-          ? { evidence_manifest_ref: input.evidenceManifestRef }
-          : {}),
-        ...(input.metadata ? { metadata: input.metadata } : {}),
       },
     },
   );
