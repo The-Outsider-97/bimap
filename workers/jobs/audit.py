@@ -23,6 +23,7 @@ from typing import Any
 
 from ..utils.workers_errors import *
 from ..utils.workers_helpers import *
+from ...app.services.audit_input_service import AuditInputService
 from ...app.services.audit_service import *
 from ...app.services.order_service import OrderService
 from ...audit_engine.engine import *
@@ -40,9 +41,9 @@ _COMPONENT = "worker_audit"
 class WorkerAudit:
     """Execute one validated active ``AuditJob`` through ``AuditService``."""
 
-    __slots__ = ("_service", "_order_service",)
+    __slots__ = ("_service", "_order_service", "_audit_inputs",)
 
-    def __init__(self, service: AuditService, order_service: OrderService) -> None:
+    def __init__(self, service: AuditService, order_service: OrderService, audit_inputs: AuditInputService) -> None:
         announce_worker_action(
             printer,
             logger,
@@ -51,36 +52,33 @@ class WorkerAudit:
             event="worker_audit_init_start",
         )
 
-        if not isinstance(service, AuditService,):
+        if not isinstance(service, AuditService):
             raise WorkerConfigurationError(
                 "service must be an AuditService.",
                 component=_COMPONENT,
                 operation="initialize",
                 field="service",
-                context={
-                    "received_type":
-                        type(service).__name__,
-                },
             )
 
-        if not isinstance(order_service, OrderService,):
+        if not isinstance( order_service, OrderService):
             raise WorkerConfigurationError(
                 "order_service must be an OrderService.",
                 component=_COMPONENT,
                 operation="initialize",
                 field="order_service",
-                context={
-                    "received_type":
-                        type(
-                            order_service
-                        ).__name__,
-                },
+            )
+
+        if not isinstance(audit_inputs, AuditInputService):
+            raise WorkerConfigurationError(
+                "audit_inputs must be an AuditInputService.",
+                component=_COMPONENT,
+                operation="initialize",
+                field="audit_inputs",
             )
 
         self._service = service
-        self._order_service = (
-            order_service
-        )
+        self._order_service = order_service
+        self._audit_inputs = audit_inputs
 
         logger.debug(
             {
@@ -232,6 +230,29 @@ class WorkerAudit:
                     "returned_order_id": validated.job.order_id,
                 },
             )
+
+        if (
+            family_payload is None
+            and project_payload is None
+        ):
+            if job.evidence_manifest_ref is None:
+                raise WorkerValidationError(
+                    "AuditJob does not reference a prepared audit-input manifest.",
+                    component=_COMPONENT,
+                    operation="execute",
+                    field="job.evidence_manifest_ref",
+                    job_type="audit",
+                    job_id=job.job_id,
+                )
+
+            resolved = self._audit_inputs.resolve(
+                job.evidence_manifest_ref,
+                expected_order_id=job.order_id,
+                expected_product_code=job.product_code,
+            )
+
+            family_payload = resolved.family_payload
+            project_payload = resolved.project_payload
 
         logger.info(
             {
