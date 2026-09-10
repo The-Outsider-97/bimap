@@ -117,7 +117,7 @@ export type SignupResponse = {
 export type VerifySignupPayload = {
   username: string;
   emailCode: string;
-  smsCode: string;
+  smsCode?: string;
 };
 
 export type LoginPayload = {
