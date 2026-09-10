@@ -120,6 +120,10 @@ export function AuthModal({
       emailCode: "",
       smsCode: "",
     });
+  const [
+    smsRequired,
+    setSmsRequired,
+  ] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -305,12 +309,20 @@ export function AuthModal({
           result.username,
         );
 
+        setSmsRequired(
+          Boolean(
+            result.phoneMasked,
+          ),
+        );
+
         setStep(
           "verify",
         );
 
         setMessage(
-          "Verification codes were requested for your email address and mobile number.",
+          result.phoneMasked
+            ? "Verification codes were requested for your email address and mobile number."
+            : "A verification code was sent to your email address.",
         );
       } catch (error) {
         setMessage(
@@ -339,7 +351,10 @@ export function AuthModal({
             "",
           );
 
-      if (sms.length !== 6) {
+      if (
+        smsRequired &&
+        sms.length !== 6
+      ) {
         setMessage(
           "The SMS verification code must contain exactly six digits.",
         );
@@ -371,7 +386,9 @@ export function AuthModal({
               .trim(),
 
           smsCode:
-            sms,
+            smsRequired
+              ? sms
+              : undefined,
         });
 
         await onAuthenticated();
@@ -899,17 +916,15 @@ export function AuthModal({
 
                 <div>
                   <h3>
-                    Confirm both
-                    channels.
+                    {smsRequired
+                      ? "Confirm both channels."
+                      : "Confirm your email."}
                   </h3>
 
                   <p>
-                    Enter the
-                    verification code
-                    sent to your email
-                    address and the
-                    six-digit code sent
-                    by SMS.
+                    {smsRequired
+                      ? "Enter the verification code sent to your email address and the six-digit code sent by SMS."
+                      : "Enter the verification code sent to your email address."}
                   </p>
                 </div>
               </div>
@@ -950,6 +965,7 @@ export function AuthModal({
                 />
               </div>
 
+            {smsRequired ? (
               <div className="account-field">
                 <label
                   htmlFor=
@@ -996,6 +1012,7 @@ export function AuthModal({
                   }
                 />
               </div>
+            ) : null}
 
               <button
                 type="submit"
@@ -1048,8 +1065,9 @@ export function AuthModal({
                   }
                 }}
               >
-                Resend both
-                verification codes
+                {smsRequired
+                  ? "Resend both verification codes"
+                  : "Resend verification code"}
               </button>
             </form>
           ) : null}
