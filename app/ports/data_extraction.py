@@ -257,45 +257,14 @@ class DataExtractionCapability:
                 field="included_artifacts",
             )
 
-        object.__setattr__(
-            self,
-            "source_format",
-            source_format,
-        )
+        object.__setattr__(self, "source_format", source_format)
+        object.__setattr__(self, "extensions", tuple(extensions))
+        object.__setattr__(self, "datasets", datasets)
+        object.__setattr__(self, "package_content_type", package_content_type)
+        object.__setattr__(self, "package_extension", package_extension)
+        object.__setattr__(self, "included_artifacts", artifacts)
 
-        object.__setattr__(
-            self,
-            "extensions",
-            tuple(extensions),
-        )
-
-        object.__setattr__(
-            self,
-            "datasets",
-            datasets,
-        )
-
-        object.__setattr__(
-            self,
-            "package_content_type",
-            package_content_type,
-        )
-
-        object.__setattr__(
-            self,
-            "package_extension",
-            package_extension,
-        )
-
-        object.__setattr__(
-            self,
-            "included_artifacts",
-            artifacts,
-        )
-
-    def to_dict(
-        self,
-    ) -> dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "source_format":
                 self.source_format.value,
@@ -306,12 +275,9 @@ class DataExtractionCapability:
                     item.value
                     for item in self.datasets
                 ),
-            "package_content_type":
-                self.package_content_type,
-            "package_extension":
-                self.package_extension,
-            "included_artifacts":
-                self.included_artifacts,
+            "package_content_type": self.package_content_type,
+            "package_extension": self.package_extension,
+            "included_artifacts": self.included_artifacts,
         }
 
 
@@ -322,16 +288,8 @@ class DataSourceInspection:
     product_count: int
     project_name: str | None = None
 
-    def __post_init__(
-        self,
-    ) -> None:
-        object.__setattr__(
-            self,
-            "source_format",
-            ExtractionSourceFormat.parse(
-                self.source_format
-            ),
-        )
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source_format", ExtractionSourceFormat.parse(self.source_format))
 
         object.__setattr__(
             self,
@@ -371,18 +329,12 @@ class DataSourceInspection:
             ),
         )
 
-    def to_dict(
-        self,
-    ) -> dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return {
-            "source_format":
-                self.source_format.value,
-            "schema":
-                self.schema,
-            "product_count":
-                self.product_count,
-            "project_name":
-                self.project_name,
+            "source_format": self.source_format.value,
+            "schema": self.schema,
+            "product_count": self.product_count,
+            "project_name": self.project_name,
         }
 
 
@@ -398,13 +350,8 @@ class ExtractedModelData:
     counts: Mapping[str, int]
     ifc_class_counts: Mapping[str, int]
 
-    def __post_init__(
-        self,
-    ) -> None:
-        if not isinstance(
-            self.inspection,
-            DataSourceInspection,
-        ):
+    def __post_init__(self) -> None:
+        if not isinstance(self.inspection, DataSourceInspection):
             raise AppIntegrityError(
                 "inspection must be DataSourceInspection.",
                 component=_COMPONENT,
@@ -412,41 +359,17 @@ class ExtractedModelData:
                 field="inspection",
             )
 
-        project = to_app_primitive(
-            dict(self.project),
-            field="project",
-        )
-
-        units = to_app_primitive(
-            list(self.units),
-            field="units",
-        )
-
+        project = to_app_primitive(dict(self.project), field="project")
+        units = to_app_primitive(list(self.units), field="units")
         datasets = to_app_primitive(
             {
                 key: list(value)
                 for key, value
-                in self.datasets.items()
-            },
-            field="datasets",
-        )
+                in self.datasets.items()}, field="datasets")
+        counts = to_app_primitive(dict(self.counts), field="counts")
+        class_counts = to_app_primitive(dict(self.ifc_class_counts), field="ifc_class_counts")
 
-        counts = to_app_primitive(
-            dict(self.counts),
-            field="counts",
-        )
-
-        class_counts = to_app_primitive(
-            dict(
-                self.ifc_class_counts
-            ),
-            field="ifc_class_counts",
-        )
-
-        if not isinstance(
-            project,
-            dict,
-        ):
+        if not isinstance(project, dict):
             raise AppIntegrityError(
                 "project did not normalize "
                 "to a JSON object.",
@@ -455,10 +378,7 @@ class ExtractedModelData:
                 field="project",
             )
 
-        if not isinstance(
-            units,
-            list,
-        ):
+        if not isinstance(units, list):
             raise AppIntegrityError(
                 "units did not normalize "
                 "to a JSON array.",
@@ -467,10 +387,7 @@ class ExtractedModelData:
                 field="units",
             )
 
-        if not isinstance(
-            datasets,
-            dict,
-        ):
+        if not isinstance(datasets, dict):
             raise AppIntegrityError(
                 "datasets did not normalize "
                 "to a JSON object.",
@@ -479,19 +396,10 @@ class ExtractedModelData:
                 field="datasets",
             )
 
-        normalized_datasets: dict[
-            str,
-            tuple[
-                Mapping[str, Any],
-                ...,
-            ],
-        ] = {}
+        normalized_datasets: dict[str, tuple[Mapping[str, Any], ...]] = {}
 
         for key, rows in datasets.items():
-            if not isinstance(
-                rows,
-                list,
-            ):
+            if not isinstance(rows, list):
                 raise AppIntegrityError(
                     "Extraction dataset must "
                     "be a JSON array.",
@@ -500,15 +408,10 @@ class ExtractedModelData:
                     field=f"datasets.{key}",
                 )
 
-            normalized_rows: list[
-                Mapping[str, Any]
-            ] = []
+            normalized_rows: list[Mapping[str, Any]] = []
 
             for row in rows:
-                if not isinstance(
-                    row,
-                    dict,
-                ):
+                if not isinstance(row, dict):
                     raise AppIntegrityError(
                         "Extraction dataset rows "
                         "must be JSON objects.",
@@ -517,27 +420,13 @@ class ExtractedModelData:
                         field=f"datasets.{key}",
                     )
 
-                normalized_rows.append(
-                    MappingProxyType(
-                        dict(row)
-                    )
-                )
+                normalized_rows.append(MappingProxyType(dict(row)))
 
-            normalized_datasets[
-                str(key)
-            ] = tuple(
-                normalized_rows
-            )
+            normalized_datasets[str(key)] = tuple(normalized_rows )
 
-        normalized_counts: dict[
-            str,
-            int,
-        ] = {}
+        normalized_counts: dict[str, int] = {}
 
-        if not isinstance(
-            counts,
-            dict,
-        ):
+        if not isinstance(counts, dict):
             raise AppIntegrityError(
                 "counts did not normalize "
                 "to a JSON object.",
@@ -590,52 +479,13 @@ class ExtractedModelData:
                 operation="validate_extracted_data",
             )
 
-        object.__setattr__(
-            self,
-            "project",
-            MappingProxyType(
-                dict(project)
-            ),
-        )
-
-        object.__setattr__(
-            self,
-            "units",
-            tuple(
-                MappingProxyType(
-                    dict(item)
-                )
+        object.__setattr__(self, "project", MappingProxyType(dict(project)))
+        object.__setattr__(self, "units", tuple(MappingProxyType(dict(item))
                 for item in units
-                if isinstance(
-                    item,
-                    dict,
-                )
-            ),
-        )
-
-        object.__setattr__(
-            self,
-            "datasets",
-            MappingProxyType(
-                normalized_datasets
-            ),
-        )
-
-        object.__setattr__(
-            self,
-            "counts",
-            MappingProxyType(
-                normalized_counts
-            ),
-        )
-
-        object.__setattr__(
-            self,
-            "ifc_class_counts",
-            MappingProxyType(
-                normalized_class_counts
-            ),
-        )
+                if isinstance(item, dict)))
+        object.__setattr__(self, "datasets", MappingProxyType(normalized_datasets))
+        object.__setattr__(self, "counts", MappingProxyType(normalized_counts))
+        object.__setattr__(self, "ifc_class_counts", MappingProxyType(normalized_class_counts))
 
     def to_dict(
         self,
@@ -681,9 +531,7 @@ class DataExtractionPackage:
     pdf_size_bytes: int
     hash_algorithm: str = "sha256"
 
-    def __post_init__(
-        self,
-    ) -> None:
+    def __post_init__(self) -> None:
         object.__setattr__(
             self,
             "stream",
@@ -696,11 +544,7 @@ class DataExtractionPackage:
             ),
         )
 
-        for field_name in (
-            "filename",
-            "json_filename",
-            "pdf_filename",
-        ):
+        for field_name in ("filename", "json_filename", "pdf_filename"):
             value = require_app_text(
                 getattr(
                     self,
@@ -731,12 +575,7 @@ class DataExtractionPackage:
                     field=field_name,
                 )
 
-            object.__setattr__(
-                self,
-                field_name,
-                value,
-            )
-
+            object.__setattr__(self, field_name, value)
         object.__setattr__(
             self,
             "content_type",
@@ -777,11 +616,7 @@ class DataExtractionPackage:
                     field=field_name,
                 )
 
-            object.__setattr__(
-                self,
-                field_name,
-                value,
-            )
+            object.__setattr__(self, field_name, value)
 
         algorithm = require_app_text(
             self.hash_algorithm,
@@ -822,58 +657,30 @@ class DataExtractionPackage:
                 field="content_hash",
             )
 
-        object.__setattr__(
-            self,
-            "hash_algorithm",
-            algorithm,
-        )
+        object.__setattr__(self, "hash_algorithm", algorithm)
+        object.__setattr__(self, "content_hash", digest)
 
-        object.__setattr__(
-            self,
-            "content_hash",
-            digest,
-        )
-
-    def read_bytes(
-        self,
-    ) -> bytes:
+    def read_bytes(self) -> bytes:
         self.stream.seek(0)
 
-        payload = (
-            self.stream.read()
-        )
+        payload = (self.stream.read())
 
         self.stream.seek(0)
 
-        return bytes(
-            payload
-        )
+        return bytes(payload)
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         self.stream.close()
 
 
 class DataExtractor(ABC):
     @property
     @abstractmethod
-    def capabilities(
-        self,
-    ) -> tuple[
-        DataExtractionCapability,
-        ...,
-    ]:
+    def capabilities(self,) -> tuple[DataExtractionCapability, ...]:
         raise NotImplementedError
 
     @abstractmethod
-    def inspect(
-        self,
-        stream: BinaryIO,
-        *,
-        source_format:
-            ExtractionSourceFormat,
-    ) -> DataSourceInspection:
+    def inspect(self, stream: BinaryIO, *, source_format: ExtractionSourceFormat) -> DataSourceInspection:
         raise NotImplementedError
 
     @abstractmethod
@@ -894,14 +701,7 @@ class DataExtractor(ABC):
 
 class DataExtractionPDFRenderer(ABC):
     @abstractmethod
-    def render(
-        self,
-        *,
-        document: Mapping[
-            str,
-            Any,
-        ],
-    ) -> bytes:
+    def render(self, *, document: Mapping[str, Any]) -> bytes:
         raise NotImplementedError
 
 
