@@ -324,8 +324,12 @@ class RouteAuth:
                 "username",
                 "email",
                 "password",
-            ),
-            optional=("occupation", "business"),
+                ),
+            optional=(
+                "occupation",
+                "business",
+                "smscode",
+                ),
         )
 
         try:
@@ -421,12 +425,13 @@ class RouteAuth:
         )
         payload = validate_object_fields(
             await read_json_object(request),
-            required=("username", "emailCode", "smsCode"),
+            required=("username", "emailCode"),
+            optional=("smsCode",),
         )
         result = self._authentication.verify_signup(
             username=require_api_text(payload["username"], field="username", component=_COMPONENT, operation="verify_signup", max_length=64),
             email_code=require_api_text(payload["emailCode"], field="emailCode", component=_COMPONENT, operation="verify_signup", max_length=256),
-            sms_code=require_api_text(payload["smsCode"], field="smsCode", component=_COMPONENT, operation="verify_signup", max_length=16),
+            sms_code=(optional_route_text(payload.get("smsCode"), field="smsCode", max_length=16) or ""),
         )
 
         if not result.verified:
