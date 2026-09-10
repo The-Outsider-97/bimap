@@ -11,6 +11,7 @@ from .grant_entitlement import *
 from .handle_payment import *
 from .release_report import *
 from .request_deletion import *
+from .stage_upload import *
 from .validate_uploads import *
 
 from .begin_checkout import __all__ as _begin_checkout_exports
@@ -24,6 +25,7 @@ from .grant_entitlement import __all__ as _grant_entitlement_exports
 from .handle_payment import __all__ as _handle_payment_exports
 from .release_report import __all__ as _release_report_exports
 from .request_deletion import __all__ as _request_deletion_exports
+from .stage_upload import __all__ as _stage_upload_exports
 from .validate_uploads import __all__ as _validate_uploads_exports
 
 __all__ = [
@@ -38,5 +40,6 @@ __all__ = [
     *_handle_payment_exports,
     *_release_report_exports,
     *_request_deletion_exports,
+    *_stage_upload_exports,
     *_validate_uploads_exports,
 ]  # type: ignore
