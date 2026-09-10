@@ -19,8 +19,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .email_artifact_mailer import EmailArtifactMailer
-    from .ifc_data_extractor import IfcOpenShellDataExtractor
-    from .ifc_model_converter import IfcOpenShellModelConverter
     from .reportlab_data_extraction_renderer import (
         ReportLabDataExtractionPDFRenderer,
     )
@@ -36,8 +34,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "EmailArtifactMailer",
-    "IfcOpenShellDataExtractor",
-    "IfcOpenShellModelConverter",
     "ReportLabDataExtractionPDFRenderer",
     "DevelopmentMalware",
     "DisabledPayment",
@@ -60,16 +56,6 @@ def __getattr__(name: str) -> Any:
         from .email_artifact_mailer import EmailArtifactMailer
 
         return EmailArtifactMailer
-
-    if name == "IfcOpenShellDataExtractor":
-        from .ifc_data_extractor import IfcOpenShellDataExtractor
-
-        return IfcOpenShellDataExtractor
-
-    if name == "IfcOpenShellModelConverter":
-        from .ifc_model_converter import IfcOpenShellModelConverter
-
-        return IfcOpenShellModelConverter
 
     if name == "ReportLabDataExtractionPDFRenderer":
         from .reportlab_data_extraction_renderer import (
