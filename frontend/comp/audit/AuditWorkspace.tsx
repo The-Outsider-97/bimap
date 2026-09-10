@@ -7,7 +7,6 @@ import {
   useRef,
   useState,
   type ChangeEvent,
-  type FormEvent,
 } from "react";
 import { BimapApiError } from "@/lib/api";
 import { getApiErrorMessage } from "@/lib/account";
@@ -56,6 +55,119 @@ type AuditPhase =
   | "complete"
   | "error";
 
+type AuditDropzoneProps = {
+  label: string;
+  accept: string;
+  supported: string;
+  multiple?: boolean;
+  files: readonly File[];
+  onFiles: (files: readonly File[]) => void;
+  disabled?: boolean;
+};
+
+
+function AuditDropzone({
+  label,
+  accept,
+  supported,
+  multiple = false,
+  files,
+  onFiles,
+  disabled = false,
+}: AuditDropzoneProps) {
+  const inputRef =
+    useRef<HTMLInputElement | null>(null);
+
+  const commit = (
+    candidates: FileList | readonly File[],
+  ) => {
+    if (disabled) {
+      return;
+    }
+
+    const selected =
+      Array.from(candidates);
+
+    onFiles(
+      multiple
+        ? selected
+        : selected.slice(0, 1),
+    );
+  };
+
+  return (
+    <div
+      className={styles.auditDropzone}
+      data-disabled={disabled}
+      onDragOver={(event) => {
+        event.preventDefault();
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+
+        commit(
+          event.dataTransfer.files,
+        );
+      }}
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        multiple={multiple}
+        disabled={disabled}
+        onChange={(event) => {
+          commit(
+            event.target.files ?? [],
+          );
+
+          event.target.value = "";
+        }}
+      />
+
+      <span className={styles.auditDropzoneLabel}>
+        {label}
+      </span>
+
+      <strong>
+        Drop {multiple ? "models" : "model"} here
+      </strong>
+
+      <span>or</span>
+
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() =>
+          inputRef.current?.click()
+        }
+      >
+        Choose {multiple ? "models" : "model"}
+      </button>
+
+      <small>
+        Supported: {supported}
+      </small>
+
+      {files.length > 0 ? (
+        <div className={styles.auditSelectedFiles}>
+          {files.map((file) => (
+            <div
+              key={`${file.name}:${file.size}:${file.lastModified}`}
+            >
+              <strong>{file.name}</strong>
+
+              <span>
+                {formatFileSize(file.size)}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 const SEVERITY_ORDER: readonly AuditSeverity[] = [
   "critical",
   "high",
@@ -64,19 +176,6 @@ const SEVERITY_ORDER: readonly AuditSeverity[] = [
   "informational",
 ];
 
-
-function parseEvidenceRefs(value: string): string[] {
-  const result: string[] = [];
-  const seen = new Set<string>();
-  for (const token of value.split(/[\s,;]+/)) {
-    const normalized = token.trim();
-    if (normalized && !seen.has(normalized)) {
-      seen.add(normalized);
-      result.push(normalized);
-    }
-  }
-  return result;
-}
 
 function formatDate(value: string | null | undefined): string {
   if (!value) {
@@ -140,6 +239,95 @@ function exportJson(filename: string, value: unknown): void {
   }
 }
 
+function extensionOf(
+  file: File,
+): string {
+  const index =
+    file.name.lastIndexOf(".");
+
+  return index < 0
+    ? ""
+    : file.name.slice(index).toLowerCase();
+}
+
+
+function formatFileSize(
+  bytes: number,
+): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+
+  return `${
+    (bytes / (1024 * 1024)).toFixed(1)
+  } MB`;
+}
+
+
+function validateAuditSources(
+  productCode: BimapProductCode,
+  familySources: readonly File[],
+  projectSource: File | null,
+): string | null {
+  if (productCode === "family_audit") {
+    if (
+      familySources.length !== 1 ||
+      extensionOf(familySources[0]) !== ".rfa"
+    ) {
+      return "Family Audit requires exactly one RFA model.";
+    }
+
+    return null;
+  }
+
+  if (productCode === "bim_qa") {
+    if (!projectSource) {
+      return "BIM QA requires one RVT or IFC model.";
+    }
+
+    if (
+      ![".rvt", ".ifc"].includes(
+        extensionOf(projectSource),
+      )
+    ) {
+      return "BIM QA accepts RVT or IFC models.";
+    }
+
+    return null;
+  }
+
+  if (familySources.length === 0) {
+    return "Combined Audit requires at least one RFA family model.";
+  }
+
+  if (
+    familySources.some(
+      (file) =>
+        extensionOf(file) !== ".rfa",
+    )
+  ) {
+    return "Combined Audit family sources must be RFA models.";
+  }
+
+  if (!projectSource) {
+    return "Combined Audit requires one RVT or IFC project model.";
+  }
+
+  if (
+    ![".rvt", ".ifc"].includes(
+      extensionOf(projectSource),
+    )
+  ) {
+    return "Combined Audit project source must be RVT or IFC.";
+  }
+
+  return null;
+}
+
 function findingMatches(
   finding: AuditFindingDto,
   search: string,
@@ -168,8 +356,11 @@ function findingMatches(
 
 export function AuditWorkspace({ productCode }: Props) {
   const [orderId, setOrderId] = useState("");
-  const [manifestRef, setManifestRef] = useState("");
-  const [evidenceRefText, setEvidenceRefText] = useState("");
+  const [familySourceFiles, setFamilySourceFiles] = useState<readonly File[]>([]);
+  const [projectSourceFile, setProjectSourceFile] = useState<File | null>(null);
+  const [stagedAuditSources, setStagedAuditSources] = useState<readonly BimapStagedUploadDto[]>([]);
+  const [uploadingAuditSource, setUploadingAuditSource] = useState(false);
+  const [auditUploadMessage, setAuditUploadMessage] = useState<string | null>(null);
   const [status, setStatus] = useState<AuditStatusDto | null>(null);
   const [workspace, setWorkspace] = useState<AuditWorkspaceDto | null>(null);
   const [reports, setReports] = useState<ReportListDto | null>(null);
@@ -182,9 +373,6 @@ export function AuditWorkspace({ productCode }: Props) {
   const [modelUrl, setModelUrl] = useState<string | null>(null);
   const [modelName, setModelName] = useState<string | null>(null);
   const [auditSourceFiles, setAuditSourceFiles] = useState<readonly File[]>([]);
-  const [stagedAuditSources, setStagedAuditSources] = useState<readonly BimapStagedUploadDto[]>([]);
-  const [uploadingAuditSource, setUploadingAuditSource] = useState(false);
-  const [auditUploadMessage, setAuditUploadMessage] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
   const modelUrlRef = useRef<string | null>(null);
 
@@ -536,64 +724,190 @@ const onUploadAuditSources = useCallback(
   ],
 );
 
-  const onStart = useCallback(async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const targetOrderId = orderId.trim();
-    if (!targetOrderId) {
-      setPhase("error");
-      setMessage("Order ID is required.");
-      return;
-    }
-
-    const evidenceRefs = parseEvidenceRefs(evidenceRefText);
-    const evidenceManifestRef = manifestRef.trim() || null;
-    if (
-      evidenceRefs.length === 0 &&
-      evidenceManifestRef === null
-    ) {
-      setPhase("error");
-      setMessage(
-        stagedAuditSources.length > 0
-          ? (
-              "The model source is uploaded, but no canonical audit evidence " +
-              "has been attached yet."
-            )
-          : (
-              "Provide validated evidence references or an evidence manifest reference."
-            ),
+const onStart = useCallback(
+  async () => {
+    const validationError =
+      validateAuditSources(
+        productCode,
+        familySourceFiles,
+        projectSourceFile,
       );
 
+    if (validationError) {
+      setPhase("error");
+      setMessage(validationError);
       return;
     }
 
+    const files =
+      productCode === "family_audit"
+        ? [...familySourceFiles]
+        : productCode === "bim_qa"
+          ? [projectSourceFile!]
+          : [
+              ...familySourceFiles,
+              projectSourceFile!,
+            ];
+
     stopPolling();
+
     setPhase("submitting");
-    setMessage("Submitting audit to the BIMAP audit queue…");
+    setUploadingAuditSource(true);
+    setMessage("Preparing audit…");
+    setAuditUploadMessage(
+      "Uploading and validating model sources…",
+    );
+
     setWorkspace(null);
     setReports(null);
     setSelectedFindingId(null);
     setSelectedTargetKey(null);
 
     try {
-      const response = await startAudit(targetOrderId, {
-        jobId: crypto.randomUUID(),
-        idempotencyKey: crypto.randomUUID(),
-        evidenceRefs,
-        evidenceManifestRef,
-        metadata: {
-          interface: "audit_workspace",
-          requested_product: productCode,
-        },
-      });
-      setStatus(response.status);
-      setPhase(phaseForStatus(response.status));
-      setMessage(`Audit queued as ${response.queue.job_id}.`);
-      startPolling(targetOrderId);
+      /*
+       * A source selection represents a new audit unless this
+       * workspace was explicitly opened for an existing draft/uploading order.
+       */
+      let order;
+
+      if (orderId.trim()) {
+        order =
+          await getOrder(
+            orderId.trim(),
+          );
+
+        if (
+          order.product_code !==
+          productCode
+        ) {
+          throw new Error(
+            `Audit product ${order.product_code} does not match ${productCode}.`,
+          );
+        }
+      } else {
+        order =
+          await createOrder({
+            productCode,
+          });
+
+        setOrderId(
+          order.order_id,
+        );
+      }
+
+      if (order.state === "draft") {
+        order =
+          await beginOrderUploads(
+            order.order_id,
+            crypto.randomUUID(),
+          );
+      }
+
+      if (order.state !== "uploading") {
+        throw new Error(
+          `Audit cannot accept new models while in ` +
+          `"${order.state.replaceAll("_", " ")}" state.`,
+        );
+      }
+
+      const uploaded:
+        BimapStagedUploadDto[] = [];
+
+      for (
+        const [index, file]
+        of files.entries()
+      ) {
+        setAuditUploadMessage(
+          `Uploading ${index + 1} of ${files.length}: ${file.name}`,
+        );
+
+        uploaded.push(
+          await stageOrderModelUpload(
+            order.order_id,
+            file,
+          ),
+        );
+      }
+
+      setStagedAuditSources(
+        uploaded,
+      );
+
+      setAuditUploadMessage(
+        "Models validated. Preparing audit evidence…",
+      );
+
+      const response =
+        await startAudit(
+          order.order_id,
+          {
+            jobId:
+              crypto.randomUUID(),
+
+            idempotencyKey:
+              crypto.randomUUID(),
+
+            sources:
+              uploaded.map(
+                (source) => ({
+                  source_ref:
+                    source.source_ref,
+
+                  filename:
+                    source.filename,
+                }),
+              ),
+
+            metadata: {
+              interface:
+                "audit_workspace",
+
+              requested_product:
+                productCode,
+            },
+          },
+        );
+
+      setStatus(
+        response.status,
+      );
+
+      setPhase(
+        phaseForStatus(
+          response.status,
+        ),
+      );
+
+      setAuditUploadMessage(null);
+
+      setMessage(
+        "Audit submitted successfully.",
+      );
+
+      startPolling(
+        order.order_id,
+      );
     } catch (error) {
       setPhase("error");
-      setMessage(getApiErrorMessage(error));
+
+      setMessage(
+        getApiErrorMessage(error),
+      );
+    } finally {
+      setUploadingAuditSource(
+        false,
+      );
     }
-  }, [evidenceRefText, manifestRef, orderId, productCode, startPolling, stopPolling]);
+  },
+  [
+    familySourceFiles,
+    orderId,
+    productCode,
+    projectSourceFile,
+    startPolling,
+    stopPolling,
+  ],
+);
 
   const onLoadExisting = useCallback(async () => {
     const targetOrderId = orderId.trim();
@@ -696,40 +1010,67 @@ const onUploadAuditSources = useCallback(
         </div>
       </div>
 
-      <div className={styles.auditUploadBar}>
-        <label className={styles.auditUploadPicker}>
-          <span>Audit model source</span>
-
-          <input
-            type="file"
-            multiple
-            onChange={onAuditSourceFiles}
+      <div className={styles.auditSourcePanel}>
+        {productCode === "family_audit" ? (
+          <AuditDropzone
+            label="Audit model"
+            accept=".rfa"
+            supported="RFA"
+            files={familySourceFiles}
             disabled={uploadingAuditSource}
+            onFiles={setFamilySourceFiles}
           />
+        ) : null}
 
-          <strong>
-            {auditSourceFiles.length === 0
-              ? "Choose BIM model file(s)"
-              : auditSourceFiles.length === 1
-                ? auditSourceFiles[0].name
-                : `${auditSourceFiles.length} model files selected`}
-          </strong>
-        </label>
-
-        <div className={styles.controlButtons}>
-          <button
-            type="button"
-            onClick={() => void onUploadAuditSources()}
-            disabled={
-              uploadingAuditSource ||
-              auditSourceFiles.length === 0
+        {productCode === "bim_qa" ? (
+          <AuditDropzone
+            label="Project model"
+            accept=".rvt,.ifc"
+            supported="RVT, IFC"
+            files={
+              projectSourceFile
+                ? [projectSourceFile]
+                : []
             }
-          >
-            {uploadingAuditSource
-              ? "Uploading…"
-              : "Upload model"}
-          </button>
-        </div>
+            disabled={uploadingAuditSource}
+            onFiles={(files) =>
+              setProjectSourceFile(
+                files[0] ?? null,
+              )
+            }
+          />
+        ) : null}
+
+        {productCode === "combined_audit" ? (
+          <div className={styles.combinedAuditSources}>
+            <AuditDropzone
+              label="Family models"
+              accept=".rfa"
+              supported="RFA"
+              multiple
+              files={familySourceFiles}
+              disabled={uploadingAuditSource}
+              onFiles={setFamilySourceFiles}
+            />
+
+            <AuditDropzone
+              label="Project model"
+              accept=".rvt,.ifc"
+              supported="RVT, IFC"
+              files={
+                projectSourceFile
+                  ? [projectSourceFile]
+                  : []
+              }
+              disabled={uploadingAuditSource}
+              onFiles={(files) =>
+                setProjectSourceFile(
+                  files[0] ?? null,
+                )
+              }
+            />
+          </div>
+        ) : null}
 
         {auditUploadMessage ? (
           <div className={styles.auditUploadMessage}>
@@ -737,36 +1078,39 @@ const onUploadAuditSources = useCallback(
           </div>
         ) : null}
 
-        {stagedAuditSources.length > 0 ? (
-          <div className={styles.auditUploadResults}>
-            {stagedAuditSources.map(
-              (source) => (
-                <div
-                  key={source.source_ref}
-                  className={styles.auditUploadResult}
-                >
-                  <div>
-                    <strong>
-                      {source.filename}
-                    </strong>
+        <div className={styles.auditActions}>
+          <button
+            type="button"
+            className={styles.runAuditButton}
+            disabled={
+              uploadingAuditSource ||
+              phase === "submitting" ||
+              phase === "processing"
+            }
+            onClick={() => void onStart()}
+          >
+            {uploadingAuditSource
+              ? "Preparing audit…"
+              : productCode === "combined_audit"
+                ? "Run combined audit"
+                : "Run audit"}
+          </button>
 
-                    <span>
-                      {source.stored_object.size_bytes.toLocaleString()} bytes
-                      {" · "}
-                      {source.malware_scan.verdict}
-                    </span>
-                  </div>
-
-                  <code
-                    title={source.source_ref}
-                  >
-                    {source.source_ref}
-                  </code>
-                </div>
-              ),
-            )}
-          </div>
-        ) : null}
+          {orderId && workspace ? (
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={() =>
+                exportJson(
+                  `bimap-audit-${workspace.order_id}.json`,
+                  workspace.payload,
+                )
+              }
+            >
+              Export JSON
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <form className={styles.auditControls} onSubmit={onStart}>

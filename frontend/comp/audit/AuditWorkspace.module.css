@@ -110,6 +110,159 @@
   box-shadow: 0 0 0 2px rgba(17, 24, 32, 0.08);
 }
 
+.auditSourcePanel {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(18, 24, 31, 0.14);
+  background: #fff;
+}
+
+.combinedAuditSources {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.auditDropzone {
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 0.45rem;
+  padding: 1.6rem 1rem;
+  border: 1px dashed rgba(18, 24, 31, 0.28);
+  background: #f8f9fa;
+  text-align: center;
+}
+
+.auditDropzone[data-disabled="true"] {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.auditDropzone > input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.auditDropzoneLabel {
+  justify-self: start;
+  width: 100%;
+  margin-bottom: 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.auditDropzone > strong {
+  margin-top: 0.25rem;
+  font-size: 1rem;
+}
+
+.auditDropzone > span:not(.auditDropzoneLabel) {
+  color: rgba(18, 24, 31, 0.5);
+  font-size: 0.75rem;
+}
+
+.auditDropzone > button {
+  min-height: 40px;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid #111820;
+  background: #fff;
+  color: #111820;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.auditDropzone > small {
+  color: rgba(18, 24, 31, 0.52);
+  font-size: 0.7rem;
+}
+
+.auditSelectedFiles {
+  width: 100%;
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.65rem;
+}
+
+.auditSelectedFiles > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(18, 24, 31, 0.11);
+  background: #fff;
+  text-align: left;
+}
+
+.auditSelectedFiles strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auditSelectedFiles span {
+  flex: 0 0 auto;
+  color: rgba(18, 24, 31, 0.55);
+  font-size: 0.7rem;
+}
+
+.auditActions {
+  display: flex;
+  gap: 0.55rem;
+  justify-content: flex-end;
+}
+
+.runAuditButton {
+  min-height: 43px;
+  padding: 0.7rem 1.15rem;
+  border: 1px solid #111820;
+  background: #111820;
+  color: #fff;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.runAuditButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.auditUploadMessage {
+  padding: 0.75rem;
+  border-left: 3px solid #d99a00;
+  background: #fff9df;
+  font-size: 0.78rem;
+}
+
+@media (max-width: 760px) {
+  .combinedAuditSources {
+    grid-template-columns: 1fr;
+  }
+
+  .auditActions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .auditSelectedFiles > div {
+    display: grid;
+    gap: 0.25rem;
+  }
+}
+
 .controlButtons {
   display: flex;
   gap: 0.5rem;
