@@ -42,6 +42,41 @@ printer = PrettyPrinter()
 E = TypeVar("E", bound=AppError)
 
 
+def decode_app_json_object(
+    payload: str | bytes | bytearray,
+    *,
+    field: str,
+) -> dict[str, Any]:
+    """Decode one application JSON object through the canonical contract codec."""
+
+    try:
+        value = canonical_json_loads(
+            payload
+        )
+    except Exception as exc:
+        raise AppSerializationError(
+            "Application JSON payload could not be decoded.",
+            component="app_helpers",
+            operation="decode_app_json_object",
+            field=field,
+            cause=exc,
+        ) from exc
+
+    if not isinstance(value, dict):
+        raise AppSerializationError(
+            "Application JSON payload must contain an object.",
+            component="app_helpers",
+            operation="decode_app_json_object",
+            field=field,
+            context={
+                "received_type":
+                    type(value).__name__,
+            },
+        )
+
+    return value
+
+
 def announce_app_action(
     target_printer: PrettyPrinter,
     target_logger: Any,
