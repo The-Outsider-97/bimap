@@ -431,7 +431,7 @@ class RouteAuth:
         result = self._authentication.verify_signup(
             username=require_api_text(payload["username"], field="username", component=_COMPONENT, operation="verify_signup", max_length=64),
             email_code=require_api_text(payload["emailCode"], field="emailCode", component=_COMPONENT, operation="verify_signup", max_length=256),
-            sms_code=(optional_route_text(payload.get("smsCode"), field="smsCode", max_length=16) or ""),
+            sms_code=optional_route_text(payload.get("smsCode"), field="smsCode", max_length=16),
         )
 
         if not result.verified:
