@@ -218,22 +218,35 @@ class LocalSLAIAuthentication(Authentication):
         self,
         auth_service: SLAIAuthService,
         email_service: EmailService,
-        phone_verification: PhoneVerificationService,
+        phone_verification: PhoneVerificationService | None = None,
         *,
         email_code_ttl_minutes: int = 15,
+        require_phone_verification: bool = True,
     ) -> None:
         printer.status("BIMAP", "Initializing SLAI authentication adapter", "info")
 
         if not isinstance(auth_service, SLAIAuthService):
             raise TypeError("auth_service must be an SLAI AuthService")
-
         if not isinstance(email_service, EmailService):
             raise TypeError("email_service must be a BIMAP EmailService")
-
-        if not isinstance(phone_verification, PhoneVerificationService):
+        if not isinstance(require_phone_verification, bool):
+            raise TypeError("require_phone_verification must be boolean")
+        if (
+            require_phone_verification
+            and not isinstance(phone_verification, PhoneVerificationService)):
             raise TypeError(
                 "phone_verification must be a "
-                "PhoneVerificationService"
+                "PhoneVerificationService when phone "
+                "verification is required"
+            )
+
+        if (
+            phone_verification is not None
+            and not isinstance(phone_verification, PhoneVerificationService)
+        ):
+            raise TypeError(
+                "phone_verification must be a "
+                "PhoneVerificationService or None"
             )
 
         if (
@@ -249,7 +262,8 @@ class LocalSLAIAuthentication(Authentication):
         self._auth = auth_service
         self._email = email_service
         self._phone = phone_verification
-        self._email_code_ttl_minutes = email_code_ttl_minutes
+        self._require_phone_verification = require_phone_verification
+        self._email_code_ttl_minutes = (email_code_ttl_minutes)
         self._lock = RLock()
         self._usernames_by_auth_id: dict[str, str] = {}
         self._contacts_by_auth_id: dict[str, tuple[str, str, str, str]] = {}
@@ -265,13 +279,7 @@ class LocalSLAIAuthentication(Authentication):
     def _mask_phone(phone_e164: str) -> str:
         return f"{phone_e164[:3]}***{phone_e164[-4:]}"
 
-    def _create_identity(
-        self,
-        *,
-        username: str,
-        password: str,
-        email: str,
-    ) -> IdentityCreationResult:
+    def _create_identity(self, *, username: str, password: str, email: str) -> IdentityCreationResult:
         try:
             auth_user_id = self._auth.sign_up(username=username, password=password, email=email)
         except UserAlreadyExistsError:
@@ -292,10 +300,7 @@ class LocalSLAIAuthentication(Authentication):
         )
         with self._lock:
             self._usernames_by_auth_id[auth_user_id] = username
-        return IdentityCreationResult(
-            status=IdentityCreationStatus.CREATED,
-            identity=identity,
-        )
+        return IdentityCreationResult(status=IdentityCreationStatus.CREATED, identity=identity)
 
     def _delete_identity(self, auth_user_id: str) -> None:
         raise AppPortOperationError(
@@ -338,9 +343,7 @@ class LocalSLAIAuthentication(Authentication):
                         self._email_code_ttl_minutes
                     ),
                 ),
-                idempotency_key=(
-                    f"signup:{challenge_id}:email"
-                ),
+                idempotency_key=(f"signup:{challenge_id}:email"),
                 correlation_id=challenge_id,
             )
 
@@ -351,11 +354,7 @@ class LocalSLAIAuthentication(Authentication):
                 operation="issue_signup_verification",
                 context={
                     "email_error_type": type(exc).__name__,
-                    "email_error_code": getattr(
-                        exc,
-                        "code",
-                        None,
-                    ),
+                    "email_error_code": getattr(exc, "code", None),
                 },
                 cause=exc,
             ) from exc
@@ -363,20 +362,10 @@ class LocalSLAIAuthentication(Authentication):
         except BIMAPEmailError as exc:
             context = {
                 "email_error_type": type(exc).__name__,
-                "email_error_code": getattr(
-                    exc,
-                    "code",
-                    None,
-                ),
+                "email_error_code": getattr(exc, "code", None),
             }
 
-            if bool(
-                getattr(
-                    exc,
-                    "retryable",
-                    False,
-                )
-            ):
+            if bool(getattr(exc, "retryable", False)):
                 raise AppPortUnavailableError(
                     "Email verification delivery is unavailable.",
                     component="local_slai_authentication",
@@ -393,49 +382,52 @@ class LocalSLAIAuthentication(Authentication):
                 cause=exc,
             ) from exc
 
-        try:
-            parsed = phonenumbers.parse(phone_e164, None)
-            phone_request = (
-                self._phone
-                .send_verification_code(
-                    phone_e164,
-                    country_code=(f"+{parsed.country_code}"),
-                    country_region=country,
+        phone_request = None
+
+        if self._require_phone_verification:
+            assert self._phone is not None
+
+            try:
+                parsed = phonenumbers.parse(phone_e164, None)
+
+                phone_request = (
+                    self._phone.send_verification_code(
+                        phone_e164,
+                        country_code=(f"+{parsed.country_code}"),
+                        country_region=country,
+                    )
                 )
-            )
 
-        except (
-            InvalidPhoneNumberError,
-            InvalidCountryCodeError,
-            PhoneCountryMismatchError,
-        ) as exc:
-            raise AppValidationError(
-                "Phone number does not match "
-                "the selected country.",
-                component=("local_slai_authentication"),
-                operation=("issue_signup_verification"),
-                field="phone_e164",
-                cause=exc,
-            ) from exc
+            except (
+                InvalidPhoneNumberError,
+                InvalidCountryCodeError,
+                PhoneCountryMismatchError,
+            ) as exc:
+                raise AppValidationError(
+                    "Phone number does not match "
+                    "the selected country.",
+                    component="local_slai_authentication",
+                    operation="issue_signup_verification",
+                    field="phone_e164",
+                    cause=exc,
+                ) from exc
 
-        except VerificationRateLimitError as exc:
-            raise AppValidationError(
-                "Phone verification cannot "
-                "be resent yet.",
-                component=("local_slai_authentication"),
-                operation=("issue_signup_verification"),
-                field="phone_e164",
-                cause=exc,
-            ) from exc
+            except VerificationRateLimitError as exc:
+                raise AppValidationError(
+                    "Phone verification cannot be resent yet.",
+                    component="local_slai_authentication",
+                    operation="issue_signup_verification",
+                    field="phone_e164",
+                    cause=exc,
+                ) from exc
 
-        except SMSError as exc:
-            raise AppPortUnavailableError(
-                "SMS verification delivery "
-                "is unavailable.",
-                component=("local_slai_authentication"),
-                operation=("issue_signup_verification"),
-                cause=exc,
-            ) from exc
+            except SMSError as exc:
+                raise AppPortUnavailableError(
+                    "SMS verification delivery is unavailable.",
+                    component="local_slai_authentication",
+                    operation="issue_signup_verification",
+                    cause=exc,
+                ) from exc
 
         with self._lock:
             self._usernames_by_auth_id[auth_user_id] = username
@@ -446,25 +438,22 @@ class LocalSLAIAuthentication(Authentication):
                 country,
             )
 
-        expires_in = min(float(self._email_code_ttl_minutes * 60),
-            float(phone_request.expires_in_seconds),
-        )
+        expires_in = float(self._email_code_ttl_minutes * 60)
+
+        phone_masked = None
+
+        if phone_request is not None:
+            expires_in = min(expires_in, float(phone_request.expires_in_seconds))
+            phone_masked = self._mask_phone(phone_e164)
 
         return VerificationDispatch(
             challenge_id=challenge_id,
-            expires_at=(datetime.now(timezone.utc) + timedelta(seconds=expires_in)),
-            email_masked=(self._mask_email(email)),
-            phone_masked=(self._mask_phone(phone_e164)),
+            expires_at=( datetime.now(timezone.utc) + timedelta(seconds=expires_in)),
+            email_masked=self._mask_email(email),
+            phone_masked=phone_masked,
         )
 
-    def _verify_signup(
-        self,
-        *,
-        auth_user_id: str,
-        username: str,
-        email_code: str,
-        sms_code: str,
-    ) -> SignupVerificationResult:
+    def _verify_signup(self, *, auth_user_id: str, username: str, email_code: str, sms_code: str) -> SignupVerificationResult:
         with self._lock:
             contact = self._contacts_by_auth_id.get(auth_user_id)
 
@@ -491,26 +480,43 @@ class LocalSLAIAuthentication(Authentication):
         )
 
         phone_failure: VerificationFailure | None = None
-        try:
-            phone_verified = self._phone.verify_code(
-                phone_e164,
-                sms_code,
-                default_region=country,
-            )
-        except VerificationAttemptsExceededError:
-            phone_verified = False
-            phone_failure = VerificationFailure.ATTEMPTS_EXHAUSTED
-        except (VerificationCodeExpiredError, VerificationNotFoundError):
-            phone_verified = False
-            phone_failure = VerificationFailure.EXPIRED
-        except (InvalidPhoneNumberError, InvalidCountryCodeError, PhoneCountryMismatchError) as exc:
-            raise AppIntegrityError(
-                "Stored phone-verification identity is invalid.",
-                component="local_slai_authentication",
-                operation="verify_signup",
-                field="phone_e164",
-                cause=exc,
-            ) from exc
+
+        if self._require_phone_verification:
+            assert self._phone is not None
+
+            try:
+                phone_verified = (self._phone.verify_code(phone_e164, sms_code, default_region=country))
+
+            except VerificationAttemptsExceededError:
+                phone_verified = False
+                phone_failure = (VerificationFailure.ATTEMPTS_EXHAUSTED)
+
+            except (
+                VerificationCodeExpiredError,
+                VerificationNotFoundError,
+            ):
+                phone_verified = False
+                phone_failure = (VerificationFailure.EXPIRED)
+
+            except (
+                InvalidPhoneNumberError,
+                InvalidCountryCodeError,
+                PhoneCountryMismatchError,
+            ) as exc:
+                raise AppIntegrityError(
+                    "Stored phone-verification identity "
+                    "is invalid.",
+                    component="local_slai_authentication",
+                    operation="verify_signup",
+                    field="phone_e164",
+                    cause=exc,
+                ) from exc
+
+        else:
+            # Temporary policy bypass:
+            # the phone channel is considered satisfied
+            # when SMS verification is disabled.
+            phone_verified = True
 
         if email_verified and phone_verified:
             with self._lock:
