@@ -9,11 +9,11 @@ import {
   type ChangeEvent,
   type FormEvent,
 } from "react";
-
 import { BimapApiError } from "@/lib/api";
 import { getApiErrorMessage } from "@/lib/account";
 import {
   beginOrderUploads,
+  createOrder,
   getOrder,
   stageOrderModelUpload,
   type BimapProductCode,
@@ -373,16 +373,6 @@ const onAuditSourceFiles = useCallback(
 
 const onUploadAuditSources = useCallback(
   async () => {
-    const targetOrderId =
-      orderId.trim();
-
-    if (!targetOrderId) {
-      setAuditUploadMessage(
-        "Enter an Order ID before uploading a model.",
-      );
-      return;
-    }
-
     if (auditSourceFiles.length === 0) {
       setAuditUploadMessage(
         "Choose at least one model file.",
@@ -392,32 +382,54 @@ const onUploadAuditSources = useCallback(
 
     setUploadingAuditSource(true);
     setAuditUploadMessage(
-      "Preparing secure model upload…",
+      "Preparing audit model upload…",
     );
 
     try {
-      let order =
-        await getOrder(
+      let targetOrderId =
+        orderId.trim();
+
+      let order;
+
+      /*
+       * Normal audit workflow:
+       *
+       * No Order ID exists yet -> BIMAP creates the audit order.
+       *
+       * An explicitly supplied Order ID remains supported for
+       * resuming an existing audit.
+       */
+      if (!targetOrderId) {
+        order =
+          await createOrder({
+            productCode,
+          });
+
+        targetOrderId =
+          order.order_id;
+
+        setOrderId(
           targetOrderId,
         );
+      } else {
+        order =
+          await getOrder(
+            targetOrderId,
+          );
 
-      if (
-        order.product_code !==
-        productCode
-      ) {
-        throw new Error(
-          `Order ${targetOrderId} belongs to ${order.product_code}, ` +
-          `not ${productCode}.`,
-        );
+        if (
+          order.product_code !==
+          productCode
+        ) {
+          throw new Error(
+            `Order ${targetOrderId} belongs to ` +
+            `${order.product_code}, not ${productCode}.`,
+          );
+        }
       }
 
       /*
-       * Preserve the canonical order lifecycle:
-       *
-       * draft -> uploading
-       *
-       * An order already in "uploading" can receive additional source files,
-       * which is important for Combined Audit.
+       * Enter the canonical upload lifecycle only when required.
        */
       if (
         order.state === "draft"
@@ -433,12 +445,13 @@ const onUploadAuditSources = useCallback(
         order.state !== "uploading"
       ) {
         throw new Error(
-          `Models cannot be added while the order is in ` +
+          `Models cannot be uploaded while the audit is in ` +
           `"${order.state.replaceAll("_", " ")}" state.`,
         );
       }
 
-      let uploadedCount = 0;
+      const uploaded:
+        BimapStagedUploadDto[] = [];
 
       for (
         const file of
@@ -454,40 +467,66 @@ const onUploadAuditSources = useCallback(
             file,
           );
 
-        setStagedAuditSources(
-          (current) => {
-            const withoutExisting =
-              current.filter(
-                (item) =>
-                  item.source_ref !==
-                  staged.source_ref,
-              );
-
-            return [
-              ...withoutExisting,
-              staged,
-            ];
-          },
+        uploaded.push(
+          staged,
         );
-
-        uploadedCount += 1;
       }
 
-      setAuditSourceFiles([]);
+      setStagedAuditSources(
+        (current) => {
+          const merged =
+            new Map<
+              string,
+              BimapStagedUploadDto
+            >();
+
+          for (
+            const item of
+            current
+          ) {
+            merged.set(
+              item.source_ref,
+              item,
+            );
+          }
+
+          for (
+            const item of
+            uploaded
+          ) {
+            merged.set(
+              item.source_ref,
+              item,
+            );
+          }
+
+          return Array.from(
+            merged.values(),
+          );
+        },
+      );
+
+      setAuditSourceFiles(
+        [],
+      );
 
       setAuditUploadMessage(
-        `${uploadedCount} model${
-          uploadedCount === 1
+        `${uploaded.length} model${
+          uploaded.length === 1
             ? ""
             : "s"
-        } uploaded and safety-validated.`,
+        } uploaded successfully.`,
       );
     } catch (error) {
       setAuditUploadMessage(
-        getApiErrorMessage(error),
+        getApiErrorMessage(
+          error,
+        ),
       );
     } finally {
-      setUploadingAuditSource(false);
+      setUploadingAuditSource(
+        false,
+      );
     }
   },
   [
@@ -683,8 +722,7 @@ const onUploadAuditSources = useCallback(
             onClick={() => void onUploadAuditSources()}
             disabled={
               uploadingAuditSource ||
-              auditSourceFiles.length === 0 ||
-              !orderId.trim()
+              auditSourceFiles.length === 0
             }
           >
             {uploadingAuditSource
@@ -733,7 +771,7 @@ const onUploadAuditSources = useCallback(
 
       <form className={styles.auditControls} onSubmit={onStart}>
         <label>
-          <span>Order ID</span>
+          <span>AUDIT ID</span>
           <input
             value={orderId}
             onChange={(event) => setOrderId(event.target.value)}
