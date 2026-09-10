@@ -502,7 +502,7 @@ class AuthenticationService:
         )
         return SignupStartResult(account=account, verification=verification)
 
-    def verify_signup(self, *, username: str, email_code: str, sms_code: str) -> SignupCompletionResult:
+    def verify_signup(self, *, username: str, email_code: str, sms_code: str | None) -> SignupCompletionResult:
         """Verify signup channels, persist channel state, and issue first session."""
         announce_app_action(
             printer,
