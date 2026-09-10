@@ -4,7 +4,17 @@ import {
 } from "@/lib/api";
 
 
-export type ExtractionSourceFormat = "ifc";
+export type ExtractionSourceFormat =
+  | "ifc"
+  | "rvt"
+  | "rfa"
+  | "dwg"
+  | "dxf"
+  | "fbx"
+  | "obj"
+  | "glb"
+  | "stl"
+  | "ply";
 
 export type ExtractionDataset =
   | "elements"
@@ -37,8 +47,9 @@ export type DataExtractionDownload = {
   readonly extractionId: string;
   readonly sourceSha256: string | null;
   readonly packageSha256: string | null;
-  readonly ifcSchema: string | null;
-  readonly productCount: number | null;
+  readonly sourceFormat: ExtractionSourceFormat | null;
+  readonly sourceSchema: string | null;
+  readonly entityCount: number | null;
   readonly packageBytes: number | null;
   readonly jsonFilename: string | null;
   readonly pdfFilename: string | null;
@@ -69,6 +80,32 @@ function nonNegativeInteger(
   return Number.isSafeInteger(parsed) && parsed >= 0
     ? parsed
     : null;
+}
+
+
+function sourceFormat(
+  response: Response,
+): ExtractionSourceFormat | null {
+  const value = header(
+    response,
+    "x-bimap-source-format",
+  );
+
+  switch (value) {
+    case "ifc":
+    case "rvt":
+    case "rfa":
+    case "dwg":
+    case "dxf":
+    case "fbx":
+    case "obj":
+    case "glb":
+    case "stl":
+    case "ply":
+      return value;
+    default:
+      return null;
+  }
 }
 
 
@@ -117,7 +154,7 @@ export async function extractModelData(
 ): Promise<DataExtractionDownload> {
   if (!(input.file instanceof File)) {
     throw new TypeError(
-      "An IFC source file is required.",
+      "A source model file is required.",
     );
   }
 
@@ -203,12 +240,22 @@ export async function extractModelData(
         response,
         "x-bimap-package-sha256",
       ),
-    ifcSchema:
+    sourceFormat:
+      sourceFormat(response),
+    sourceSchema:
+      header(
+        response,
+        "x-bimap-source-schema",
+      ) ??
       header(
         response,
         "x-bimap-ifc-schema",
       ),
-    productCount:
+    entityCount:
+      nonNegativeInteger(
+        response,
+        "x-bimap-entity-count",
+      ) ??
       nonNegativeInteger(
         response,
         "x-bimap-product-count",
