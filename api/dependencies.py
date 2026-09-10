@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 from fastapi import FastAPI, Request # type: ignore
+
 from .utils.api_errors import APIConfigurationError
 from .utils.api_helpers import *
 from ..app.commands.begin_checkout import BeginCheckout
@@ -43,17 +44,21 @@ from ..app.commands.cancel_order import CancelOrder
 from ..app.commands.convert_model import ConvertModel
 from ..app.commands.create_order import CreateOrder
 from ..app.commands.create_upload_slot import CreateUploadSlot
+from ..app.commands.enqueue_audit import EnqueueAudit
 from ..app.commands.extract_model_data import ExtractModelData
 from ..app.commands.grant_entitlement import GrantEntitlement
 from ..app.commands.handle_payment import HandlePayment
 from ..app.commands.request_deletion import RequestDeletion
 from ..app.commands.stage_upload import StageUpload
 from ..app.commands.validate_uploads import ValidateUploads
+from ..app.queries.get_audit_status import GetAuditStatus
+from ..app.queries.get_audit_workspace import GetAuditWorkspace
 from ..app.queries.get_order import GetOrder
 from ..app.queries.get_products import GetProducts
 from ..app.queries.list_orders import ListOrders
 from ..app.queries.list_reports import ListReports
 from ..app.services.account_service import AccountService
+from ..app.services.audit_input_service import AuditInputService
 from ..app.services.authentication_service import AuthenticationService
 from ..app.services.review_service import ReviewService
 from ..app.ports.slai import SLAIPort
@@ -144,6 +149,11 @@ class APIUseCases:
     stage_upload: StageUpload
     validate_uploads: ValidateUploads
 
+    prepare_audit_input: AuditInputService
+    enqueue_audit: EnqueueAudit
+    get_audit_status: GetAuditStatus
+    get_audit_workspace: GetAuditWorkspace
+
     begin_checkout: BeginCheckout
     handle_payment: HandlePayment
     grant_entitlement: GrantEntitlement
@@ -176,6 +186,10 @@ class APIUseCases:
             ("convert_model", self.convert_model, ConvertModel),
             ("extract_model_data", self.extract_model_data, ExtractModelData),
             ("stage_upload", self.stage_upload, StageUpload),
+            ("prepare_audit_input", self.prepare_audit_input, AuditInputService),
+            ("enqueue_audit", self.enqueue_audit, EnqueueAudit),
+            ("get_audit_status", self.get_audit_status, GetAuditStatus),
+            ("get_audit_workspace", self.get_audit_workspace, GetAuditWorkspace),
         )
         for field, value, expected in dependencies:
             _require_handler(value, expected, field=field)

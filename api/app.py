@@ -41,6 +41,7 @@ from .middleware.error_mapping import ErrorMapping
 from .middleware.request_limits import RateLimiter, RequestLimitPolicy, RequestLimits
 from .middleware.security import Security, SecurityPolicy
 from .routes.admin import RouteAdmin
+from .routes.audits import RouteAudits
 from .routes.checkout import RouteCheckout
 from .routes.conversions import RouteConversions
 from .routes.data_extractions import RouteDataExtractions
@@ -485,6 +486,16 @@ def _construct_route_groups(dependencies: APIDependencies) -> tuple[Any, ...]:
             use_cases.validate_uploads,
             authorizer=hooks.authorizer,
             manifest_validator=hooks.upload_manifest_validator,
+        ),
+        RouteAudits(
+            use_cases.prepare_audit_input,
+            use_cases.validate_uploads,
+            use_cases.grant_entitlement,
+            use_cases.enqueue_audit,
+            use_cases.get_audit_status,
+            use_cases.get_audit_workspace,
+            use_cases.get_order,
+            authorizer=hooks.authorizer,
         ),
         RouteEntitlements(
             use_cases.grant_entitlement,
