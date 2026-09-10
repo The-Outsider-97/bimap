@@ -33,11 +33,16 @@ type WorkState =
   | "complete"
   | "error";
 
+
 type AttemptIdentity = {
   fingerprint: string;
   extractionId: string;
   idempotencyKey: string;
 };
+
+
+const EMPTY_DATASETS:
+  readonly ExtractionDataset[] = [];
 
 
 const DATASET_INFO: ReadonlyArray<{
@@ -49,41 +54,41 @@ const DATASET_INFO: ReadonlyArray<{
     key: "elements",
     title: "Elements",
     description:
-      "IFC identity, class, name, type, predefined type and spatial container.",
+      "Source objects, identities, names, classes or object types, and available hierarchy or container information.",
   },
   {
     key: "properties",
     title: "Properties",
     description:
-      "Inherited and occurrence-level property-set names and values.",
+      "Available source properties, attributes, metadata, and object-level values.",
   },
   {
     key: "quantities",
     title: "Quantities",
     description:
-      "IFC quantity-set values associated with extracted products.",
+      "Available source-native or geometry-derived dimensional and quantitative values.",
   },
   {
     key: "materials",
     title: "Materials",
     description:
-      "Associated material identities, names, categories and descriptions.",
+      "Available material identities, names, categories, descriptions, and source material metadata.",
   },
 ];
 
 
-
-
-function fileExtension(filename: string): string {
-  const index = filename.lastIndexOf(".");
+function fileExtension(
+  filename: string,
+): string {
+  const index =
+    filename.lastIndexOf(".");
 
   return index >= 0
-    ? filename.slice(index).toLowerCase()
+    ? filename
+        .slice(index)
+        .toLowerCase()
     : "";
 }
-
-
-
 
 
 function formatBytes(
@@ -107,8 +112,11 @@ function formatBytes(
     "TB",
   ] as const;
 
-  let result = value / 1024;
-  let unit = units[0];
+  let result =
+    value / 1024;
+
+  let unit: (typeof units)[number] =
+    units[0];
 
   for (
     let index = 1;
@@ -120,9 +128,11 @@ function formatBytes(
     unit = units[index];
   }
 
-  return `${result.toFixed(
-    result >= 10 ? 1 : 2,
-  )} ${unit}`;
+  return (
+    `${result.toFixed(
+      result >= 10 ? 1 : 2,
+    )} ${unit}`
+  );
 }
 
 
@@ -146,14 +156,16 @@ function triggerDownload(
     document.body.appendChild(
       anchor,
     );
+
     anchor.click();
     anchor.remove();
   } finally {
     window.setTimeout(
-      () =>
+      () => {
         URL.revokeObjectURL(
           url,
-        ),
+        );
+      },
       0,
     );
   }
@@ -162,7 +174,8 @@ function triggerDownload(
 
 function fileFingerprint(
   file: File,
-  datasets: readonly ExtractionDataset[],
+  datasets:
+    readonly ExtractionDataset[],
   emailResult: boolean,
 ): string {
   return [
@@ -170,9 +183,24 @@ function fileFingerprint(
     file.size,
     file.lastModified,
     file.type,
-    [...datasets].sort().join(","),
-    emailResult ? "email" : "download",
+    [...datasets]
+      .sort()
+      .join(","),
+    emailResult
+      ? "email"
+      : "download",
   ].join(":");
+}
+
+
+function formatSourceFormat(
+  value: string | null | undefined,
+): string {
+  if (!value) {
+    return "—";
+  }
+
+  return value.toUpperCase();
 }
 
 
@@ -183,6 +211,7 @@ export function DataExtractionClient() {
     openAuth,
   } = useAccount();
 
+
   const [
     summary,
     setSummary,
@@ -190,6 +219,7 @@ export function DataExtractionClient() {
     useState<AccountSummary | null>(
       null,
     );
+
 
   const [
     capabilities,
@@ -199,10 +229,13 @@ export function DataExtractionClient() {
       null,
     );
 
+
   const [
     loading,
     setLoading,
-  ] = useState(true);
+  ] =
+    useState(true);
+
 
   const [
     file,
@@ -212,23 +245,27 @@ export function DataExtractionClient() {
       null,
     );
 
+
   const [
     datasets,
     setDatasets,
   ] =
-    useState<readonly ExtractionDataset[]>(
-      [
-        "elements",
-        "properties",
-        "quantities",
-        "materials",
-      ],
-    );
+    useState<
+      readonly ExtractionDataset[]
+    >([
+      "elements",
+      "properties",
+      "quantities",
+      "materials",
+    ]);
+
 
   const [
     emailResult,
     setEmailResult,
-  ] = useState(false);
+  ] =
+    useState(false);
+
 
   const [
     workState,
@@ -238,6 +275,7 @@ export function DataExtractionClient() {
       "idle",
     );
 
+
   const [
     message,
     setMessage,
@@ -245,6 +283,7 @@ export function DataExtractionClient() {
     useState<string | null>(
       null,
     );
+
 
   const [
     result,
@@ -254,10 +293,12 @@ export function DataExtractionClient() {
       null,
     );
 
+
   const attemptRef =
     useRef<AttemptIdentity | null>(
       null,
     );
+
 
   const abortRef =
     useRef<AbortController | null>(
@@ -274,20 +315,30 @@ export function DataExtractionClient() {
       setLoading(true);
 
       try {
-        setCapabilities(
+        const loaded =
           await getDataExtractionCapabilities(
             controller.signal,
-          ),
-        );
+          );
+
+        if (
+          !controller.signal.aborted
+        ) {
+          setCapabilities(
+            loaded,
+          );
+        }
       } catch (error) {
         if (
           !controller.signal.aborted
         ) {
+          setCapabilities(null);
+
           setMessage(
             getApiErrorMessage(
               error,
             ),
           );
+
           setWorkState(
             "error",
           );
@@ -305,7 +356,9 @@ export function DataExtractionClient() {
 
     return () => {
       controller.abort();
-      abortRef.current?.abort();
+
+      abortRef.current
+        ?.abort();
     };
   }, []);
 
@@ -324,7 +377,9 @@ export function DataExtractionClient() {
     void getAccountSummary()
       .then((value) => {
         if (active) {
-          setSummary(value);
+          setSummary(
+            value,
+          );
         }
       })
       .catch(() => {
@@ -339,69 +394,144 @@ export function DataExtractionClient() {
   }, [status]);
 
 
-  const sourceCapability = useMemo(() => {
-    if (file === null || capabilities === null) {
-      return null;
-    }
-
-    const extension = fileExtension(file.name);
-
-  const acceptedExtensions = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          capabilities?.sources.flatMap(
-            (source) => source.extensions,
-          ) ?? [],
-        ),
-      )
-        .sort()
-        .join(","),
-    [capabilities],
-  );
-
-  return (
-      capabilities.sources.find(
-        (source) =>
-          source.extensions.includes(extension),
-      ) ?? null
+  /*
+   * Build the accepted extension set once from
+   * the capabilities actually advertised by
+   * the backend.
+   *
+   * There is deliberately no hard-coded IFC
+   * fallback.
+   */
+  const acceptedExtensions =
+    useMemo(
+      () =>
+        Array.from(
+          new Set(
+            capabilities
+              ?.sources
+              .flatMap(
+                (source) =>
+                  source.extensions,
+              )
+              .map(
+                (extension) =>
+                  extension
+                    .trim()
+                    .toLowerCase(),
+              )
+              .filter(Boolean) ??
+              [],
+          ),
+        ).sort(),
+      [capabilities],
     );
-  }, [capabilities, file]);
+
+
+  const acceptAttribute =
+    acceptedExtensions.length > 0
+      ? acceptedExtensions.join(
+          ",",
+        )
+      : undefined;
+
+
+  const supportedFormatsLabel =
+    acceptedExtensions.length > 0
+      ? acceptedExtensions.join(
+          ", ",
+        )
+      : "—";
+
+
+  /*
+   * Resolve the selected source strictly
+   * through advertised capabilities.
+   *
+   * No source format exists until the user
+   * selects a supported file.
+   */
+  const sourceCapability =
+    useMemo(() => {
+      if (
+        file === null ||
+        capabilities === null
+      ) {
+        return null;
+      }
+
+      const extension =
+        fileExtension(
+          file.name,
+        );
+
+      return (
+        capabilities.sources.find(
+          (source) =>
+            source.extensions.some(
+              (candidate) =>
+                candidate
+                  .trim()
+                  .toLowerCase() ===
+                extension,
+            ),
+        ) ?? null
+      );
+    }, [
+      capabilities,
+      file,
+    ]);
+
 
   const allowedDatasets =
-    sourceCapability?.datasets ??
-    [];
+    sourceCapability
+      ?.datasets ??
+    EMPTY_DATASETS;
 
+
+  /*
+   * Whenever the source format changes, retain
+   * only datasets genuinely supported by that
+   * source. If none of the previous selections
+   * remain valid, select the source's complete
+   * advertised dataset set.
+   */
   useEffect(() => {
     if (
-      allowedDatasets.length ===
-      0
+      sourceCapability ===
+      null
     ) {
       return;
     }
+
+    const supported =
+      sourceCapability.datasets;
 
     setDatasets(
       (current) => {
         const filtered =
           current.filter(
             (dataset) =>
-              allowedDatasets.includes(
+              supported.includes(
                 dataset,
               ),
           );
 
-        return filtered.length
+        return filtered.length > 0
           ? filtered
-          : allowedDatasets;
+          : supported;
       },
     );
-  }, [allowedDatasets]);
+  }, [
+    sourceCapability,
+  ]);
 
 
   const usage =
-    summary?.usage
+    summary
+      ?.usage
       .dataExtraction ??
     null;
+
 
   const noAllowance =
     usage !== null &&
@@ -409,16 +539,21 @@ export function DataExtractionClient() {
     usage.remaining !== null &&
     usage.remaining <= 0;
 
+
   const emailAvailable =
-    capabilities?.email_available ??
+    capabilities
+      ?.email_available ??
     false;
+
 
   useEffect(() => {
     if (
       !emailAvailable &&
       emailResult
     ) {
-      setEmailResult(false);
+      setEmailResult(
+        false,
+      );
     }
   }, [
     emailAvailable,
@@ -426,13 +561,26 @@ export function DataExtractionClient() {
   ]);
 
 
+  const datasetsAreSupported =
+    datasets.length > 0 &&
+    datasets.every(
+      (dataset) =>
+        allowedDatasets.includes(
+          dataset,
+        ),
+    );
+
+
   const canSubmit =
     !loading &&
-    status === "signed-in" &&
+    status ===
+      "signed-in" &&
     account !== null &&
     file !== null &&
-    datasets.length > 0 &&
-    workState !== "working" &&
+    sourceCapability !== null &&
+    datasetsAreSupported &&
+    workState !==
+      "working" &&
     !noAllowance;
 
 
@@ -440,56 +588,97 @@ export function DataExtractionClient() {
     useCallback(() => {
       attemptRef.current =
         null;
+
       setResult(null);
       setMessage(null);
-      setWorkState("idle");
+
+      setWorkState(
+        "idle",
+      );
     }, []);
 
 
-  const onFileChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const selected =
-        event.target.files?.[0] ?? null;
+  const onFileChange =
+    useCallback(
+      (
+        event:
+          ChangeEvent<HTMLInputElement>,
+      ) => {
+        const selected =
+          event.currentTarget
+            .files?.[0] ??
+          null;
 
-      if (selected === null) {
-        setFile(null);
+        if (
+          selected === null
+        ) {
+          setFile(null);
+
+          resetAttempt();
+          return;
+        }
+
+        const extension =
+          fileExtension(
+            selected.name,
+          );
+
+        const capability =
+          capabilities
+            ?.sources
+            .find(
+              (source) =>
+                source.extensions.some(
+                  (
+                    candidate,
+                  ) =>
+                    candidate
+                      .trim()
+                      .toLowerCase() ===
+                    extension,
+                ),
+            );
+
+        if (!capability) {
+          setFile(null);
+
+          resetAttempt();
+
+          setWorkState(
+            "error",
+          );
+
+          setMessage(
+            acceptedExtensions.length >
+              0
+              ? (
+                  "Unsupported model format. " +
+                  `Supported file types: ${supportedFormatsLabel}.`
+                )
+              : (
+                  "No model extraction formats are currently available."
+                ),
+          );
+
+          event.currentTarget.value =
+            "";
+
+          return;
+        }
+
+        setFile(
+          selected,
+        );
+
         resetAttempt();
-        return;
-      }
-
-      const extension =
-        fileExtension(selected.name);
-
-      const capability =
-        capabilities?.sources.find(
-          (source) =>
-            source.extensions.includes(extension),
-        );
-
-      if (!capability) {
-        setFile(null);
-        setResult(null);
-        setWorkState("error");
-
-        setMessage(
-          acceptedExtensions
-            ? `Unsupported model format. Supported file types: ${acceptedExtensions}.`
-            : "No model extraction formats are currently available.",
-        );
-
-        event.target.value = "";
-        return;
-      }
-
-      setFile(selected);
-      resetAttempt();
-    },
-    [
-      acceptedExtensions,
-      capabilities,
-      resetAttempt,
-    ],
-  );
+      },
+      [
+        acceptedExtensions.length,
+        capabilities,
+        resetAttempt,
+        supportedFormatsLabel,
+      ],
+    );
 
 
   const toggleDataset =
@@ -506,6 +695,10 @@ export function DataExtractionClient() {
               );
 
             if (exists) {
+              /*
+               * At least one dataset must remain
+               * selected.
+               */
               if (
                 current.length ===
                 1
@@ -529,7 +722,9 @@ export function DataExtractionClient() {
 
         resetAttempt();
       },
-      [resetAttempt],
+      [
+        resetAttempt,
+      ],
     );
 
 
@@ -540,11 +735,15 @@ export function DataExtractionClient() {
           ChangeEvent<HTMLInputElement>,
       ) => {
         setEmailResult(
-          event.target.checked,
+          event.currentTarget
+            .checked,
         );
+
         resetAttempt();
       },
-      [resetAttempt],
+      [
+        resetAttempt,
+      ],
     );
 
 
@@ -564,7 +763,8 @@ export function DataExtractionClient() {
           attemptRef.current;
 
         if (
-          existing?.fingerprint ===
+          existing
+            ?.fingerprint ===
           fingerprint
         ) {
           return existing;
@@ -592,16 +792,22 @@ export function DataExtractionClient() {
 
 
   const refreshUsage =
-    useCallback(async () => {
-      try {
-        setSummary(
-          await getAccountSummary(),
-        );
-      } catch {
-        // The completed extraction
-        // remains authoritative.
-      }
-    }, []);
+    useCallback(
+      async () => {
+        try {
+          setSummary(
+            await getAccountSummary(),
+          );
+        } catch {
+          /*
+           * A completed extraction remains
+           * authoritative even if the account
+           * usage refresh fails.
+           */
+        }
+      },
+      [],
+    );
 
 
   const onSubmit =
@@ -614,27 +820,39 @@ export function DataExtractionClient() {
 
         if (
           !canSubmit ||
-          file === null
+          file === null ||
+          sourceCapability ===
+            null
         ) {
           return;
         }
 
         const attempt =
-          getAttempt(file);
+          getAttempt(
+            file,
+          );
 
         const controller =
           new AbortController();
 
-        abortRef.current?.abort();
+        abortRef.current
+          ?.abort();
+
         abortRef.current =
           controller;
 
         setWorkState(
           "working",
         );
+
         setMessage(
-          "Uploading and extracting IFC data. The package is returned only after both JSON and PDF artifacts are complete.",
+          (
+            "Uploading and extracting data from the " +
+            `${sourceCapability.source_format.toUpperCase()} model. ` +
+            "The package is returned only after the JSON and PDF artifacts are complete."
+          ),
         );
+
         setResult(null);
 
         try {
@@ -658,27 +876,40 @@ export function DataExtractionClient() {
           setResult(
             extracted,
           );
+
           setWorkState(
             "complete",
           );
 
           if (
-            extracted.emailStatus ===
+            extracted
+              .emailStatus ===
             "accepted"
           ) {
             setMessage(
-              "Data extraction completed. The ZIP package was downloaded and the same package was accepted for delivery to your account email.",
+              (
+                "Data extraction completed. " +
+                "The ZIP package was downloaded and the same package was accepted " +
+                "for delivery to your account email."
+              ),
             );
           } else if (
-            extracted.emailStatus ===
+            extracted
+              .emailStatus ===
             "failed"
           ) {
             setMessage(
-              "Data extraction completed and the ZIP package is ready, but email delivery failed. You can still download the completed package below.",
+              (
+                "Data extraction completed and the ZIP package is ready, " +
+                "but email delivery failed. You can still download the completed package below."
+              ),
             );
           } else {
             setMessage(
-              "Data extraction completed. The ZIP package containing the PDF report and JSON dataset is ready.",
+              (
+                "Data extraction completed. " +
+                "The ZIP package containing the PDF report and JSON dataset is ready."
+              ),
             );
           }
 
@@ -695,15 +926,18 @@ export function DataExtractionClient() {
             setWorkState(
               "idle",
             );
+
             setMessage(
               "Data extraction cancelled.",
             );
+
             return;
           }
 
           setWorkState(
             "error",
           );
+
           setMessage(
             getApiErrorMessage(
               error,
@@ -726,24 +960,30 @@ export function DataExtractionClient() {
         file,
         getAttempt,
         refreshUsage,
+        sourceCapability,
       ],
     );
 
 
   const allowanceLabel =
     useMemo(() => {
-      if (usage === null) {
+      if (
+        usage === null
+      ) {
         return "—";
       }
 
-      if (usage.unlimited) {
+      if (
+        usage.unlimited
+      ) {
         return "Unlimited";
       }
 
       if (
         usage.remaining ===
           null ||
-        usage.limit === null
+        usage.limit ===
+          null
       ) {
         return "—";
       }
@@ -752,7 +992,46 @@ export function DataExtractionClient() {
         `${usage.remaining} / ` +
         `${usage.limit} remaining`
       );
-    }, [usage]);
+    }, [
+      usage,
+    ]);
+
+
+  const displayedSourceFormat =
+    result?.sourceFormat ??
+    sourceCapability
+      ?.source_format ??
+    null;
+
+
+  const displayedSourceSchema =
+    result?.sourceSchema ??
+    null;
+
+
+  const displayedEntityCount =
+    result?.entityCount ??
+    null;
+
+
+  const emailStatusLabel =
+    result?.emailStatus ===
+    "accepted"
+      ? "Accepted for delivery"
+      : result?.emailStatus ===
+          "failed"
+        ? "Delivery failed"
+        : emailResult
+          ? "Requested"
+          : "Not requested";
+
+
+  const inputDisabled =
+    loading ||
+    acceptedExtensions.length ===
+      0 ||
+    workState ===
+      "working";
 
 
   return (
@@ -765,15 +1044,17 @@ export function DataExtractionClient() {
       >
         <div className="content-width">
           <p className="eyebrow">
-            <span aria-hidden="true">
+            <span
+              aria-hidden="true"
+            >
               ●
             </span>
             Data extraction
           </p>
 
           <h1>
-            Extract structured
-            BIM data from IFC.
+            Extract structured BIM
+            and model data.
           </h1>
 
           <p
@@ -781,13 +1062,16 @@ export function DataExtractionClient() {
               styles.lead
             }
           >
-            Select the datasets you
-            need. BIMAP validates and
-            scans the IFC source,
-            extracts the actual model
-            data, then returns one ZIP
-            containing the complete
-            JSON dataset and a
+            Upload a supported BIM,
+            CAD, or 3D model and select
+            the datasets you need.
+            BIMAP resolves the source
+            format from the uploaded
+            model, validates and scans
+            it, extracts the available
+            structured data, and
+            returns one ZIP containing
+            the JSON dataset and a
             human-readable PDF report.
           </p>
         </div>
@@ -819,16 +1103,21 @@ export function DataExtractionClient() {
                   styles.panelHeading
                 }
               >
-                <span>01</span>
+                <span>
+                  01
+                </span>
+
                 <div>
                   <p>
                     Source model
                   </p>
+
                   <h2>
-                    Upload IFC
+                    Upload model
                   </h2>
                 </div>
               </div>
+
 
               <label
                 className={
@@ -837,29 +1126,54 @@ export function DataExtractionClient() {
               >
                 <input
                   type="file"
-                  accept=".ifc,application/octet-stream"
+                  accept={
+                    acceptAttribute
+                  }
                   onChange={
                     onFileChange
                   }
                   disabled={
-                    workState ===
-                    "working"
+                    inputDisabled
                   }
                 />
 
                 <strong>
-                  {file?.name ??
-                    "Choose an IFC model"}
+                  {
+                    file?.name ??
+                    (
+                      loading
+                        ? "Loading supported formats…"
+                        : "Choose a model"
+                    )
+                  }
                 </strong>
 
                 <span>
-                  {file
-                    ? formatBytes(
-                        file.size,
-                      )
-                    : "One .ifc file per extraction"}
+                  {
+                    file
+                      ? (
+                          `${formatBytes(file.size)} · ` +
+                          `${formatSourceFormat(
+                            sourceCapability
+                              ?.source_format,
+                          )}`
+                        )
+                      : loading
+                        ? (
+                            "Reading extraction capabilities from BIMAP"
+                          )
+                        : acceptedExtensions.length >
+                            0
+                          ? (
+                              `Supported: ${supportedFormatsLabel}`
+                            )
+                          : (
+                              "No extraction source formats are currently available"
+                            )
+                  }
                 </span>
               </label>
+
 
               <fieldset
                 className={
@@ -877,9 +1191,8 @@ export function DataExtractionClient() {
                 {DATASET_INFO
                   .filter(
                     (item) =>
-                      allowedDatasets
-                        .length ===
-                        0 ||
+                      sourceCapability ===
+                        null ||
                       allowedDatasets.includes(
                         item.key,
                       ),
@@ -903,17 +1216,19 @@ export function DataExtractionClient() {
                               item.key,
                             )
                           }
-                          onChange={() =>
+                          onChange={() => {
                             toggleDataset(
                               item.key,
-                            )
-                          }
+                            );
+                          }}
                         />
+
                         <span>
                           {
                             item.title
                           }
                         </span>
+
                         <small>
                           {
                             item.description
@@ -923,6 +1238,7 @@ export function DataExtractionClient() {
                     ),
                   )}
               </fieldset>
+
 
               <label
                 className={
@@ -946,18 +1262,31 @@ export function DataExtractionClient() {
                     onEmailChange
                   }
                 />
+
                 <span>
                   <strong>
                     Email completed
                     package
                   </strong>
+
                   <small>
-                    {emailAvailable
-                      ? `Send the same ZIP package to ${account?.email ?? "your BIMAP account email"}.`
-                      : "Email artifact delivery is not configured on this BIMAP deployment."}
+                    {
+                      emailAvailable
+                        ? (
+                            `Send the same ZIP package to ${
+                              account
+                                ?.email ??
+                              "your BIMAP account email"
+                            }.`
+                          )
+                        : (
+                            "Email artifact delivery is not configured on this BIMAP deployment."
+                          )
+                    }
                   </small>
                 </span>
               </label>
+
 
               <div
                 className={
@@ -969,6 +1298,7 @@ export function DataExtractionClient() {
                     Extraction
                     allowance
                   </span>
+
                   <strong>
                     {
                       allowanceLabel
@@ -982,10 +1312,13 @@ export function DataExtractionClient() {
                     !canSubmit
                   }
                 >
-                  {workState ===
-                  "working"
-                    ? "Extracting…"
-                    : "Extract data"}
+                  {
+                    workState ===
+                    "working"
+                      ? "Extracting…"
+                      : "Extract data"
+                  }
+
                   <span
                     aria-hidden="true"
                   >
@@ -994,6 +1327,7 @@ export function DataExtractionClient() {
                 </button>
               </div>
 
+
               {workState ===
               "working" ? (
                 <button
@@ -1001,11 +1335,11 @@ export function DataExtractionClient() {
                   className={
                     styles.cancel
                   }
-                  onClick={() =>
+                  onClick={() => {
                     abortRef
                       .current
-                      ?.abort()
-                  }
+                      ?.abort();
+                  }}
                 >
                   Cancel request
                 </button>
@@ -1024,25 +1358,32 @@ export function DataExtractionClient() {
                   styles.panelHeading
                 }
               >
-                <span>02</span>
+                <span>
+                  02
+                </span>
+
                 <div>
                   <p>
                     Extraction state
                   </p>
+
                   <h2>
-                    {workState ===
-                    "complete"
-                      ? "Complete"
-                      : workState ===
-                          "working"
-                        ? "Processing"
+                    {
+                      workState ===
+                      "complete"
+                        ? "Complete"
                         : workState ===
-                            "error"
-                          ? "Action required"
-                          : "Ready"}
+                            "working"
+                          ? "Processing"
+                          : workState ===
+                              "error"
+                            ? "Action required"
+                            : "Ready"
+                    }
                   </h2>
                 </div>
               </div>
+
 
               {status ===
               "signed-out" ? (
@@ -1072,28 +1413,29 @@ export function DataExtractionClient() {
                   >
                     <button
                       type="button"
-                      onClick={() =>
+                      onClick={() => {
                         openAuth(
                           "login",
-                        )
-                      }
+                        );
+                      }}
                     >
                       Sign in
                     </button>
 
                     <button
                       type="button"
-                      onClick={() =>
+                      onClick={() => {
                         openAuth(
                           "signup",
-                        )
-                      }
+                        );
+                      }}
                     >
                       Create account
                     </button>
                   </div>
                 </div>
               ) : null}
+
 
               {message ? (
                 <div
@@ -1108,16 +1450,24 @@ export function DataExtractionClient() {
                   }
                 >
                   <strong>
-                    {workState ===
-                    "error"
-                      ? "Extraction not completed"
-                      : "Status"}
+                    {
+                      workState ===
+                      "error"
+                        ? (
+                            "Extraction not completed"
+                          )
+                        : "Status"
+                    }
                   </strong>
+
                   <p>
-                    {message}
+                    {
+                      message
+                    }
                   </p>
                 </div>
               ) : null}
+
 
               <dl
                 className={
@@ -1128,103 +1478,137 @@ export function DataExtractionClient() {
                   <dt>
                     Source
                   </dt>
+
                   <dd>
-                    {file?.name ??
-                      "No file selected"}
+                    {
+                      file?.name ??
+                      "No file selected"
+                    }
                   </dd>
                 </div>
+
+
+                <div>
+                  <dt>
+                    Format
+                  </dt>
+
+                  <dd>
+                    {
+                      formatSourceFormat(
+                        displayedSourceFormat,
+                      )
+                    }
+                  </dd>
+                </div>
+
 
                 <div>
                   <dt>
                     Datasets
                   </dt>
+
                   <dd>
-                    {datasets
-                      .map(
-                        (item) =>
-                          item[0]
-                            .toUpperCase() +
-                          item.slice(
-                            1,
-                          ),
-                      )
-                      .join(", ")}
+                    {
+                      datasets
+                        .map(
+                          (item) =>
+                            (
+                              item[0]
+                                .toUpperCase() +
+                              item.slice(
+                                1,
+                              )
+                            ),
+                        )
+                        .join(", ")
+                    }
                   </dd>
                 </div>
 
-                <div>
-                  <dt>
-                    IFC schema
-                  </dt>
-                  <dd>
-                    {result
-                      ?.ifcSchema ??
-                      "—"}
-                  </dd>
-                </div>
 
                 <div>
                   <dt>
-                    Products
+                    Schema / version
                   </dt>
+
                   <dd>
-                    {result
-                      ?.productCount ??
-                      "—"}
+                    {
+                      displayedSourceSchema ??
+                      "—"
+                    }
                   </dd>
                 </div>
+
+
+                <div>
+                  <dt>
+                    Entities
+                  </dt>
+
+                  <dd>
+                    {
+                      displayedEntityCount ??
+                      "—"
+                    }
+                  </dd>
+                </div>
+
 
                 <div>
                   <dt>
                     Package
                   </dt>
+
                   <dd>
-                    {result
-                      ?.packageBytes !==
-                      null &&
-                    result
-                      ?.packageBytes !==
-                      undefined
-                      ? formatBytes(
-                          result.packageBytes,
-                        )
-                      : "—"}
+                    {
+                      result
+                        ?.packageBytes !==
+                        null &&
+                      result
+                        ?.packageBytes !==
+                        undefined
+                        ? formatBytes(
+                            result.packageBytes,
+                          )
+                        : "—"
+                    }
                   </dd>
                 </div>
+
 
                 <div>
                   <dt>
                     Email
                   </dt>
+
                   <dd>
-                    {result
-                      ?.emailStatus ===
-                    "accepted"
-                      ? "Accepted for delivery"
-                      : result
-                            ?.emailStatus ===
-                          "failed"
-                        ? "Delivery failed"
-                        : "Not requested"}
+                    {
+                      emailStatusLabel
+                    }
                   </dd>
                 </div>
 
+
                 <div>
                   <dt>
-                    Package
-                    SHA-256
+                    Package SHA-256
                   </dt>
+
                   <dd
                     className={
                       styles.hash
                     }
                   >
-                    {result
-                      ?.packageSha256 ??
-                      "—"}
+                    {
+                      result
+                        ?.packageSha256 ??
+                      "—"
+                    }
                   </dd>
                 </div>
               </dl>
+
 
               {result ? (
                 <button
@@ -1232,14 +1616,17 @@ export function DataExtractionClient() {
                   className={
                     styles.download
                   }
-                  onClick={() =>
+                  onClick={() => {
                     triggerDownload(
                       result,
-                    )
-                  }
+                    );
+                  }}
                 >
                   Download{" "}
-                  {result.filename}
+                  {
+                    result.filename
+                  }
+
                   <span
                     aria-hidden="true"
                   >
@@ -1266,52 +1653,71 @@ export function DataExtractionClient() {
             }
           >
             <article>
-              <span>JSON</span>
+              <span>
+                JSON
+              </span>
+
               <h3>
                 Complete structured
                 result
               </h3>
+
               <p>
                 The JSON artifact
-                carries the complete
-                normalized extraction,
+                carries the normalized
+                extraction result,
                 source identity,
-                project metadata,
-                project units, counts
-                and selected datasets.
+                available project or
+                scene metadata, units,
+                counts, and the
+                selected datasets.
               </p>
             </article>
 
+
             <article>
-              <span>PDF</span>
+              <span>
+                PDF
+              </span>
+
               <h3>
                 Human-readable
                 summary
               </h3>
+
               <p>
                 The PDF summarizes
                 extraction identity,
                 source integrity,
-                project information,
-                dataset counts, IFC
-                class distribution and
-                project units.
+                available model
+                information, dataset
+                counts, object or class
+                distribution, and
+                source units where
+                available.
               </p>
             </article>
 
+
             <article>
-              <span>ZIP</span>
+              <span>
+                ZIP
+              </span>
+
               <h3>
                 One authoritative
                 package
               </h3>
+
               <p>
                 BIMAP downloads and,
-                when requested, emails
-                the same completed ZIP
-                bytes. The email path
-                does not regenerate a
-                second result.
+                when requested and
+                configured, emails the
+                same completed ZIP
+                package. The delivery
+                path does not fabricate
+                a second extraction
+                result.
               </p>
             </article>
           </div>
@@ -1341,22 +1747,27 @@ export function DataExtractionClient() {
             </p>
 
             <h2>
-              Actual IFC data,
-              governed delivery.
+              Capability-driven model
+              extraction.
             </h2>
 
             <p>
-              BIMAP authenticates
-              before parsing the
-              multipart body, stages
-              and hashes the source,
-              requires a clean malware
-              verdict, preflights the
-              IFC, consumes the
-              existing data-extraction
-              entitlement, and only
-              then produces the final
-              JSON/PDF package.
+              BIMAP does not assume an
+              IFC source. The selected
+              model is matched against
+              the extraction
+              capabilities advertised
+              by the backend. The
+              authenticated workflow
+              then validates, stages,
+              hashes and scans the
+              source, consumes the
+              existing extraction
+              entitlement, and produces
+              the completed JSON/PDF
+              package through the
+              configured source
+              adapter.
             </p>
           </div>
         </div>
