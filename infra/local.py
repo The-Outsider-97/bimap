@@ -265,7 +265,7 @@ class LocalSLAIAuthentication(Authentication):
         self._require_phone_verification = require_phone_verification
         self._email_code_ttl_minutes = (email_code_ttl_minutes)
         self._lock = RLock()
-        self._usernames_by_auth_id: dict[str, str] = {}
+        # self._usernames_by_auth_id: dict[str, str] = {}
         self._contacts_by_auth_id: dict[str, tuple[str, str, str, str]] = {}
         self._sessions: dict[str, SessionPrincipal] = {}
         super().__init__()
@@ -298,8 +298,6 @@ class LocalSLAIAuthentication(Authentication):
             username=username,
             email=email,
         )
-        with self._lock:
-            self._usernames_by_auth_id[auth_user_id] = username
         return IdentityCreationResult(status=IdentityCreationStatus.CREATED, identity=identity)
 
     def _delete_identity(self, auth_user_id: str) -> None:
@@ -430,7 +428,6 @@ class LocalSLAIAuthentication(Authentication):
                 ) from exc
 
         with self._lock:
-            self._usernames_by_auth_id[auth_user_id] = username
             self._contacts_by_auth_id[auth_user_id] = (
                 username,
                 email,
@@ -551,35 +548,38 @@ class LocalSLAIAuthentication(Authentication):
                 retry_after=getattr(exc, "lockout_until", None),
             )
 
-        with self._lock:
-            self._usernames_by_auth_id[auth_user_id] = username
         return CredentialVerification(
             status=CredentialStatus.ACCEPTED,
             auth_user_id=auth_user_id,
         )
 
     def _create_session(self, auth_user_id: str) -> AuthSession:
-        with self._lock:
-            username = self._usernames_by_auth_id.get(auth_user_id)
-        if username is None:
+        token = self._auth.complete_login_by_user_id(auth_user_id)
+
+        if token.user_id != auth_user_id:
             raise AppIntegrityError(
-                "Authentication identity cannot be resolved to a username.",
+                "Authentication session identity "
+                "does not match the requested "
+                "authentication identity.",
                 component="local_slai_authentication",
                 operation="create_session",
                 field="auth_user_id",
             )
 
-        token = self._auth.complete_login(username)
         session = AuthSession(
             auth_user_id=auth_user_id,
             access_token=token.token,
             expires_at=token.expires_at,
         )
+
         with self._lock:
-            self._sessions[session.access_token] = SessionPrincipal(
+            self._sessions[
+                session.access_token
+            ] = SessionPrincipal(
                 auth_user_id=auth_user_id,
                 expires_at=session.expires_at,
             )
+
         return session
 
     def _resolve_session(self, access_token: str) -> SessionPrincipal | None:
