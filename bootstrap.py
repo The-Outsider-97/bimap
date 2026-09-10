@@ -70,6 +70,7 @@ from .app.commands.request_deletion import RequestDeletion
 from .app.commands.stage_upload import StageUpload
 from .app.commands.validate_uploads import ValidateUploads
 from .app.ports.accounts import Accounts
+from .app.ports.audit_results import AuditResultStore
 from .app.ports.authentication import Authentication
 from .app.ports.clock import Clock
 from .app.ports.data_extraction import DataExtractionPDFRenderer, DataExtractor
@@ -81,13 +82,15 @@ from .app.ports.queue import Queue
 from .app.ports.repositories import Repository
 from .app.ports.storage import Storage
 from .app.queries.get_audit_status import GetAuditStatus
+from .app.queries.get_audit_workspace import GetAuditWorkspace
 from .app.queries.get_order import GetOrder
 from .app.queries.get_products import GetProducts
 from .app.queries.list_orders import ListOrders
 from .app.queries.list_reports import ListReports
 from .app.services.account_service import AccountService
-from .app.services.authentication_service import AuthenticationService
+from .app.services.audit_input_service import AuditInputService
 from .app.services.audit_service import AuditService
+from .app.services.authentication_service import AuthenticationService
 from .app.services.data_extraction_service import DataExtractionService
 from .app.services.entitlement_service import EntitlementService
 from .app.services.fulfilment_service import FulfilmentService
@@ -219,6 +222,7 @@ class BootstrapInfrastructure:
     model_converter: ModelConverter
     data_extractor: DataExtractor
     data_extraction_pdf_renderer: DataExtractionPDFRenderer
+    audit_results: AuditResultStore
 
     account_summary_resolver: AccountSummaryResolver | None = None
     account_avatar_uploader: AccountAvatarUploader | None = None
@@ -252,7 +256,8 @@ class BootstrapInfrastructure:
             ("route_hooks", self.route_hooks, APIRouteHooks),
             ("model_converter", self.model_converter, ModelConverter),
             ("data_extractor", self.data_extractor, DataExtractor),
-            ("data_extraction_pdf_renderer", self.data_extraction_pdf_renderer, DataExtractionPDFRenderer)
+            ("data_extraction_pdf_renderer", self.data_extraction_pdf_renderer, DataExtractionPDFRenderer),
+            ("audit_results", self.audit_results, AuditResultStore),
         )
 
         for field, value, expected_type in required:
@@ -665,6 +670,7 @@ class BootstrapServices:
     """Application services created exactly once by Bootstrap."""
 
     audit: AuditService
+    audit_input: AuditInputService
     order: OrderService
     upload: UploadService
     entitlement: EntitlementService
@@ -705,6 +711,8 @@ class BootstrapQueries:
 
     get_audit_status: GetAuditStatus
     list_reports: ListReports
+
+    get_audit_workspace: GetAuditWorkspace
 
 
 @dataclass(frozen=True, slots=True)
@@ -1016,6 +1024,12 @@ class Bootstrap:
                     self.infrastructure.storage,
                 )
 
+                audit_input_service = AuditInputService(
+                    self.infrastructure.storage,
+                    self.infrastructure.data_extractor,
+                    self.infrastructure.clock,
+                )
+
                 audit_service = AuditService(
                     audit_engine,
                     cast(Any, slai_adapter),
@@ -1040,6 +1054,7 @@ class Bootstrap:
                 services = BootstrapServices(
                     account=account_service,
                     audit=audit_service,
+                    audit_input=audit_input_service,
                     authentication=authentication_service,
                     order=order_service,
                     upload=upload_service,
@@ -1060,6 +1075,10 @@ class Bootstrap:
 
                 stage_upload = StageUpload(
                     upload_service
+                )
+
+                get_audit_workspace = GetAuditWorkspace(
+                    self.infrastructure.audit_results
                 )
 
                 cancel_order = CancelOrder(
@@ -1155,6 +1174,7 @@ class Bootstrap:
                     list_orders=list_orders,
                     get_products=get_products,
                     get_audit_status=get_audit_status,
+                    get_audit_workspace=get_audit_workspace,
                     list_reports=list_reports,
                 )
 
@@ -1174,6 +1194,11 @@ class Bootstrap:
                     create_upload_slot=create_upload_slot,
                     stage_upload=stage_upload,
                     validate_uploads=validate_uploads,
+
+                    prepare_audit_input=audit_input_service,
+                    enqueue_audit=enqueue_audit,
+                    get_audit_status=get_audit_status,
+                    get_audit_workspace=get_audit_workspace,
 
                     begin_checkout=begin_checkout,
                     handle_payment=handle_payment,
@@ -1246,7 +1271,7 @@ class Bootstrap:
 
                 stage = "workers"
 
-                worker_audit = WorkerAudit(audit_service, order_service)
+                worker_audit = WorkerAudit(audit_service, order_service, audit_input_service)
                 worker_report = JobReport(fulfilment_service)
                 worker_retention = JobRetention(fulfilment_service)
                 worker_deletion = JobDeletion(request_deletion)
