@@ -12,7 +12,13 @@ import {
 
 import { BimapApiError } from "@/lib/api";
 import { getApiErrorMessage } from "@/lib/account";
-import type { BimapProductCode } from "@/lib/bimap-api";
+import {
+  beginOrderUploads,
+  getOrder,
+  stageOrderModelUpload,
+  type BimapProductCode,
+  type BimapStagedUploadDto,
+} from "@/lib/bimap-api";
 import {
   allElementTargets,
   findingsFromWorkspace,
@@ -175,6 +181,10 @@ export function AuditWorkspace({ productCode }: Props) {
   const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(null);
   const [modelUrl, setModelUrl] = useState<string | null>(null);
   const [modelName, setModelName] = useState<string | null>(null);
+  const [auditSourceFiles, setAuditSourceFiles] = useState<readonly File[]>([]);
+  const [stagedAuditSources, setStagedAuditSources] = useState<readonly BimapStagedUploadDto[]>([]);
+  const [uploadingAuditSource, setUploadingAuditSource] = useState(false);
+  const [auditUploadMessage, setAuditUploadMessage] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
   const modelUrlRef = useRef<string | null>(null);
 
@@ -347,6 +357,146 @@ export function AuditWorkspace({ productCode }: Props) {
     }, 2500);
   }, [refreshStatus, stopPolling]);
 
+const onAuditSourceFiles = useCallback(
+  (event: ChangeEvent<HTMLInputElement>) => {
+    const files =
+      Array.from(
+        event.target.files ?? [],
+      );
+
+    setAuditSourceFiles(files);
+    setAuditUploadMessage(null);
+  },
+  [],
+);
+
+
+const onUploadAuditSources = useCallback(
+  async () => {
+    const targetOrderId =
+      orderId.trim();
+
+    if (!targetOrderId) {
+      setAuditUploadMessage(
+        "Enter an Order ID before uploading a model.",
+      );
+      return;
+    }
+
+    if (auditSourceFiles.length === 0) {
+      setAuditUploadMessage(
+        "Choose at least one model file.",
+      );
+      return;
+    }
+
+    setUploadingAuditSource(true);
+    setAuditUploadMessage(
+      "Preparing secure model upload…",
+    );
+
+    try {
+      let order =
+        await getOrder(
+          targetOrderId,
+        );
+
+      if (
+        order.product_code !==
+        productCode
+      ) {
+        throw new Error(
+          `Order ${targetOrderId} belongs to ${order.product_code}, ` +
+          `not ${productCode}.`,
+        );
+      }
+
+      /*
+       * Preserve the canonical order lifecycle:
+       *
+       * draft -> uploading
+       *
+       * An order already in "uploading" can receive additional source files,
+       * which is important for Combined Audit.
+       */
+      if (
+        order.state === "draft"
+      ) {
+        order =
+          await beginOrderUploads(
+            targetOrderId,
+            crypto.randomUUID(),
+          );
+      }
+
+      if (
+        order.state !== "uploading"
+      ) {
+        throw new Error(
+          `Models cannot be added while the order is in ` +
+          `"${order.state.replaceAll("_", " ")}" state.`,
+        );
+      }
+
+      let uploadedCount = 0;
+
+      for (
+        const file of
+        auditSourceFiles
+      ) {
+        setAuditUploadMessage(
+          `Uploading ${file.name}…`,
+        );
+
+        const staged =
+          await stageOrderModelUpload(
+            targetOrderId,
+            file,
+          );
+
+        setStagedAuditSources(
+          (current) => {
+            const withoutExisting =
+              current.filter(
+                (item) =>
+                  item.source_ref !==
+                  staged.source_ref,
+              );
+
+            return [
+              ...withoutExisting,
+              staged,
+            ];
+          },
+        );
+
+        uploadedCount += 1;
+      }
+
+      setAuditSourceFiles([]);
+
+      setAuditUploadMessage(
+        `${uploadedCount} model${
+          uploadedCount === 1
+            ? ""
+            : "s"
+        } uploaded and safety-validated.`,
+      );
+    } catch (error) {
+      setAuditUploadMessage(
+        getApiErrorMessage(error),
+      );
+    } finally {
+      setUploadingAuditSource(false);
+    }
+  },
+  [
+    auditSourceFiles,
+    orderId,
+    productCode,
+  ],
+);
+
   const onStart = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const targetOrderId = orderId.trim();
@@ -358,9 +508,22 @@ export function AuditWorkspace({ productCode }: Props) {
 
     const evidenceRefs = parseEvidenceRefs(evidenceRefText);
     const evidenceManifestRef = manifestRef.trim() || null;
-    if (evidenceRefs.length === 0 && evidenceManifestRef === null) {
+    if (
+      evidenceRefs.length === 0 &&
+      evidenceManifestRef === null
+    ) {
       setPhase("error");
-      setMessage("Provide validated evidence references or an evidence manifest reference.");
+      setMessage(
+        stagedAuditSources.length > 0
+          ? (
+              "The model source is uploaded, but no canonical audit evidence " +
+              "has been attached yet."
+            )
+          : (
+              "Provide validated evidence references or an evidence manifest reference."
+            ),
+      );
+
       return;
     }
 
@@ -492,6 +655,80 @@ export function AuditWorkspace({ productCode }: Props) {
           <span>{phase.replaceAll("_", " ")}</span>
           <strong>{status?.state.replaceAll("_", " ") ?? "No audit loaded"}</strong>
         </div>
+      </div>
+
+      <div className={styles.auditUploadBar}>
+        <label className={styles.auditUploadPicker}>
+          <span>Audit model source</span>
+
+          <input
+            type="file"
+            multiple
+            onChange={onAuditSourceFiles}
+            disabled={uploadingAuditSource}
+          />
+
+          <strong>
+            {auditSourceFiles.length === 0
+              ? "Choose BIM model file(s)"
+              : auditSourceFiles.length === 1
+                ? auditSourceFiles[0].name
+                : `${auditSourceFiles.length} model files selected`}
+          </strong>
+        </label>
+
+        <div className={styles.controlButtons}>
+          <button
+            type="button"
+            onClick={() => void onUploadAuditSources()}
+            disabled={
+              uploadingAuditSource ||
+              auditSourceFiles.length === 0 ||
+              !orderId.trim()
+            }
+          >
+            {uploadingAuditSource
+              ? "Uploading…"
+              : "Upload model"}
+          </button>
+        </div>
+
+        {auditUploadMessage ? (
+          <div className={styles.auditUploadMessage}>
+            {auditUploadMessage}
+          </div>
+        ) : null}
+
+        {stagedAuditSources.length > 0 ? (
+          <div className={styles.auditUploadResults}>
+            {stagedAuditSources.map(
+              (source) => (
+                <div
+                  key={source.source_ref}
+                  className={styles.auditUploadResult}
+                >
+                  <div>
+                    <strong>
+                      {source.filename}
+                    </strong>
+
+                    <span>
+                      {source.stored_object.size_bytes.toLocaleString()} bytes
+                      {" · "}
+                      {source.malware_scan.verdict}
+                    </span>
+                  </div>
+
+                  <code
+                    title={source.source_ref}
+                  >
+                    {source.source_ref}
+                  </code>
+                </div>
+              ),
+            )}
+          </div>
+        ) : null}
       </div>
 
       <form className={styles.auditControls} onSubmit={onStart}>
