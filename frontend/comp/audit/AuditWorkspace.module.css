@@ -505,6 +505,7 @@
   font-size: 0.75rem;
   line-height: 1.45;
   display: -webkit-box;
+  line-clamp: 2;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
@@ -790,6 +791,110 @@
   font-size: 0.72rem;
 }
 
+.auditUploadBar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.8rem;
+  align-items: end;
+  padding: 1rem;
+  border: 1px solid rgba(18, 24, 31, 0.14);
+  background: #fff;
+}
+
+.auditUploadPicker {
+  min-width: 0;
+  display: grid;
+  gap: 0.42rem;
+  position: relative;
+  cursor: pointer;
+}
+
+.auditUploadPicker > span {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auditUploadPicker > strong {
+  min-height: 43px;
+  display: flex;
+  align-items: center;
+  padding: 0.7rem 0.8rem;
+  overflow: hidden;
+  border: 1px solid rgba(18, 24, 31, 0.2);
+  background: #fff;
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auditUploadPicker:focus-within > strong {
+  border-color: #111820;
+  box-shadow: 0 0 0 2px rgba(17, 24, 32, 0.08);
+}
+
+.auditUploadPicker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.auditUploadMessage,
+.auditUploadResults {
+  grid-column: 1 / -1;
+}
+
+.auditUploadMessage {
+  color: rgba(18, 24, 31, 0.68);
+  font-size: 0.78rem;
+}
+
+.auditUploadResults {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.auditUploadResult {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.75fr);
+  gap: 1rem;
+  align-items: center;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(18, 24, 31, 0.1);
+  background: #f8f9fa;
+}
+
+.auditUploadResult strong,
+.auditUploadResult span {
+  display: block;
+}
+
+.auditUploadResult strong {
+  overflow: hidden;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auditUploadResult span {
+  margin-top: 0.2rem;
+  color: rgba(18, 24, 31, 0.56);
+  font-size: 0.67rem;
+}
+
+.auditUploadResult code {
+  overflow: hidden;
+  color: rgba(18, 24, 31, 0.58);
+  font-size: 0.67rem;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 1180px) {
   .auditControls {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -908,106 +1013,4 @@
   }
 }
 
-.auditUploadBar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.8rem;
-  align-items: end;
-  padding: 1rem;
-  border: 1px solid rgba(18, 24, 31, 0.14);
-  background: #fff;
-}
 
-.auditUploadPicker {
-  min-width: 0;
-  display: grid;
-  gap: 0.42rem;
-  position: relative;
-  cursor: pointer;
-}
-
-.auditUploadPicker > span {
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.auditUploadPicker > strong {
-  min-height: 43px;
-  display: flex;
-  align-items: center;
-  padding: 0.7rem 0.8rem;
-  overflow: hidden;
-  border: 1px solid rgba(18, 24, 31, 0.2);
-  background: #fff;
-  font-size: 0.82rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.auditUploadPicker:focus-within > strong {
-  border-color: #111820;
-  box-shadow: 0 0 0 2px rgba(17, 24, 32, 0.08);
-}
-
-.auditUploadPicker input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.auditUploadMessage,
-.auditUploadResults {
-  grid-column: 1 / -1;
-}
-
-.auditUploadMessage {
-  color: rgba(18, 24, 31, 0.68);
-  font-size: 0.78rem;
-}
-
-.auditUploadResults {
-  display: grid;
-  gap: 0.45rem;
-}
-
-.auditUploadResult {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.75fr);
-  gap: 1rem;
-  align-items: center;
-  padding: 0.65rem 0.75rem;
-  border: 1px solid rgba(18, 24, 31, 0.1);
-  background: #f8f9fa;
-}
-
-.auditUploadResult strong,
-.auditUploadResult span {
-  display: block;
-}
-
-.auditUploadResult strong {
-  overflow: hidden;
-  font-size: 0.78rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.auditUploadResult span {
-  margin-top: 0.2rem;
-  color: rgba(18, 24, 31, 0.56);
-  font-size: 0.67rem;
-}
-
-.auditUploadResult code {
-  overflow: hidden;
-  color: rgba(18, 24, 31, 0.58);
-  font-size: 0.67rem;
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
