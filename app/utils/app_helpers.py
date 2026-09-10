@@ -376,6 +376,7 @@ def to_app_primitive(value: Any, *, field: str) -> Any:
 
 
 __all__ = [
+    "decode_app_json_object",
     "announce_app_action",
     "lower_error_context",
     "require_app_text",
