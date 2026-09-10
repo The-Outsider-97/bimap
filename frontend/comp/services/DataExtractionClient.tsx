@@ -72,6 +72,20 @@ const DATASET_INFO: ReadonlyArray<{
 ];
 
 
+
+
+function fileExtension(filename: string): string {
+  const index = filename.lastIndexOf(".");
+
+  return index >= 0
+    ? filename.slice(index).toLowerCase()
+    : "";
+}
+
+
+
+
+
 function formatBytes(
   value: number,
 ): string {
@@ -325,12 +339,34 @@ export function DataExtractionClient() {
   }, [status]);
 
 
-  const sourceCapability =
-    capabilities?.sources.find(
-      (entry) =>
-        entry.source_format ===
-        "ifc",
+  const sourceCapability = useMemo(() => {
+    if (file === null || capabilities === null) {
+      return null;
+    }
+
+    const extension = fileExtension(file.name);
+
+  const acceptedExtensions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          capabilities?.sources.flatMap(
+            (source) => source.extensions,
+          ) ?? [],
+        ),
+      )
+        .sort()
+        .join(","),
+    [capabilities],
+  );
+
+  return (
+      capabilities.sources.find(
+        (source) =>
+          source.extensions.includes(extension),
+      ) ?? null
     );
+  }, [capabilities, file]);
 
   const allowedDatasets =
     sourceCapability?.datasets ??
@@ -410,43 +446,50 @@ export function DataExtractionClient() {
     }, []);
 
 
-  const onFileChange =
-    useCallback(
-      (
-        event:
-          ChangeEvent<HTMLInputElement>,
-      ) => {
-        const selected =
-          event.target
-            .files?.[0] ??
-          null;
+  const onFileChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const selected =
+        event.target.files?.[0] ?? null;
 
-        if (
-          selected !== null &&
-          !selected.name
-            .toLowerCase()
-            .endsWith(".ifc")
-        ) {
-          setFile(null);
-          attemptRef.current =
-            null;
-          setResult(null);
-          setWorkState(
-            "error",
-          );
-          setMessage(
-            "Choose an IFC (.ifc) source model.",
-          );
-          event.target.value =
-            "";
-          return;
-        }
-
-        setFile(selected);
+      if (selected === null) {
+        setFile(null);
         resetAttempt();
-      },
-      [resetAttempt],
-    );
+        return;
+      }
+
+      const extension =
+        fileExtension(selected.name);
+
+      const capability =
+        capabilities?.sources.find(
+          (source) =>
+            source.extensions.includes(extension),
+        );
+
+      if (!capability) {
+        setFile(null);
+        setResult(null);
+        setWorkState("error");
+
+        setMessage(
+          acceptedExtensions
+            ? `Unsupported model format. Supported file types: ${acceptedExtensions}.`
+            : "No model extraction formats are currently available.",
+        );
+
+        event.target.value = "";
+        return;
+      }
+
+      setFile(selected);
+      resetAttempt();
+    },
+    [
+      acceptedExtensions,
+      capabilities,
+      resetAttempt,
+    ],
+  );
 
 
   const toggleDataset =

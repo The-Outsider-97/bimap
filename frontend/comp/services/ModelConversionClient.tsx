@@ -40,6 +40,15 @@ type AttemptIdentity = {
 };
 
 
+function fileExtension(filename: string): string {
+  const index = filename.lastIndexOf(".");
+
+  return index >= 0
+    ? filename.slice(index).toLowerCase()
+    : "";
+}
+
+
 function formatBytes(value: number): string {
   if (!Number.isFinite(value) || value < 0) {
     return "—";
@@ -152,9 +161,20 @@ export function ModelConversionClient() {
     };
   }, [status]);
 
-  const sourceCapability = capabilities?.sources.find(
-    (entry) => entry.source_format === "ifc",
-  );
+  const sourceCapability = useMemo(() => {
+    if (file === null || capabilities === null) {
+      return null;
+    }
+
+    const extension = fileExtension(file.name);
+
+    return (
+      capabilities.sources.find(
+        (source) =>
+          source.extensions.includes(extension),
+      ) ?? null
+    );
+  }, [capabilities, file]);
 
   const targets = sourceCapability?.target_formats ?? [];
 
@@ -189,28 +209,47 @@ export function ModelConversionClient() {
 
   const onFileChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
-      const selected = event.target.files?.[0] ?? null;
-      if (selected !== null && !selected.name.toLowerCase().endsWith(".ifc")) {
+      const selected =
+        event.target.files?.[0] ?? null;
+
+      if (selected === null) {
         setFile(null);
-        attemptRef.current = null;
+        resetAttempt();
+        return;
+      }
+
+      const extension =
+        fileExtension(selected.name);
+
+      const capability =
+        capabilities?.sources.find(
+          (source) =>
+            source.extensions.includes(extension),
+        );
+
+      if (!capability) {
+        setFile(null);
         setResult(null);
         setWorkState("error");
-        setMessage("Choose an IFC (.ifc) source model.");
+
+        setMessage(
+          acceptedExtensions
+            ? `Unsupported model format. Supported file types: ${acceptedExtensions}.`
+            : "No model extraction formats are currently available.",
+        );
+
         event.target.value = "";
         return;
       }
+
       setFile(selected);
       resetAttempt();
     },
-    [resetAttempt],
-  );
-
-  const onTargetChange = useCallback(
-    (next: ModelTargetFormat) => {
-      setTargetFormat(next);
-      resetAttempt();
-    },
-    [resetAttempt],
+    [
+      acceptedExtensions,
+      capabilities,
+      resetAttempt,
+    ],
   );
 
   const getAttempt = useCallback(
@@ -297,6 +336,20 @@ export function ModelConversionClient() {
     }
     return `${usage.remaining} / ${usage.limit} remaining`;
   }, [usage]);
+
+  const acceptedExtensions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          capabilities?.sources.flatMap(
+            (source) => source.extensions,
+          ) ?? [],
+        ),
+      )
+        .sort()
+        .join(","),
+    [capabilities],
+  );
 
   return (
     <>
