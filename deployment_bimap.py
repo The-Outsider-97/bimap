@@ -47,8 +47,6 @@ from applications.bimap.api.utils.api_errors import (  # type: ignore
 from applications.bimap.domain.accounts.models import Account  # type: ignore
 from applications.bimap.domain.accounts.plans import AccountPlanCatalog, QuotaMode, UsageKind  # type: ignore
 from applications.bimap.domain.orders.states import EXCEPTION_STATES, OrderState  # type: ignore
-from src.functions.auth import AuthService as SLAIAuthService  # type: ignore
-from src.functions.phone_verification import ConsoleSMSBackend, PhoneVerificationService  # type: ignore
 from applications.bimap.notifications import ( # type: ignore
     EmailAddress,
     EmailBranding,
@@ -92,8 +90,10 @@ from applications.bimap.infra.local import ( # type: ignore
     LocalSLAIAuthentication,
     SystemClock,
 )
-from logs.logger import PrettyPrinter, get_logger  # type: ignore
+from src.functions.auth import AuthService as SLAIAuthService  # type: ignore
+from src.functions.phone_verification import PhoneVerificationService, TwilioBackend  # type: ignore
 from src.agents.collaborative.shared_memory import SharedMemory  # type: ignore
+from logs.logger import PrettyPrinter, get_logger  # type: ignore
 
 
 logger = get_logger("BIMAP Deployment")
@@ -104,10 +104,9 @@ _MODE_ENV = "BIMAP_ENV"
 _COMBINED_VERSION_ENV = "BIMAP_COMBINED_AUDIT_VERSION"
 _TRUST_UPLOADS_ENV = "BIMAP_DEV_TRUST_UPLOADS"
 _ALLOWED_HOSTS_ENV = "BIMAP_ALLOWED_HOSTS"
-
+_REQUIRE_SMS_VERIFICATION_ENV = "BIMAP_REQUIRE_SMS_VERIFICATION"
 _LOCAL_MODES = frozenset({"development", "dev", "local"})
 _PRODUCTION_MODES = frozenset({"production", "prod"})
-
 
 def _build_email_service() -> EmailService:
     printer.status(
@@ -122,9 +121,7 @@ def _build_email_service() -> EmailService:
         EmailBranding(
             product_name="BIMAP",
             team_name="The Remy3Design Team",
-            support_email=(
-                "info.remy3design@gmail.com"
-            ),
+            support_email="info.remy3design@gmail.com",
         )
     )
 
@@ -136,6 +133,50 @@ def _build_email_service() -> EmailService:
             "Remy3Design",
         ),
     )
+
+def _required_environment(name: str) -> str:
+    value = os.getenv(name)
+
+    if value is None or not value.strip():
+        raise RuntimeError(
+            f"Required environment variable {name} is not configured."
+        )
+
+    return value.strip()
+
+
+def _build_phone_verification_service() -> PhoneVerificationService:
+    printer.status(
+        "BIMAP",
+        "Building SMS verification service",
+        "info",
+    )
+
+    backend = TwilioBackend(
+        account_sid=_required_environment(
+            "BIMAP_TWILIO_ACCOUNT_SID"
+        ),
+        auth_token=_required_environment(
+            "BIMAP_TWILIO_AUTH_TOKEN"
+        ),
+        from_number=_required_environment(
+            "BIMAP_TWILIO_FROM_NUMBER"
+        ),
+    )
+
+    if not backend.test_connection():
+        raise RuntimeError(
+            "Twilio SMS authentication or connectivity test failed."
+        )
+
+    return PhoneVerificationService(
+        backend,
+        code_length=6,
+        code_ttl_seconds=300.0,
+        max_verify_attempts=5,
+        resend_cooldown_seconds=60.0,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Configuration helpers
@@ -574,16 +615,25 @@ def _create_local_bootstrap() -> Bootstrap:
     entitlement_store = InMemoryEntitlementStore()
     renewal_window_resolver = CalendarUTCRenewalWindowResolver()
 
-    auth_memory_path = os.path.join(
-        tempfile.gettempdir(),
-        f"bimap-auth-{os.getpid()}-{uuid4().hex}.json",
-    )
+    auth_memory_path = os.path.join(tempfile.gettempdir(), f"bimap-auth-{os.getpid()}-{uuid4().hex}.json")
     email_notifications = _build_email_service()
+    require_sms_verification = _environment_bool(
+        _REQUIRE_SMS_VERIFICATION_ENV,
+        default=False,
+    )
+
+    phone_verification = (
+        _build_phone_verification_service()
+        if require_sms_verification
+        else None
+    )
+
     authentication = LocalSLAIAuthentication(
         SLAIAuthService(memory_path=auth_memory_path),
         email_notifications,
-        PhoneVerificationService(ConsoleSMSBackend()),
+        phone_verification,
         email_code_ttl_minutes=15,
+        require_phone_verification=require_sms_verification,
     )
 
     account_summary_resolver = _build_local_account_summary_resolver(
