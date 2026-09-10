@@ -15,6 +15,10 @@ import {
 } from "./AccountProvider";
 
 import {
+  BimapApiError,
+} from "@/lib/api";
+
+import {
   getAccountSummary,
   getApiErrorMessage,
   PLAN_OPTIONS,
@@ -285,6 +289,13 @@ export function AccountPage() {
             uploadError,
           ),
         );
+
+        if (
+          uploadError instanceof BimapApiError &&
+          uploadError.status === 401
+        ) {
+          await refresh();
+        }
       } finally {
         setAvatarBusy(false);
       }
