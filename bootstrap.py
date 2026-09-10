@@ -58,9 +58,11 @@ from .api.middleware.request_limits import RateLimiter
 from .api.routes._shared import RouteAuthorizer
 from .app.commands.begin_checkout import BeginCheckout
 from .app.commands.cancel_order import CancelOrder
+from .app.commands.convert_model import ConvertModel
 from .app.commands.create_order import CreateOrder
 from .app.commands.create_upload_slot import CreateUploadSlot
 from .app.commands.enqueue_audit import EnqueueAudit
+from .app.commands.extract_model_data import ExtractModelData
 from .app.commands.grant_entitlement import GrantEntitlement
 from .app.commands.handle_payment import HandlePayment
 from .app.commands.release_report import ReleaseReport
@@ -69,7 +71,9 @@ from .app.commands.validate_uploads import ValidateUploads
 from .app.ports.accounts import Accounts
 from .app.ports.authentication import Authentication
 from .app.ports.clock import Clock
+from .app.ports.data_extraction import DataExtractionPDFRenderer, DataExtractor
 from .app.ports.malware import Malware
+from .app.ports.model_conversion import ModelConverter
 from .app.ports.notifications import Notifications
 from .app.ports.payment import Payment
 from .app.ports.queue import Queue
@@ -83,8 +87,10 @@ from .app.queries.list_reports import ListReports
 from .app.services.account_service import AccountService
 from .app.services.authentication_service import AuthenticationService
 from .app.services.audit_service import AuditService
+from .app.services.data_extraction_service import DataExtractionService
 from .app.services.entitlement_service import EntitlementService
 from .app.services.fulfilment_service import FulfilmentService
+from .app.services.model_conversion_service import ModelConversionService
 from .app.services.order_service import OrderService
 from .app.services.review_service import ReviewService
 from .app.services.upload_service import UploadService
@@ -209,6 +215,10 @@ class BootstrapInfrastructure:
     renewal_window_resolver: Any
     route_hooks: APIRouteHooks
 
+    model_converter: ModelConverter
+    data_extractor: DataExtractor
+    data_extraction_pdf_renderer: DataExtractionPDFRenderer
+
     account_summary_resolver: AccountSummaryResolver | None = None
     account_avatar_uploader: AccountAvatarUploader | None = None
     notifications: Notifications | None = None
@@ -239,6 +249,9 @@ class BootstrapInfrastructure:
             ("queue", self.queue, Queue),
             ("shared_memory", self.shared_memory, SharedMemory),
             ("route_hooks", self.route_hooks, APIRouteHooks),
+            ("model_converter", self.model_converter, ModelConverter),
+            ("data_extractor", self.data_extractor, DataExtractor),
+            ("data_extraction_pdf_renderer", self.data_extraction_pdf_renderer, DataExtractionPDFRenderer)
         )
 
         for field, value, expected_type in required:
@@ -976,6 +989,25 @@ class Bootstrap:
                     ),
                 )
 
+                model_conversion_service = (
+                    ModelConversionService(
+                        self.infrastructure.model_converter,
+                        self.infrastructure.malware,
+                        entitlement_service,
+                    )
+                )
+
+                data_extraction_service = (
+                    DataExtractionService(
+                        self.infrastructure.data_extractor,
+                        self.infrastructure
+                            .data_extraction_pdf_renderer,
+                        self.infrastructure.malware,
+                        entitlement_service,
+                        self.infrastructure.clock,
+                    )
+                )
+
                 upload_service = UploadService(
                     self.infrastructure.repository,
                     self.infrastructure.malware,
@@ -1045,8 +1077,16 @@ class Bootstrap:
                     order_service
                 )
 
+                convert_model = ConvertModel(
+                    model_conversion_service,
+                )
+
+                extract_model_data = ExtractModelData(
+                    data_extraction_service,
+                )
+
                 grant_entitlement = GrantEntitlement(
-                    entitlement_service,
+                    cast(Any, entitlement_service),
                     order_service,
                 )
 
@@ -1132,6 +1172,8 @@ class Bootstrap:
                     grant_entitlement=grant_entitlement,
                     list_reports=list_reports,
                     request_deletion=request_deletion,
+                    convert_model=convert_model,
+                    extract_model_data=extract_model_data,
                 )
 
                 api_health = APIHealthDependencies(

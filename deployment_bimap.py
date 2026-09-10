@@ -32,6 +32,7 @@ Production mode fails closed rather than silently using development adapters.
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 
 from collections.abc import Mapping
@@ -90,6 +91,20 @@ from applications.bimap.infra.local import ( # type: ignore
     LocalSLAIAuthentication,
     SystemClock,
 )
+from applications.bimap.infra.conversion import ( # type: ignore
+    BlenderFbxModelConverter,
+    IfcOpenShellModelConverter,
+    MultiFormatModelConverter,
+    TrimeshModelConverter,
+)
+from applications.bimap.infra.extraction import ( # type: ignore
+    BlenderFbxDataExtractor,
+    DwgDxfDataExtractor,
+    IfcOpenShellDataExtractor,
+    MultiFormatDataExtractor,
+    TrimeshDataExtractor,
+)
+from applications.bimap.infra.reportlab_data_extraction_renderer import ReportLabDataExtractionPDFRenderer # type: ignore
 from src.functions.auth import AuthService as SLAIAuthService  # type: ignore
 from src.functions.phone_verification import PhoneVerificationService, TwilioBackend  # type: ignore
 from src.agents.collaborative.shared_memory import SharedMemory  # type: ignore
@@ -644,6 +659,55 @@ def _create_local_bootstrap() -> Bootstrap:
         plan_catalog=plan_catalog,
     )
 
+    mesh_extractor = TrimeshDataExtractor()
+
+    conversion_adapters = [
+        IfcOpenShellModelConverter(),
+        TrimeshModelConverter(),
+    ]
+
+    extraction_adapters = [
+        IfcOpenShellDataExtractor(),
+        mesh_extractor,
+        # With no DWG backend this adapter
+        # advertises DXF, not DWG.
+        DwgDxfDataExtractor(),
+    ]
+
+    blender = shutil.which("blender")
+
+    if blender is not None:
+        conversion_adapters.append(
+            BlenderFbxModelConverter(
+                blender_executable=blender,
+            )
+        )
+
+        extraction_adapters.append(
+            BlenderFbxDataExtractor(
+                blender_executable=blender,
+                mesh_extractor=
+                    mesh_extractor,
+            )
+        )
+
+
+    model_converter = (
+        MultiFormatModelConverter(
+            *conversion_adapters,
+        )
+    )
+
+    data_extractor = (
+        MultiFormatDataExtractor(
+            *extraction_adapters,
+        )
+    )
+
+    data_extraction_pdf_renderer = (
+        ReportLabDataExtractionPDFRenderer()
+    )
+
     # ---------------------------------------------------------
     # Local infrastructure
     # ---------------------------------------------------------
@@ -665,6 +729,9 @@ def _create_local_bootstrap() -> Bootstrap:
         account_avatar_uploader=None,
         notifications=email_notifications,
         close_shared_memory_on_shutdown=True,
+        model_converter=model_converter,
+        data_extractor=data_extractor,
+        data_extraction_pdf_renderer=data_extraction_pdf_renderer,
     )
 
     # ---------------------------------------------------------
