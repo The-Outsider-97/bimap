@@ -9,7 +9,17 @@
 fastapi~=0.141.1
 uvicorn[standard]~=0.52.4
 PyYAML>=6.0,<7
+
+# BIM / CAD processing
 ifcopenshell~=0.8.5
+ezdxf~=1.4.4
+trimesh~=4.11.1
+
+# HTTP multipart uploads
 python-multipart~=0.0.32
+
+# Reporting
 reportlab~=5.0.1
+
+# Verification / communication
 twilio~=9.11.0
