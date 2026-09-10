@@ -113,6 +113,38 @@ export type BimapOrderState =
   | "expired";
 
 
+export type BimapStoredObjectDto = {
+  readonly object_id: string;
+  readonly size_bytes: number;
+  readonly content_hash: string;
+  readonly hash_algorithm: string;
+  readonly content_type: string | null;
+};
+
+
+export type BimapMalwareScanDto = {
+  readonly object_id: string;
+  readonly verdict:
+    | "clean"
+    | "malicious"
+    | "indeterminate";
+
+  readonly scanned_at: string;
+  readonly scanner_name: string;
+  readonly scanner_version: string | null;
+  readonly threat_name: string | null;
+};
+
+
+export type BimapStagedUploadDto = {
+  readonly order_id: string;
+  readonly source_ref: string;
+  readonly filename: string;
+  readonly stored_object: BimapStoredObjectDto;
+  readonly malware_scan: BimapMalwareScanDto;
+};
+
+
 export type BimapOrderDto = {
   readonly schema_version:
     string;
@@ -217,6 +249,64 @@ function idempotencyHeaders(
         value,
       ),
   };
+}
+
+
+export async function stageOrderModelUpload(
+  orderId: string,
+  file: File,
+  signal?: AbortSignal,
+): Promise<BimapStagedUploadDto> {
+  const target =
+    orderId.trim();
+
+  if (!target) {
+    throw new TypeError(
+      "Order ID cannot be empty.",
+    );
+  }
+
+  if (!(file instanceof File)) {
+    throw new TypeError(
+      "A model file is required.",
+    );
+  }
+
+  if (!file.name.trim()) {
+    throw new TypeError(
+      "The selected model must have a filename.",
+    );
+  }
+
+  if (file.size <= 0) {
+    throw new TypeError(
+      "The selected model file is empty.",
+    );
+  }
+
+  const form =
+    new FormData();
+
+  form.set(
+    "source",
+    file,
+    file.name,
+  );
+
+  return apiRequest<
+    BimapStagedUploadDto
+  >(
+    `/orders/${
+      encodeURIComponent(
+        target,
+      )
+    }/uploads/model`,
+    {
+      method: "POST",
+      body: form,
+      signal,
+    },
+  );
 }
 
 
