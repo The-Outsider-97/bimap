@@ -634,7 +634,7 @@ class Authentication(ABC):
         auth_user_id: str,
         username: str,
         email_code: str,
-        sms_code: str,
+        sms_code: str | None,
     ) -> SignupVerificationResult:
         raise NotImplementedError
 
@@ -821,7 +821,7 @@ class Authentication(ABC):
         auth_user_id: str,
         username: str,
         email_code: str,
-        sms_code: str,
+        sms_code: str | None,
     ) -> SignupVerificationResult:
         announce_app_action(
             printer,
@@ -854,7 +854,7 @@ class Authentication(ABC):
             operation="verify_signup",
             max_length=128,
         )
-        normalized_sms_code = require_app_text(
+        normalized_sms_code = optional_app_text(
             sms_code,
             field="sms_code",
             error_type=AppValidationError,
