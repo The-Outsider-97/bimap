@@ -453,7 +453,7 @@ class LocalSLAIAuthentication(Authentication):
             phone_masked=phone_masked,
         )
 
-    def _verify_signup(self, *, auth_user_id: str, username: str, email_code: str, sms_code: str) -> SignupVerificationResult:
+    def _verify_signup(self, *, auth_user_id: str, username: str, email_code: str, sms_code: str | None) -> SignupVerificationResult:
         with self._lock:
             contact = self._contacts_by_auth_id.get(auth_user_id)
 
@@ -483,6 +483,14 @@ class LocalSLAIAuthentication(Authentication):
 
         if self._require_phone_verification:
             assert self._phone is not None
+
+            if sms_code is None:
+                raise AppValidationError(
+                    "SMS verification code is required.",
+                    component="local_slai_authentication",
+                    operation="verify_signup",
+                    field="sms_code",
+                )
 
             try:
                 phone_verified = (self._phone.verify_code(phone_e164, sms_code, default_region=country))
