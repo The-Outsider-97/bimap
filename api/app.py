@@ -30,7 +30,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
-from starlette.types import Lifespan
+from starlette.types import Lifespan # type: ignore
 from fastapi import FastAPI, Request, Response # type: ignore
 from fastapi.exceptions import RequestValidationError # type: ignore
 from starlette.exceptions import HTTPException as StarletteHTTPException # type: ignore
@@ -425,13 +425,14 @@ async def _handle_request_validation_exception(request: Request, error: Exceptio
         event="api_app_framework_validation_handler_start",
     )
     del request
+    error_count: int | None = None
     if isinstance(error, RequestValidationError):
         try:
-            error_count = len(error.errors())
+            validation_errors = error.errors()
+            if isinstance(validation_errors, (list, tuple)):
+                error_count = len(validation_errors)
         except Exception:
             error_count = None
-    else:
-        error_count = None
     raise APIUnprocessableError(
         "FastAPI request parameter validation failed.",
         component=_COMPONENT,
@@ -480,6 +481,7 @@ def _construct_route_groups(dependencies: APIDependencies) -> tuple[Any, ...]:
         ),
         RouteUploads(
             use_cases.create_upload_slot,
+            use_cases.stage_upload,
             use_cases.validate_uploads,
             authorizer=hooks.authorizer,
             manifest_validator=hooks.upload_manifest_validator,

@@ -47,6 +47,7 @@ from ..app.commands.extract_model_data import ExtractModelData
 from ..app.commands.grant_entitlement import GrantEntitlement
 from ..app.commands.handle_payment import HandlePayment
 from ..app.commands.request_deletion import RequestDeletion
+from ..app.commands.stage_upload import StageUpload
 from ..app.commands.validate_uploads import ValidateUploads
 from ..app.queries.get_order import GetOrder
 from ..app.queries.get_products import GetProducts
@@ -138,8 +139,11 @@ class APIUseCases:
     get_order: GetOrder
     list_orders: ListOrders
     get_products: GetProducts
+
     create_upload_slot: CreateUploadSlot
+    stage_upload: StageUpload
     validate_uploads: ValidateUploads
+
     begin_checkout: BeginCheckout
     handle_payment: HandlePayment
     grant_entitlement: GrantEntitlement
@@ -171,6 +175,7 @@ class APIUseCases:
             ("request_deletion", self.request_deletion, RequestDeletion),
             ("convert_model", self.convert_model, ConvertModel),
             ("extract_model_data", self.extract_model_data, ExtractModelData),
+            ("stage_upload", self.stage_upload, StageUpload),
         )
         for field, value, expected in dependencies:
             _require_handler(value, expected, field=field)
