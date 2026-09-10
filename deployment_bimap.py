@@ -673,6 +673,7 @@ def _create_local_bootstrap() -> Bootstrap:
         model_converter=model_converter,
         data_extractor=data_extractor,
         data_extraction_pdf_renderer=data_extraction_pdf_renderer,
+        audit_results=True
     )
 
     # ---------------------------------------------------------
