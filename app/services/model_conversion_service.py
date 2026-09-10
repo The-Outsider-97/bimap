@@ -192,18 +192,54 @@ class ModelConversionService:
     def capabilities(self) -> tuple[ModelConversionCapability, ...]:
         return self._converter.capabilities
 
-    @staticmethod
-    def _source_format_from_filename(filename: str) -> ModelSourceFormat:
+    def _source_format_from_filename(self, filename: str) -> ModelSourceFormat:
         suffix = PurePath(filename).suffix.casefold()
-        if suffix == ".ifc":
-            return ModelSourceFormat.IFC
-        raise UnsupportedAppInputError(
-            "Only IFC source files are supported by the configured converter.",
-            component=_COMPONENT,
-            operation="resolve_source_format",
-            field="source",
-            context={"extension": suffix or None},
-        )
+
+        matches: set[ModelSourceFormat] = {
+            cast(ModelSourceFormat, capability.source_format)
+            for capability in self.capabilities
+            if suffix in capability.extensions
+        }
+
+        if not matches:
+            raise UnsupportedAppInputError(
+                "The selected source model format is not supported "
+                "by the configured conversion adapters.",
+                component=_COMPONENT,
+                operation="resolve_source_format",
+                field="source",
+                context={
+                    "extension": suffix or None,
+                    "supported_extensions": tuple(
+                        sorted(
+                            {
+                                extension
+                                for capability in self.capabilities
+                                for extension in capability.extensions
+                            }
+                        )
+                    ),
+                },
+            )
+
+        if len(matches) != 1:
+            raise AppIntegrityError(
+                "Multiple conversion capabilities claim the same source extension.",
+                component=_COMPONENT,
+                operation="resolve_source_format",
+                field="source",
+                context={
+                    "extension": suffix,
+                    "formats": tuple(
+                        sorted(
+                            item.value
+                            for item in matches
+                        )
+                    ),
+                },
+            )
+
+        return next(iter(matches))
 
     @staticmethod
     def _output_stem(filename: str) -> str:
