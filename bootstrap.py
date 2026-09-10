@@ -49,8 +49,8 @@ from enum import Enum
 from threading import RLock
 from types import MappingProxyType
 from typing import Any, cast
-from starlette.types import Lifespan
-from fastapi import FastAPI
+from starlette.types import Lifespan # type: ignore
+from fastapi import FastAPI # type: ignore
 
 from .api.app import APISettings, create_app
 from .api.dependencies import *
@@ -67,6 +67,7 @@ from .app.commands.grant_entitlement import GrantEntitlement
 from .app.commands.handle_payment import HandlePayment
 from .app.commands.release_report import ReleaseReport
 from .app.commands.request_deletion import RequestDeletion
+from .app.commands.stage_upload import StageUpload
 from .app.commands.validate_uploads import ValidateUploads
 from .app.ports.accounts import Accounts
 from .app.ports.authentication import Authentication
@@ -1057,6 +1058,10 @@ class Bootstrap:
                     order_service
                 )
 
+                stage_upload = StageUpload(
+                    upload_service
+                )
+
                 cancel_order = CancelOrder(
                     order_service
                 )
@@ -1165,8 +1170,11 @@ class Bootstrap:
                     get_order=get_order,
                     list_orders=list_orders,
                     get_products=get_products,
+
                     create_upload_slot=create_upload_slot,
+                    stage_upload=stage_upload,
                     validate_uploads=validate_uploads,
+
                     begin_checkout=begin_checkout,
                     handle_payment=handle_payment,
                     grant_entitlement=grant_entitlement,
