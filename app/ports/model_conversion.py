@@ -20,6 +20,15 @@ _COMPONENT = "model_conversion"
 
 class ModelSourceFormat(str, Enum):
     IFC = "ifc"
+    RVT = "rvt"
+    RFA = "rfa"
+    DWG = "dwg"
+    DXF = "dxf"
+    FBX = "fbx"
+    OBJ = "obj"
+    GLB = "glb"
+    STL = "stl"
+    PLY = "ply"
 
     @classmethod
     def parse(cls, value: "ModelSourceFormat | str") -> "ModelSourceFormat":
