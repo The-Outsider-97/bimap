@@ -23,7 +23,9 @@ The default ``development`` mode is intentionally self-contained and bootable:
 - development malware gate;
 - canonical BIMAP products without invented prices/tiers;
 - valid API route hooks for local integration;
-- explicit empty deterministic rule registry until product rules are supplied;
+- explicit deterministic RFA baseline rule registry;
+- grounded RFA rule-to-finding mapping policy;
+- deployment-owned native Revit extraction backend;
 - explicit development Combined Audit version.
 
 Production mode fails closed rather than silently using development adapters.
@@ -35,6 +37,7 @@ import os
 import shutil
 import tempfile
 
+from pathlib import Path
 from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
@@ -55,6 +58,8 @@ from applications.bimap.api.utils.api_errors import APIServiceUnavailableError, 
 from applications.bimap.audit_engine.bim_qa.auditor import BIMQAAuditor # type: ignore
 from applications.bimap.audit_engine.combined.auditor import CombinedAuditor # type: ignore
 from applications.bimap.audit_engine.rfa.auditor import RFAAuditor # type: ignore
+from applications.bimap.audit_engine.rfa.finding_mapper import map_rfa_finding # type: ignore
+from applications.bimap.audit_engine.rfa.rules import RFA_RULES # type: ignore
 from applications.bimap.audit_engine.rules.executor import RulesExecutor # type: ignore
 from applications.bimap.audit_engine.rules.registry import RulesRegistry # type: ignore
 from applications.bimap.bootstrap import ( # type: ignore
@@ -69,7 +74,7 @@ from applications.bimap.infra.local import ( # type: ignore
     DevelopmentMalware,
     DisabledPayment,
     InMemoryAccounts,
-    InMemoryAuditResultStore,
+   # InMemoryAuditResultStore,
     InMemoryEntitlementStore,
     InMemoryRepository,
     InMemoryStorage,
@@ -88,12 +93,15 @@ from applications.bimap.infra.extraction import ( # type: ignore
     DwgDxfDataExtractor,
     IfcOpenShellDataExtractor,
     MultiFormatDataExtractor,
+    RevitDataExtractor,
     TrimeshDataExtractor,
 )
 from applications.bimap.infra.reportlab_data_extraction_renderer import ReportLabDataExtractionPDFRenderer # type: ignore
+from applications.bimap.infra.sqlite_audit_results import SQLiteAuditResultStore # type: ignore
 from applications.bimap.slai.task_builder import BIMAPSLAITaskBuilder # type: ignore
 from applications.bimap.utils.plan_loader import load_account_plan_catalog # type: ignore
 from applications.bimap.utils.config_loader import load_bimap_config, load_slai_profile  # type: ignore
+from .revit_backend import RevitBackend
 from src.functions.auth import AuthService as SLAIAuthService  # type: ignore
 from src.functions.phone_verification import PhoneVerificationService, TwilioBackend  # type: ignore
 from src.agents.collaborative.shared_memory import SharedMemory  # type: ignore
@@ -110,6 +118,7 @@ _TRUST_UPLOADS_ENV = "BIMAP_DEV_TRUST_UPLOADS"
 _ALLOWED_HOSTS_ENV = "BIMAP_ALLOWED_HOSTS"
 _REQUIRE_SMS_VERIFICATION_ENV = "BIMAP_REQUIRE_SMS_VERIFICATION"
 _SESSION_TTL_MINUTES_ENV = "BIMAP_SESSION_TTL_MINUTES"
+_AUDIT_RESULTS_DB_ENV = "BIMAP_AUDIT_RESULTS_DB"
 _LOCAL_MODES = frozenset({"development", "dev", "local"})
 _PRODUCTION_MODES = frozenset({"production", "prod"})
 
@@ -247,6 +256,40 @@ def _allowed_hosts() -> tuple[str, ...]:
         )
 
     return tuple(hosts)
+
+def _audit_results_database_path() -> Path:
+    """
+    Resolve durable BIMAP audit-workspace storage.
+
+    An explicit environment value always wins. For development, the default
+    resolves beneath the SLAI working directory so local audit workspaces
+    survive backend restarts.
+    """
+
+    configured = os.getenv(_AUDIT_RESULTS_DB_ENV)
+
+    if (
+        configured is not None
+        and configured.strip()
+    ):
+        return (Path(configured.strip()).expanduser().resolve(strict=False))
+
+    default_path = (
+        Path.cwd()
+        / "data"
+        / "bimap"
+        / "audit_results.sqlite3"
+    ).resolve(strict=False)
+
+    logger.info(
+        {
+            "event": "bimap_default_audit_result_database",
+            "environment": _AUDIT_RESULTS_DB_ENV,
+            "configured": False,
+        }
+    )
+
+    return default_path
 
 
 # ---------------------------------------------------------------------------
@@ -470,41 +513,35 @@ def _build_catalog() -> ProductCatalog:
 # Deterministic Audit Engine composition
 # ---------------------------------------------------------------------------
 
-
 def _build_audit_components() -> BootstrapAuditComponents:
     """
-    Compose the existing deterministic audit coordinators.
+    Compose deterministic BIMAP audit coordinators with the approved
+    repository-grounded RFA baseline rules and explicit finding policy.
 
-    The current repository contains the rule framework but no authoritative
-    concrete RFA/BIM-QA rule implementations. An empty frozen registry is
-    therefore preferable to fabricating audit policy. The service can boot and
-    expose the complete architecture while returning no deterministic rule
-    findings until real product rules are registered.
+    Product rules are registered before RulesExecutor construction because
+    RulesExecutor freezes the registry for deterministic execution.
     """
     printer.status("BIMAP", "Building deterministic audit components", "info")
 
-    registry = RulesRegistry()
+    registry = RulesRegistry(RFA_RULES)
     executor = RulesExecutor(registry)
-
     combined_version = os.getenv(_COMBINED_VERSION_ENV, "0.0.0").strip()
 
     if not combined_version:
-        raise RuntimeError(f"{_COMBINED_VERSION_ENV} cannot be empty.")
+        raise RuntimeError(f"{_COMBINED_VERSION_ENV} cannot be empty." )
 
-    logger.warning(
+    logger.info(
         {
-            "event": "bimap_development_audit_policy",
+            "event": "bimap_deterministic_audit_policy",
             "rule_count": len(registry),
+            "rfa_rule_count": len(RFA_RULES),
             "combined_audit_version": combined_version,
-            "message": (
-                "No concrete deterministic product rules are currently "
-                "registered by the repository."
-            ),
+            "rfa_finding_mapper": "configured",
         }
     )
 
     return BootstrapAuditComponents(
-        rfa=RFAAuditor(executor),
+        rfa=RFAAuditor(executor, finding_mapper=map_rfa_finding),
         bim_qa=BIMQAAuditor(executor),
         combined=CombinedAuditor(combined_version),
     )
@@ -513,7 +550,6 @@ def _build_audit_components() -> BootstrapAuditComponents:
 # ---------------------------------------------------------------------------
 # API policy
 # ---------------------------------------------------------------------------
-
 
 def _build_api_settings() -> APISettings:
     printer.status("BIMAP", "Building local API settings", "info")
@@ -545,10 +581,7 @@ def _build_api_settings() -> APISettings:
 def _create_local_bootstrap() -> Bootstrap:
     printer.status("BIMAP", "Constructing local BIMAP deployment", "info")
 
-    trust_uploads = _environment_bool(
-        _TRUST_UPLOADS_ENV,
-        default=True,
-    )
+    trust_uploads = _environment_bool(_TRUST_UPLOADS_ENV, default=True)
 
     if trust_uploads:
         logger.warning(
@@ -562,6 +595,7 @@ def _create_local_bootstrap() -> Bootstrap:
     clock = SystemClock()
     repository = InMemoryRepository()
     accounts = InMemoryAccounts()
+    audit_results = SQLiteAuditResultStore(_audit_results_database_path())
 
     # ---------------------------------------------------------
     # Local account-entitlement infrastructure
@@ -569,7 +603,6 @@ def _create_local_bootstrap() -> Bootstrap:
 
     entitlement_store = InMemoryEntitlementStore()
     renewal_window_resolver = CalendarUTCRenewalWindowResolver()
-
     auth_memory_path = os.path.join(tempfile.gettempdir(), f"bimap-auth-{os.getpid()}-{uuid4().hex}.json")
     email_notifications = _build_email_service()
     require_sms_verification = _environment_bool(_REQUIRE_SMS_VERIFICATION_ENV, default=False)
@@ -581,7 +614,6 @@ def _create_local_bootstrap() -> Bootstrap:
     )
 
     session_ttl_minutes = _environment_positive_int(_SESSION_TTL_MINUTES_ENV, default=480,)
-
     authentication = LocalSLAIAuthentication(
         SLAIAuthService(
             memory_path=auth_memory_path,
@@ -602,14 +634,16 @@ def _create_local_bootstrap() -> Bootstrap:
     )
 
     mesh_extractor = TrimeshDataExtractor()
+    revit_backend = RevitBackend.from_env()
+    revit_extractor = RevitDataExtractor(
+        revit_backend
+    )
 
-    conversion_adapters = [
-        IfcOpenShellModelConverter(),
-        TrimeshModelConverter(),
-    ]
+    conversion_adapters = [IfcOpenShellModelConverter(), TrimeshModelConverter(),]
 
     extraction_adapters = [
         IfcOpenShellDataExtractor(),
+        revit_extractor,
         mesh_extractor,
         # With no DWG backend this adapter
         # advertises DXF, not DWG.
@@ -619,20 +653,8 @@ def _create_local_bootstrap() -> Bootstrap:
     blender = shutil.which("blender")
 
     if blender is not None:
-        conversion_adapters.append(
-            BlenderFbxModelConverter(
-                blender_executable=blender,
-            )
-        )
-
-        extraction_adapters.append(
-            BlenderFbxDataExtractor(
-                blender_executable=blender,
-                mesh_extractor=
-                    mesh_extractor,
-            )
-        )
-
+        conversion_adapters.append(BlenderFbxModelConverter(blender_executable=blender))
+        extraction_adapters.append(BlenderFbxDataExtractor(blender_executable=blender, mesh_extractor=mesh_extractor))
 
     model_converter = MultiFormatModelConverter(*conversion_adapters)
     data_extractor = MultiFormatDataExtractor(*extraction_adapters)
@@ -662,8 +684,8 @@ def _create_local_bootstrap() -> Bootstrap:
         model_converter=model_converter,
         data_extractor=data_extractor,
         data_extraction_pdf_renderer=data_extraction_pdf_renderer,
-        audit_results=InMemoryAuditResultStore(),
-        slai_task_builder = BIMAPSLAITaskBuilder()
+        audit_results=audit_results,
+        slai_task_builder=BIMAPSLAITaskBuilder(),
     )
 
     # ---------------------------------------------------------
