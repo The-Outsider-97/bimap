@@ -228,6 +228,7 @@ class BootstrapInfrastructure:
     account_summary_resolver: AccountSummaryResolver | None = None
     account_avatar_uploader: AccountAvatarUploader | None = None
     notifications: Notifications | None = None
+    artifact_mailer: Any | None = None
     agent_factory: AgentFactory | None = None
     rate_limiter: RateLimiter | None = None
     report_renderer: ReportRenderer | None = None
@@ -1006,15 +1007,14 @@ class Bootstrap:
                     )
                 )
 
-                data_extraction_service = (
-                    DataExtractionService(
-                        self.infrastructure.data_extractor,
-                        self.infrastructure
-                            .data_extraction_pdf_renderer,
-                        self.infrastructure.malware,
-                        entitlement_service,
-                        self.infrastructure.clock,
-                    )
+                data_extraction_service = DataExtractionService(
+                    self.infrastructure.data_extractor,
+                    self.infrastructure.data_extraction_pdf_renderer,
+                    self.infrastructure.malware,
+                    entitlement_service,
+                    self.infrastructure.clock,
+                    accounts=self.infrastructure.accounts,
+                    artifact_mailer=self.infrastructure.artifact_mailer,
                 )
 
                 upload_service = UploadService(
@@ -1071,64 +1071,20 @@ class Bootstrap:
 
                 stage = "application_commands"
 
-                create_order = CreateOrder(
-                    order_service
-                )
-
-                stage_upload = StageUpload(
-                    upload_service
-                )
-
-                get_audit_workspace = GetAuditWorkspace(
-                    self.infrastructure.audit_results
-                )
-
-                cancel_order = CancelOrder(
-                    order_service
-                )
-
-                create_upload_slot = CreateUploadSlot(
-                    upload_service
-                )
-
-                validate_uploads = ValidateUploads(
-                    upload_service
-                )
-
-                begin_checkout = BeginCheckout(
-                    order_service
-                )
-
-                handle_payment = HandlePayment(
-                    order_service
-                )
-
-                convert_model = ConvertModel(
-                    model_conversion_service,
-                )
-
-                extract_model_data = ExtractModelData(
-                    data_extraction_service,
-                )
-
-                grant_entitlement = GrantEntitlement(
-                    cast(Any, entitlement_service),
-                    order_service,
-                )
-
-                enqueue_audit = EnqueueAudit(
-                    order_service,
-                    audit_service,
-                )
-
-                release_report = ReleaseReport(
-                    fulfilment_service
-                )
-
-                request_deletion = RequestDeletion(
-                    fulfilment_service
-                )
-
+                create_order = CreateOrder(order_service)
+                stage_upload = StageUpload(upload_service)
+                get_audit_workspace = GetAuditWorkspace(self.infrastructure.audit_results)
+                cancel_order = CancelOrder(order_service)
+                create_upload_slot = CreateUploadSlot(upload_service)
+                validate_uploads = ValidateUploads(upload_service)
+                begin_checkout = BeginCheckout(order_service)
+                handle_payment = HandlePayment(order_service)
+                convert_model = ConvertModel(model_conversion_service)
+                extract_model_data = ExtractModelData(data_extraction_service)
+                grant_entitlement = GrantEntitlement( cast(Any, entitlement_service), order_service)
+                enqueue_audit = EnqueueAudit(order_service, audit_service)
+                release_report = ReleaseReport(fulfilment_service)
+                request_deletion = RequestDeletion(fulfilment_service)
                 commands = BootstrapCommands(
                     create_order=create_order,
                     cancel_order=cancel_order,
@@ -1148,29 +1104,11 @@ class Bootstrap:
 
                 stage = "application_queries"
 
-                get_order = GetOrder(
-                    self.infrastructure.repository
-                )
-
-                list_orders = ListOrders(
-                    self.infrastructure.repository
-                )
-
-                get_products = GetProducts(
-                    self.configuration.catalog,
-                    product_limits=(
-                        self.configuration.product_limits
-                    ),
-                )
-
-                get_audit_status = GetAuditStatus(
-                    self.infrastructure.repository
-                )
-
-                list_reports = ListReports(
-                    self.infrastructure.repository
-                )
-
+                get_order = GetOrder(self.infrastructure.repository)
+                list_orders = ListOrders(self.infrastructure.repository)
+                get_products = GetProducts(self.configuration.catalog, product_limits=self.configuration.product_limits)
+                get_audit_status = GetAuditStatus(self.infrastructure.repository)
+                list_reports = ListReports(self.infrastructure.repository)
                 queries = BootstrapQueries(
                     get_order=get_order,
                     list_orders=list_orders,
