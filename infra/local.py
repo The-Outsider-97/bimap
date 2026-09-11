@@ -41,9 +41,6 @@ from threading import RLock
 from typing import BinaryIO
 
 from src.functions.auth import AuthService as SLAIAuthService  # type: ignore
-from ..notifications.email_models import EmailVerificationData
-from ..notifications.email_service import EmailService
-from ..notifications.utils.email_errors import EmailError as BIMAPEmailError, EmailTransportTimeoutError
 from src.functions.phone_verification import PhoneVerificationService  # type: ignore
 from src.functions.utils.functions_error import (  # type: ignore
     AccountLockedError,
@@ -59,6 +56,7 @@ from src.functions.utils.functions_error import (  # type: ignore
     VerificationNotFoundError,
     VerificationRateLimitError,
 )
+from ..app.ports.audit_results import AuditResultRecord, AuditResultStore
 from ..app.ports.clock import Clock
 from ..app.ports.malware import *
 from ..app.ports.payment import *
@@ -78,6 +76,9 @@ from ..domain.findings.models import Finding
 from ..domain.governance.review import Review
 from ..domain.orders.models import Order
 from ..domain.products.models import ProductTier
+from ..notifications.email_models import EmailVerificationData
+from ..notifications.email_service import EmailService
+from ..notifications.utils.email_errors import EmailError as BIMAPEmailError, EmailTransportTimeoutError
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
 
 
@@ -88,7 +89,6 @@ printer = PrettyPrinter()
 # ---------------------------------------------------------------------------
 # Clock
 # ---------------------------------------------------------------------------
-
 
 class SystemClock(Clock):
     """UTC system clock implementation of the BIMAP ``Clock`` port."""
@@ -104,7 +104,6 @@ class SystemClock(Clock):
 # ---------------------------------------------------------------------------
 # Canonical account repository
 # ---------------------------------------------------------------------------
-
 
 class InMemoryAccounts(Accounts):
     """Thread-safe process-local canonical account repository."""
@@ -143,12 +142,7 @@ class InMemoryAccounts(Accounts):
             account_id = self._phone_index.get(phone_e164)
             return None if account_id is None else self._accounts.get(account_id)
 
-    def _save_account(
-        self,
-        account: Account,
-        *,
-        expected_version: int | None,
-    ) -> Account:
+    def _save_account(self, account: Account, *, expected_version: int | None) -> Account:
         with self._lock:
             current = self._accounts.get(account.account_id)
 
@@ -308,15 +302,7 @@ class LocalSLAIAuthentication(Authentication):
             field="auth_user_id",
         )
 
-    def _issue_signup_verification(
-        self,
-        *,
-        auth_user_id: str,
-        username: str,
-        email: str,
-        phone_e164: str,
-        country: str,
-    ) -> VerificationDispatch:
+    def _issue_signup_verification(self, *, auth_user_id: str, username: str, email: str, phone_e164: str, country: str) -> VerificationDispatch:
         challenge_id = secrets.token_hex(16)
 
         try:
@@ -597,6 +583,67 @@ class LocalSLAIAuthentication(Authentication):
 
 
 # ---------------------------------------------------------------------------
+# Audit result persistence
+# ---------------------------------------------------------------------------
+
+class InMemoryAuditResultStore(AuditResultStore):
+    """
+    Thread-safe process-local persistence for completed audit workspaces.
+
+    One record is retained per order. Re-saving the same completed job is
+    idempotent when its product and payload are unchanged. A later job for the
+    same order replaces the previous record and becomes the latest workspace.
+
+    This adapter is intentionally non-durable and is suitable only for local
+    development and integration testing.
+    """
+
+    __slots__ = ("_lock", "_records",)
+
+    def __init__(self) -> None:
+        printer.status("BIMAP", "Initializing local audit result store", "info")
+        self._lock = RLock()
+        self._records: dict[str, AuditResultRecord] = {}
+        super().__init__()
+
+    def _save(self, record: AuditResultRecord) -> AuditResultRecord:
+        with self._lock:
+            existing = self._records.get(record.order_id)
+
+            if (
+                existing is not None
+                and existing.job_id == record.job_id
+            ):
+                if (
+                    existing.product_code
+                    != record.product_code
+                    or dict(existing.payload)
+                    != dict(record.payload)
+                ):
+                    raise AppIntegrityError(
+                        "Audit result job identity is already bound "
+                        "to different result content.",
+                        component="local_audit_result_store",
+                        operation="save",
+                        field="record",
+                        context={
+                            "order_id": record.order_id,
+                            "job_id": record.job_id,
+                        },
+                    )
+
+                return existing
+
+            self._records[record.order_id] = record
+
+            return record
+
+    def _get_by_order(self, order_id: str) -> AuditResultRecord | None:
+        with self._lock:
+            return self._records.get(order_id)
+
+
+# ---------------------------------------------------------------------------
 # Account entitlements
 # ---------------------------------------------------------------------------
 
@@ -644,14 +691,7 @@ class InMemoryEntitlementStore:
 
         return None
 
-    def _existing_locked(
-        self,
-        *,
-        account_id: str,
-        kind: UsageKind,
-        source_id: str,
-        idempotency_key: str,
-    ) -> dict[str, object] | None:
+    def _existing_locked(self, *, account_id: str, kind: UsageKind, source_id: str, idempotency_key: str) -> dict[str, object] | None:
         for record in self._consumptions:
             if (
                 record["account_id"]
@@ -704,9 +744,7 @@ class InMemoryEntitlementStore:
                 account_id=account_id,
                 kind=kind,
                 source_id=source_id,
-                idempotency_key=(
-                    idempotency_key
-                ),
+                idempotency_key=idempotency_key,
             )
 
             if existing is not None:
@@ -722,18 +760,10 @@ class InMemoryEntitlementStore:
                     and record["kind"]
                     is kind
                     and record["source"]
-                    == (
-                        EntitlementSource
-                        .RECURRING_QUOTA
-                        .value
-                    )
-                    and record[
-                        "period_start"
-                    ]
+                    == (EntitlementSource.RECURRING_QUOTA.value)
+                    and record["period_start"]
                     == period_start
-                    and record[
-                        "period_end"
-                    ]
+                    and record["period_end"]
                     == period_end
                 )
             )
@@ -774,55 +804,31 @@ class InMemoryEntitlementStore:
                 account_id=account_id,
                 kind=kind,
                 source_id=source_id,
-                idempotency_key=(
-                    idempotency_key
-                ),
+                idempotency_key=idempotency_key,
             )
 
             if existing is not None:
                 return existing
 
-            key = (
-                account_id,
-                kind,
-            )
+            key = (account_id, kind)
 
-            balance = self._bonus.get(
-                key,
-                0,
-            )
+            balance = self._bonus.get(key, 0)
 
             if balance <= 0:
                 return None
 
-            self._bonus[key] = (
-                balance - 1
-            )
+            self._bonus[key] = (balance - 1)
 
-            record: dict[
-                str,
-                object,
-            ] = {
-                "account_id":
-                    account_id,
-                "kind":
-                    kind,
-                "source_id":
-                    source_id,
-                "idempotency_key":
-                    idempotency_key,
-                "source":
-                    EntitlementSource
-                    .BONUS_CREDIT
-                    .value,
-                "plan_code":
-                    plan_code,
-                "occurred_at":
-                    occurred_at,
-                "period_start":
-                    None,
-                "period_end":
-                    None,
+            record: dict[str, object] = {
+                "account_id": account_id,
+                "kind": kind,
+                "source_id": source_id,
+                "idempotency_key": idempotency_key,
+                "source": EntitlementSource.BONUS_CREDIT.value,
+                "plan_code": plan_code,
+                "occurred_at": occurred_at,
+                "period_start": None,
+                "period_end": None,
             }
 
             self._consumptions.append(
@@ -846,43 +852,25 @@ class InMemoryEntitlementStore:
                 account_id=account_id,
                 kind=kind,
                 source_id=source_id,
-                idempotency_key=(
-                    idempotency_key
-                ),
+                idempotency_key=idempotency_key,
             )
 
             if existing is not None:
                 return existing
 
-            record: dict[
-                str,
-                object,
-            ] = {
-                "account_id":
-                    account_id,
-                "kind":
-                    kind,
-                "source_id":
-                    source_id,
-                "idempotency_key":
-                    idempotency_key,
-                "source":
-                    EntitlementSource
-                    .UNLIMITED
-                    .value,
-                "plan_code":
-                    plan_code,
-                "occurred_at":
-                    occurred_at,
-                "period_start":
-                    None,
-                "period_end":
-                    None,
+            record: dict[str, object] = {
+                "account_id": account_id,
+                "kind": kind,
+                "source_id": source_id,
+                "idempotency_key": idempotency_key,
+                "source": EntitlementSource.UNLIMITED.value,
+                "plan_code": plan_code,
+                "occurred_at": occurred_at,
+                "period_start": None,
+                "period_end": None,
             }
 
-            self._consumptions.append(
-                record
-            )
+            self._consumptions.append(record)
 
             return dict(record)
 
@@ -953,9 +941,7 @@ class CalendarUTCRenewalWindowResolver:
                 minute=0,
                 second=0,
                 microsecond=0,
-            ) - timedelta(
-                days=current.weekday()
-            )
+            ) - timedelta(days=current.weekday())
 
             end = (start + timedelta(days=7))
 
@@ -1024,12 +1010,7 @@ class InMemoryRepository(Repository):
         with self._lock:
             return self._orders.get(order_id)
 
-    def _save_order(
-        self,
-        order: Order,
-        *,
-        expected_version: int | None,
-    ) -> Order:
+    def _save_order(self, order: Order, *, expected_version: int | None) -> Order:
         with self._lock:
             current = self._orders.get(order.order_id)
 
@@ -1111,10 +1092,8 @@ class InMemoryStorage(Storage):
 
     def __init__(self) -> None:
         printer.status("BIMAP", "Initializing local object storage", "info")
-
         self._lock = RLock()
         self._objects: dict[str, tuple[bytes, StoredObject]] = {}
-
         super().__init__()
 
     def _put(
@@ -1229,12 +1208,7 @@ class InProcessQueue(Queue):
 
         super().__init__()
 
-    def _enqueue(
-        self,
-        job: AuditJob,
-        *,
-        idempotency_key: str,
-    ) -> QueueReceipt:
+    def _enqueue(self, job: AuditJob, *, idempotency_key: str) -> QueueReceipt:
         with self._lock:
             existing = self._receipts.get(idempotency_key)
 
@@ -1285,13 +1259,7 @@ class DisabledPayment(Payment):
         printer.status("BIMAP", "Initializing disabled payment adapter", "info")
         super().__init__()
 
-    def _create_checkout(
-        self,
-        order: Order,
-        tier: ProductTier,
-        *,
-        idempotency_key: str,
-    ) -> PaymentCheckout:
+    def _create_checkout(self, order: Order, tier: ProductTier, *, idempotency_key: str) -> PaymentCheckout:
         del tier, idempotency_key
 
         raise PaymentUnavailableError(
@@ -1301,12 +1269,7 @@ class DisabledPayment(Payment):
             context={"order_id": order.order_id},
         )
 
-    def _verify_event(
-        self,
-        payload: bytes,
-        *,
-        signature: str,
-    ) -> PaymentEvent:
+    def _verify_event(self, payload: bytes, *, signature: str) -> PaymentEvent:
         del payload, signature
 
         raise PaymentUnavailableError(
@@ -1381,6 +1344,7 @@ __all__ = [
     "InMemoryEntitlementStore",
     "CalendarUTCRenewalWindowResolver",
     "InMemoryRepository",
+    "InMemoryAuditResultStore",
     "InMemoryStorage",
     "InProcessQueue",
     "DisabledPayment",
