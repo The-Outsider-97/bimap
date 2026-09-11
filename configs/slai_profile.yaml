@@ -2,23 +2,13 @@
 # R3D BIM Audit Platform
 # SLAI agent authorization / launch profile
 #
-# This configuration determines which SLAI capabilities BIMAP may invoke.
-# Runtime availability is evaluated separately by SLAI health/readiness.
+# "required" means the agent participates in every normal BIMAP SLAI audit.
+# Conditional/supporting agents remain available only when explicitly requested.
 # =============================================================================
 
 agents:
 
   collaborative:
-    tier: core
-    enabled: true
-    required: true
-
-  evaluation:
-    tier: core
-    enabled: true
-    required: true
-
-  reader:
     tier: core
     enabled: true
     required: true
@@ -34,11 +24,6 @@ agents:
     required: true
 
   observability:
-    tier: core
-    enabled: true
-    required: true
-
-  planning:
     tier: core
     enabled: true
     required: true
@@ -63,6 +48,21 @@ agents:
     enabled: true
     required: true
 
+
+  evaluation:
+    tier: conditional
+    enabled: true
+    required: false
+
+  reader:
+    tier: conditional
+    enabled: true
+    required: false
+
+  planning:
+    tier: conditional
+    enabled: true
+    required: false
 
   perception:
     tier: conditional
