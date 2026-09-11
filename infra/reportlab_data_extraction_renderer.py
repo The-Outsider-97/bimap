@@ -12,6 +12,8 @@ from reportlab.lib.pagesizes import A4  # type: ignore
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet  # type: ignore
 from reportlab.lib.units import mm  # type: ignore
 from reportlab.platypus import (  # type: ignore
+    Flowable,
+    Image as ReportLabImage,
     PageBreak,
     Paragraph,
     SimpleDocTemplate,
@@ -50,7 +52,12 @@ def _short_hash(value: Any) -> str:
 class ReportLabDataExtractionPDFRenderer(DataExtractionPDFRenderer):
     """Render a compact summary; the JSON file remains the complete dataset."""
 
-    def render(self, *, document: Mapping[str, Any]) -> bytes:
+    def render(
+        self,
+        *,
+        document: Mapping[str, Any],
+        preview_png: bytes | None = None,
+    ) -> bytes:
         printer.status("EXTRACT", "Rendering data-extraction PDF", "info")
 
         if not isinstance(document, Mapping):
@@ -110,34 +117,173 @@ class ReportLabDataExtractionPDFRenderer(DataExtractionPDFRenderer):
         )
 
         extraction = dict(document.get("extraction") or {})
+        requested_by = dict(extraction.get("requested_by") or {})
         source = dict(document.get("source") or {})
         model = dict(document.get("model") or {})
-        project = dict(model.get("project") or {})
-        counts = dict(model.get("counts") or {})
-        class_counts = dict(model.get("ifc_class_counts") or {})
-        selected = tuple(extraction.get("datasets") or ())
-
-        story = [
-            Paragraph("R3D BIMAP Data Extraction Report", title_style),
+        geometry = dict(model.get("geometry_summary") or {})
+        counts = dict(document.get("counts") or {})
+        project = dict(document.get("project") or {})
+        selected = tuple(document.get("selected") or ())
+        if preview_png is None:
+            preview_png = document.get("preview_png")
+        class_counts = dict(model.get("class_counts") or {})
+        story: list[Flowable] = [
             Paragraph(
-                "Human-readable summary of the structured IFC extraction. "
-                "The JSON file in the same package is the authoritative complete "
-                "machine-readable result.",
-                body,
+                "R3D BIMAP Data Extraction Report",
+                title_style,
             ),
-            Spacer(1, 4 * mm),
-            Paragraph("Extraction identity", h1),
         ]
 
+        if preview_png:
+            try:
+                preview = ReportLabImage(BytesIO(preview_png))
+                max_width = 160 * mm
+                max_height = 80 * mm
+
+                width_ratio = (
+                    max_width
+                    / preview.imageWidth
+                )
+                height_ratio = (
+                    max_height
+                    / preview.imageHeight
+                )
+
+                scale = min(width_ratio, height_ratio, 1.0)
+
+                preview.drawWidth = (preview.imageWidth * scale)
+                preview.drawHeight = (preview.imageHeight * scale)
+                story.extend(
+                    [
+                        preview,
+                        Spacer(
+                            1,
+                            3 * mm,
+                        ),
+                    ]
+                )
+            except Exception as exc:
+                # Preview rendering may never invalidate
+                # the actual extraction artifact.
+                logger.warning(
+                    {
+                        "event": "data_extraction_preview_omitted",
+                        "error": lower_error_context(exc),
+                    }
+                )
+
+        story.extend(
+            [
+                Paragraph(
+                    "Summary of the structured model-data extraction."
+                    "The JSON file in the same package "
+                    "is the authoritative complete "
+                    "machine-readable result.",
+                    body,
+                ),
+                Spacer(
+                    1,
+                    4 * mm,
+                ),
+                Paragraph(
+                    "Extraction identity",
+                    h1,
+                ),
+            ]
+        )
+
         identity_rows = [
-            ["Extraction ID", _text(extraction.get("extraction_id"))],
-            ["Generated", _text(extraction.get("generated_at"))],
-            ["IFC schema", _text(source.get("ifc_schema"))],
-            ["Project", _text(project.get("name"))],
-            ["Source file", _text(source.get("filename"))],
-            ["Source size", _text(source.get("size_bytes")) + " bytes"],
-            ["Products", _text(source.get("product_count"))],
-            ["Datasets", ", ".join(map(str, selected)) if selected else "—"],
+            [
+                "Extraction ID",
+                _text(
+                    extraction.get(
+                        "extraction_id"
+                    )
+                ),
+            ],
+            [
+                "Extracted by",
+                _text(
+                    requested_by.get(
+                        "display_name"
+                    )
+                ),
+            ],
+            [
+                "Extracted at (UTC)",
+                _text(
+                    extraction.get(
+                        "generated_at"
+                    )
+                ),
+            ],
+            [
+                "Source format",
+                _text(
+                    source.get(
+                        "source_format"
+                    )
+                ).upper(),
+            ],
+            [
+                "Schema / format identifier",
+                _text(
+                    source.get(
+                        "schema"
+                    )
+                    or source.get(
+                        "ifc_schema"
+                    )
+                ),
+            ],
+            [
+                "Project",
+                _text(
+                    project.get(
+                        "name"
+                    )
+                ),
+            ],
+            [
+                "Source file",
+                _text(
+                    source.get(
+                        "filename"
+                    )
+                ),
+            ],
+            [
+                "Source size",
+                (
+                    _text(
+                        source.get(
+                            "size_bytes"
+                        )
+                    )
+                    + " bytes"
+                ),
+            ],
+            [
+                "Products / geometries",
+                _text(
+                    source.get(
+                        "product_count"
+                    )
+                ),
+            ],
+            [
+                "Datasets",
+                (
+                    ", ".join(
+                        map(
+                            str,
+                            selected,
+                        )
+                    )
+                    if selected
+                    else "—"
+                ),
+            ],
         ]
 
         identity = Table(identity_rows, colWidths=[42 * mm, 118 * mm])
@@ -196,8 +342,93 @@ class ReportLabDataExtractionPDFRenderer(DataExtractionPDFRenderer):
             )
         )
         story.append(count_table)
+        story.append(Paragraph("Geometry summary", h1))
 
-        story.append(Paragraph("IFC class distribution", h1))
+        if geometry:
+            volume = geometry.get("volume")
+            volume_complete = bool(geometry.get("volume_complete", False))
+            volume_unit = geometry.get("volume_unit")
+
+            if (
+                volume_complete
+                and isinstance(volume, (int, float))
+            ):
+                volume_text = (f"{float(volume):.8g}")
+
+                if volume_unit:
+                    volume_text += (f" {volume_unit}")
+                else:
+                    volume_text += (
+                        " source-units³ "
+                        "(source unit unspecified)"
+                    )
+            else:
+                volume_text = (
+                    "Not available — model is not "
+                    "fully watertight"
+                )
+
+            geometry_rows = [
+                ["Metric", "Value"],
+                ["Total polygons", _text(geometry.get("total_polygons"))],
+                ["Total vertices", _text(geometry.get("total_vertices"))],
+                ["Total unique edges", _text(geometry.get("total_edges"))],
+                ["Volume", volume_text],
+                [
+                    "Watertight geometries",
+                    (
+                        f"{_text(geometry.get('watertight_geometry_count'))}"
+                        f" / "
+                        f"{_text(geometry.get('geometry_count'))}"
+                    ),
+                ],
+            ]
+
+            geometry_table = Table(
+                geometry_rows,
+                colWidths=[
+                    72 * mm,
+                    88 * mm,
+                ],
+                repeatRows=1,
+            )
+
+            geometry_table.setStyle(
+                TableStyle(
+                    [
+                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEEEEE")),
+                        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9D9D9")),
+                        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ]
+                )
+            )
+
+            story.append(
+                geometry_table
+            )
+
+            story.append(
+                Paragraph(
+                    "Polygon count represents "
+                    "triangulated mesh faces. "
+                    "Edge count represents unique "
+                    "topological edges per geometry.",
+                    body,
+                )
+            )
+        else:
+            story.append(
+                Paragraph(
+                    "Reliable tessellated geometry "
+                    "statistics are not available "
+                    "from the configured source adapter.",
+                    body,
+                )
+            )
+
+        story.append(Paragraph("Source class distribution", h1))
         class_rows = [["IFC class", "Products"]]
         for ifc_class, count in sorted(
             class_counts.items(),
@@ -225,7 +456,12 @@ class ReportLabDataExtractionPDFRenderer(DataExtractionPDFRenderer):
         )
         story.append(class_table)
 
-        units = tuple(model.get("units") or ())
+        raw_units = model.get("units")
+        units = (
+            tuple(raw_units)
+            if isinstance(raw_units, (list, tuple))
+            else ()
+        )
         if units:
             story.extend([PageBreak(), Paragraph("Project units", h1)])
             unit_rows = [["Type", "Name", "Prefix", "IFC class"]]
