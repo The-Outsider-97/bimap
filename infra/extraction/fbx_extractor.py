@@ -304,9 +304,7 @@ class BlenderFbxDataExtractor(DataExtractor):
         return glb_path
 
     @staticmethod
-    def _fbx_inspection(
-        mesh_inspection: DataSourceInspection,
-    ) -> DataSourceInspection:
+    def _fbx_inspection(mesh_inspection: DataSourceInspection) -> DataSourceInspection:
         return DataSourceInspection(
             source_format=ExtractionSourceFormat.parse("FBX"),
             # Current port requires a non-empty schema.  "FBX" is an explicit
@@ -322,10 +320,7 @@ class BlenderFbxDataExtractor(DataExtractor):
         *,
         source_format: ExtractionSourceFormat,
     ) -> DataSourceInspection:
-        self._require_source(
-            source_format,
-            operation="inspect",
-        )
+        self._require_source(source_format, operation="inspect")
 
         with tempfile.TemporaryDirectory(
             prefix="bimap-fbx-extract-"
@@ -346,9 +341,7 @@ class BlenderFbxDataExtractor(DataExtractor):
                     )
                 )
 
-        return self._fbx_inspection(
-            mesh_inspection
-        )
+        return self._fbx_inspection(mesh_inspection)
 
     def extract(
         self,
@@ -418,8 +411,8 @@ class BlenderFbxDataExtractor(DataExtractor):
             units=mesh_result.units,
             datasets=mesh_result.datasets,
             counts=mesh_result.counts,
-            # Compatibility field in the current application contract.
             ifc_class_counts=mesh_result.ifc_class_counts,
+            geometry_summary=mesh_result.geometry_summary,
         )
 
 

@@ -88,9 +88,7 @@ def _mesh_records(
     )
 
 
-def _mesh_material(
-    geometry: Any,
-) -> dict[str, Any] | None:
+def _mesh_material(geometry: Any) -> dict[str, Any] | None:
     visual = getattr(geometry, "visual", None)
     material = getattr(visual, "material", None)
     if material is None:
@@ -128,6 +126,89 @@ def _mesh_material(
     }
 
 
+def _geometry_summary(scene: trimesh.Scene, geometry_records: tuple[tuple[str, Any], ...]) -> dict[str, Any]:
+    total_vertices = 0
+    total_polygons = 0
+    total_edges = 0
+    watertight_geometry_count = 0
+    volumes: list[float] = []
+    volume_complete = bool(geometry_records)
+
+    for _, geometry in geometry_records:
+        vertices = getattr(geometry, "vertices", ())
+        faces = getattr(geometry, "faces", ())
+        unique_edges = getattr(geometry, "edges_unique", ())
+        total_vertices += int(len(vertices))
+        total_polygons += int(len(faces))
+        total_edges += int(len(unique_edges))
+
+        if not bool(getattr(geometry, "is_watertight", False)):
+            volume_complete = False
+            continue
+
+        watertight_geometry_count += 1
+
+        raw_volume = getattr(
+            geometry,
+            "volume",
+            None,
+        )
+
+        if raw_volume is None:
+            volume_complete = False
+            continue
+
+        try:
+            volume = float(raw_volume)
+        except (TypeError, ValueError):
+            volume_complete = False
+            continue
+
+        if not math.isfinite(volume):
+            volume_complete = False
+            continue
+
+        # Negative signed volume can result from face winding.
+        # Physical volume is non-negative.
+        volumes.append(abs(volume))
+
+    scene_units = getattr(scene, "units", None)
+
+    linear_unit = (
+        str(scene_units)
+        if scene_units
+        else None
+    )
+
+    return {
+        "geometry_count": len(geometry_records),
+        "total_vertices": total_vertices,
+
+        # Trimesh represents mesh faces as triangles.
+        "total_polygons": total_polygons,
+        "polygon_interpretation": "triangulated_faces",
+
+        # edges_unique is deliberately used instead of raw edges.
+        # Raw mesh edges contain duplicates for shared faces.
+        "total_edges": total_edges,
+        "edge_interpretation": "unique_topological_edges_per_geometry",
+        "watertight_geometry_count": watertight_geometry_count,
+        "volume_complete": volume_complete,
+        "volume": (
+            sum(volumes)
+            if volume_complete
+            else None
+        ),
+
+        "linear_unit": linear_unit,
+        "volume_unit": (
+            f"{linear_unit}³"
+            if linear_unit
+            else None
+        ),
+    }
+
+
 class TrimeshDataExtractor(DataExtractor):
     """Extract generic mesh/scene data from OBJ, GLB, STL and PLY."""
 
@@ -153,10 +234,7 @@ class TrimeshDataExtractor(DataExtractor):
         return self._capabilities
 
     @staticmethod
-    def _materialize(
-        stream: BinaryIO,
-        destination: Path,
-    ) -> None:
+    def _materialize(stream: BinaryIO, destination: Path) -> None:
         source = require_binary_stream(
             stream,
             field="source",
@@ -200,6 +278,63 @@ class TrimeshDataExtractor(DataExtractor):
                 field="source",
             )
 
+    def render_preview(
+        self,
+        stream: BinaryIO,
+        *,
+        source_format: ExtractionSourceFormat,
+    ) -> bytes | None:
+        source = self._require_source(source_format, operation="render_preview")
+
+        with tempfile.TemporaryDirectory(
+            prefix="bimap-mesh-preview-"
+        ) as directory_name:
+            path = (
+                Path(directory_name)
+                / f"source.{source.value}"
+            )
+
+            self._materialize(stream, path)
+
+            scene = self._open_scene(path, source=source)
+
+            try:
+                payload = scene.save_image(
+                    resolution=(1200, 700),
+                    visible=False,
+                )
+            except Exception as exc:
+                logger.warning(
+                    {
+                        "event":
+                            "mesh_preview_unavailable",
+                        "source_format":
+                            source.value,
+                        "error":
+                            lower_error_context(exc),
+                    }
+                )
+                return None
+
+            if not isinstance(
+                payload,
+                (
+                    bytes,
+                    bytearray,
+                    memoryview,
+                ),
+            ):
+                return None
+
+            image = bytes(payload)
+
+            if not image.startswith(
+                b"\x89PNG\r\n\x1a\n"
+            ):
+                return None
+
+            return image
+
     def _require_source(
         self,
         source_format: ExtractionSourceFormat | str,
@@ -226,11 +361,7 @@ class TrimeshDataExtractor(DataExtractor):
         return source
 
     @staticmethod
-    def _open_scene(
-        path: Path,
-        *,
-        source: ExtractionSourceFormat,
-    ) -> trimesh.Scene:
+    def _open_scene(path: Path, *, source: ExtractionSourceFormat) -> trimesh.Scene:
         try:
             loaded = trimesh.load(
                 str(path),
@@ -273,11 +404,7 @@ class TrimeshDataExtractor(DataExtractor):
         return scene
 
     @staticmethod
-    def _inspection(
-        scene: trimesh.Scene,
-        *,
-        source: ExtractionSourceFormat,
-    ) -> DataSourceInspection:
+    def _inspection(scene: trimesh.Scene,*, source: ExtractionSourceFormat) -> DataSourceInspection:
         geometry = _mesh_records(scene)
         return DataSourceInspection(
             source_format=source,
@@ -289,16 +416,8 @@ class TrimeshDataExtractor(DataExtractor):
             project_name=None,
         )
 
-    def inspect(
-        self,
-        stream: BinaryIO,
-        *,
-        source_format: ExtractionSourceFormat,
-    ) -> DataSourceInspection:
-        source = self._require_source(
-            source_format,
-            operation="inspect",
-        )
+    def inspect(self, stream: BinaryIO, *, source_format: ExtractionSourceFormat) -> DataSourceInspection:
+        source = self._require_source(source_format, operation="inspect")
         with tempfile.TemporaryDirectory(
             prefix="bimap-mesh-extract-"
         ) as directory_name:
@@ -307,14 +426,8 @@ class TrimeshDataExtractor(DataExtractor):
                 / f"source.{source.value}"
             )
             self._materialize(stream, path)
-            scene = self._open_scene(
-                path,
-                source=source,
-            )
-            return self._inspection(
-                scene,
-                source=source,
-            )
+            scene = self._open_scene(path, source=source)
+            return self._inspection(scene, source=source)
 
     def extract(
         self,
@@ -323,10 +436,7 @@ class TrimeshDataExtractor(DataExtractor):
         source_format: ExtractionSourceFormat,
         datasets: tuple[ExtractionDataset, ...],
     ) -> ExtractedModelData:
-        source = self._require_source(
-            source_format,
-            operation="extract",
-        )
+        source = self._require_source(source_format, operation="extract")
         selected = normalize_datasets(list(datasets))
 
         unsupported = tuple(
@@ -351,93 +461,43 @@ class TrimeshDataExtractor(DataExtractor):
                 / f"source.{source.value}"
             )
             self._materialize(stream, path)
-            scene = self._open_scene(
-                path,
-                source=source,
-            )
-            inspection = self._inspection(
-                scene,
-                source=source,
-            )
+            scene = self._open_scene(path, source=source)
+            inspection = self._inspection(scene, source=source)
             geometry_records = _mesh_records(scene)
 
             class_counts = Counter(
                 type(geometry).__name__
                 for _, geometry in geometry_records
             )
-            extracted: dict[
-                str,
-                tuple[dict[str, Any], ...],
-            ] = {}
+            extracted: dict[str, tuple[dict[str, Any], ...]] = {}
             counts: dict[str, int] = {}
 
             if ExtractionDataset.ELEMENTS in selected:
                 rows = tuple(
                     {
                         "source_id": str(name),
-                        "source_class": type(
-                            geometry
-                        ).__name__,
+                        "source_class": type(geometry).__name__,
                         "name": str(name),
-                        "vertex_count": int(
-                            len(
-                                getattr(
-                                    geometry,
-                                    "vertices",
-                                    (),
-                                )
-                            )
-                        ),
-                        "face_count": int(
-                            len(
-                                getattr(
-                                    geometry,
-                                    "faces",
-                                    (),
-                                )
-                            )
-                        ),
+                        "vertex_count": int(len(getattr(geometry, "vertices", ()))),
+                        "face_count": int(len(getattr(geometry, "faces", ()))),
+                        "edge_count": int(len(getattr(geometry, "edges_unique", ()))),
                     }
                     for name, geometry in geometry_records
                 )
-                extracted[
-                    ExtractionDataset.ELEMENTS.value
-                ] = rows
-                counts[
-                    ExtractionDataset.ELEMENTS.value
-                ] = len(rows)
+                extracted[ExtractionDataset.ELEMENTS.value] = rows
+                counts[ExtractionDataset.ELEMENTS.value] = len(rows)
 
             if ExtractionDataset.PROPERTIES in selected:
-                property_rows: list[
-                    dict[str, Any]
-                ] = []
+                property_rows: list[dict[str, Any]] = []
                 for name, geometry in geometry_records:
                     properties = {
-                        "is_watertight": getattr(
-                            geometry,
-                            "is_watertight",
-                            None,
-                        ),
-                        "is_winding_consistent": getattr(
-                            geometry,
-                            "is_winding_consistent",
-                            None,
-                        ),
-                        "euler_number": getattr(
-                            geometry,
-                            "euler_number",
-                            None,
-                        ),
+                        "is_watertight": getattr(geometry, "is_watertight", None),
+                        "is_winding_consistent": getattr(geometry, "is_winding_consistent", None),
+                        "euler_number": getattr(geometry, "euler_number", None),
                     }
-                    metadata = getattr(
-                        geometry,
-                        "metadata",
-                        None,
-                    )
+                    metadata = getattr(geometry, "metadata", None)
                     if isinstance(metadata, dict):
-                        properties["metadata"] = _json_value(
-                            metadata
-                        )
+                        properties["metadata"] = _json_value(metadata)
 
                     for property_name, value in properties.items():
                         if value is None:
@@ -455,45 +515,16 @@ class TrimeshDataExtractor(DataExtractor):
                         )
 
                 rows = tuple(property_rows)
-                extracted[
-                    ExtractionDataset.PROPERTIES.value
-                ] = rows
-                counts[
-                    ExtractionDataset.PROPERTIES.value
-                ] = len(rows)
+                extracted[ExtractionDataset.PROPERTIES.value] = rows
+                counts[ExtractionDataset.PROPERTIES.value] = len(rows)
 
             if ExtractionDataset.QUANTITIES in selected:
-                quantity_rows: list[
-                    dict[str, Any]
-                ] = []
+                quantity_rows: list[dict[str, Any]] = []
                 for name, geometry in geometry_records:
-                    bounds = _json_value(
-                        getattr(
-                            geometry,
-                            "bounds",
-                            None,
-                        )
-                    )
-                    extents = _json_value(
-                        getattr(
-                            geometry,
-                            "extents",
-                            None,
-                        )
-                    )
-                    area = getattr(
-                        geometry,
-                        "area",
-                        None,
-                    )
-                    watertight = bool(
-                        getattr(
-                            geometry,
-                            "is_watertight",
-                            False,
-                        )
-                    )
-
+                    bounds = _json_value(getattr(geometry, "bounds", None))
+                    extents = _json_value(getattr(geometry, "extents", None))
+                    area = getattr(geometry, "area", None)
+                    watertight = bool(getattr(geometry, "is_watertight", False))
                     candidates = {
                         "bounds": bounds,
                         "extents": extents,
@@ -511,20 +542,9 @@ class TrimeshDataExtractor(DataExtractor):
                     }
 
                     if watertight:
-                        volume = getattr(
-                            geometry,
-                            "volume",
-                            None,
-                        )
-                        if isinstance(
-                            volume,
-                            (int, float),
-                        ) and math.isfinite(
-                            float(volume)
-                        ):
-                            candidates["volume"] = float(
-                                volume
-                            )
+                        volume = getattr(geometry, "volume", None)
+                        if isinstance( volume, (int, float)) and math.isfinite(float(volume)):
+                            candidates["volume"] = float(volume)
 
                     for quantity_name, value in candidates.items():
                         if value is None:
@@ -542,21 +562,13 @@ class TrimeshDataExtractor(DataExtractor):
                         )
 
                 rows = tuple(quantity_rows)
-                extracted[
-                    ExtractionDataset.QUANTITIES.value
-                ] = rows
-                counts[
-                    ExtractionDataset.QUANTITIES.value
-                ] = len(rows)
+                extracted[ExtractionDataset.QUANTITIES.value] = rows
+                counts[ExtractionDataset.QUANTITIES.value] = len(rows)
 
             if ExtractionDataset.MATERIALS in selected:
-                material_rows: list[
-                    dict[str, Any]
-                ] = []
+                material_rows: list[dict[str, Any]] = []
                 for name, geometry in geometry_records:
-                    material = _mesh_material(
-                        geometry
-                    )
+                    material = _mesh_material(geometry)
                     if material is None:
                         continue
                     material_rows.append(
@@ -570,18 +582,10 @@ class TrimeshDataExtractor(DataExtractor):
                     )
 
                 rows = tuple(material_rows)
-                extracted[
-                    ExtractionDataset.MATERIALS.value
-                ] = rows
-                counts[
-                    ExtractionDataset.MATERIALS.value
-                ] = len(rows)
+                extracted[ExtractionDataset.MATERIALS.value] = rows
+                counts[ExtractionDataset.MATERIALS.value] = len(rows)
 
-            units_value = getattr(
-                scene,
-                "units",
-                None,
-            )
+            units_value = getattr(scene, "units", None)
             units = (
                 (
                     {
@@ -593,11 +597,7 @@ class TrimeshDataExtractor(DataExtractor):
                 else ()
             )
 
-            metadata = getattr(
-                scene,
-                "metadata",
-                None,
-            )
+            metadata = getattr(scene, "metadata", None)
             project = (
                 {
                     "metadata": _json_value(metadata)
@@ -606,6 +606,8 @@ class TrimeshDataExtractor(DataExtractor):
                 and metadata
                 else {}
             )
+
+            geometry_summary = (_geometry_summary(scene, geometry_records))
 
             logger.info(
                 {
@@ -626,10 +628,8 @@ class TrimeshDataExtractor(DataExtractor):
                 units=units,
                 datasets=extracted,
                 counts=counts,
-                # Compatibility field in the current application contract.
-                ifc_class_counts=dict(
-                    sorted(class_counts.items())
-                ),
+                ifc_class_counts=dict(sorted(class_counts.items())),
+                geometry_summary=geometry_summary,
             )
 
 
