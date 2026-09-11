@@ -767,11 +767,24 @@ class SLAIOrchestrator:
                         privacy_mapping,
                     )
                     if privacy_gate.disposition is GateDisposition.MODIFY:
-                        current_payload = self._normalize_sanitized_mapping(
-                            privacy_mapping["sanitized_payload"],
-                            phase=record.phase,
+                        current_payload = (
+                            self._normalize_sanitized_mapping(
+                                privacy_mapping["sanitized_payload"],
+                                phase=record.phase,
+                            )
                         )
                         privacy_sanitized_payload = dict(current_payload)
+
+                        # Privacy has now replaced the working SLAI context.
+                        # Keep the namespaced SharedMemory view consistent with the
+                        # sanitized payload so downstream SLAI agents cannot recover
+                        # the pre-sanitized context through SharedMemory.
+                        self._memory_set((
+                                f"{namespace}."
+                                "grounded_context"
+                            ),
+                            current_payload,
+                        )
                     elif privacy_gate.disposition.prevents_automatic_release:
                         terminated_early = True
                         termination_reason = (
@@ -854,13 +867,16 @@ class SLAIOrchestrator:
                         )
                         gate_outputs[gate.value] = gate_mapping
 
-                        if gate is GovernanceGate.PRIVACY:
-                            privacy_gate = self.governance.normalize_gate_output(
-                                gate,
-                                gate_mapping,
+                    if gate is GovernanceGate.PRIVACY:
+                        privacy_gate = (self.governance.normalize_gate_output(gate,gate_mapping))
+
+                        if privacy_gate.disposition is GateDisposition.MODIFY:
+                            privacy_sanitized_payload = (
+                                self._normalize_sanitized_mapping(
+                                    gate_mapping["sanitized_payload"],
+                                    phase=record.phase,
+                                )
                             )
-                            if privacy_gate.disposition is GateDisposition.MODIFY:
-                                privacy_sanitized_payload = gate_mapping["sanitized_payload"]
 
                     if "observability" in agents:
                         obs_payload = self._build_observability_payload(
@@ -880,9 +896,7 @@ class SLAIOrchestrator:
                         invocations.append(record)
                         memory_keys.append(key)
                         outputs["observability"] = output
-                        phase_outputs[
-                            self._phase_key(record.phase, "observability")
-                        ] = output
+                        phase_outputs[self._phase_key(record.phase, "observability")] = output
 
                 completed_at = utc_now()
                 result = SLAIOrchestrationResult(
@@ -917,12 +931,7 @@ class SLAIOrchestrator:
     def close(self) -> None:
         """Release orchestrator-owned SLAI runtime resources exactly once."""
 
-        announce_method_start(
-            printer,
-            logger,
-            "SLAI ORCHESTRATION",
-            "Closing BIMAP SLAI orchestrator",
-        )
+        announce_method_start(printer, logger, "SLAI ORCHESTRATION", "Closing BIMAP SLAI orchestrator")
         with self._lock:
             if self._closed:
                 return
