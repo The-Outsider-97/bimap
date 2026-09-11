@@ -55,6 +55,9 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
 
     # Public façade
     "SLAIAdapter": (".adapter", "SLAIAdapter"),
+
+    # Task Builder
+    "BIMAPSLAITaskBuilder": (".task_builder", "BIMAPSLAITaskBuilder"),
 }
 
 
