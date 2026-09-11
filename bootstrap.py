@@ -109,9 +109,10 @@ from .reporting.package_builder import PackageBuilder
 from .reporting.report_builder import ReportBuilder, ReportRenderer
 from .slai.adapter import SLAIAdapter
 from .slai.agent_policy import SLAIAgentPolicy
-from .slai.governance import SLAIGovernance
+from .slai.governance import GovernanceGate, SLAIGovernance
 from .slai.health import SLAIHealthCheck
 from .slai.orchestration import AgentTaskBuilder, SLAIOrchestrator
+from .slai.result_mapper import SLAIResultMapper
 from .workers.jobs.audit import WorkerAudit
 from .workers.jobs.deletion import JobDeletion
 from .workers.jobs.report import JobReport
@@ -762,10 +763,7 @@ class Bootstrap:
             event="bootstrap_init_start",
         )
 
-        if not isinstance(
-            infrastructure,
-            BootstrapInfrastructure,
-        ):
+        if not isinstance(infrastructure, BootstrapInfrastructure):
             raise BootstrapConfigurationError(
                 "infrastructure must be a BootstrapInfrastructure.",
                 operation="initialize",
@@ -777,10 +775,7 @@ class Bootstrap:
                 },
             )
 
-        if not isinstance(
-            configuration,
-            BootstrapConfiguration,
-        ):
+        if not isinstance(configuration, BootstrapConfiguration):
             raise BootstrapConfigurationError(
                 "configuration must be a BootstrapConfiguration.",
                 operation="initialize",
@@ -792,10 +787,7 @@ class Bootstrap:
                 },
             )
 
-        if not isinstance(
-            audit_components,
-            BootstrapAuditComponents,
-        ):
+        if not isinstance(audit_components, BootstrapAuditComponents):
             raise BootstrapConfigurationError(
                 "audit_components must be a BootstrapAuditComponents.",
                 operation="initialize",
@@ -845,9 +837,7 @@ class Bootstrap:
         _announce(
             "Accessing BIMAP runtime",
             event="bootstrap_runtime_access_start",
-            context={
-                "state": self._state.value,
-            },
+            context={"state": self._state.value,},
         )
 
         if (
@@ -858,9 +848,7 @@ class Bootstrap:
                 "BIMAP runtime is not available in the current "
                 "bootstrap state.",
                 operation="get_runtime",
-                context={
-                    "state": self._state.value,
-                },
+                context={"state": self._state.value,},
             )
 
         return self._runtime
@@ -943,10 +931,22 @@ class Bootstrap:
                     close_shared_memory=(self.infrastructure.close_shared_memory_on_shutdown),
                 )
 
+                stage = "slai_result_mapper"
+
+                result_mapper = SLAIResultMapper(
+                    governance=orchestrator.governance,
+                    required_gates=(
+                        GovernanceGate.QUALITY,
+                        GovernanceGate.SAFETY,
+                        GovernanceGate.PRIVACY,
+                    ),
+                )
+
                 stage = "slai_adapter"
 
                 slai_adapter = SLAIAdapter(
                     orchestrator=orchestrator,
+                    result_mapper=result_mapper,
                     # Bootstrap constructed the orchestrator and therefore
                     # owns its lifecycle.
                     close_orchestrator=True,
