@@ -1,123 +1,77 @@
 # BIMAP API Layer
 
-> **Package:** `bimap.api`  
-> **Architectural role:** HTTP admission, presentation, transport-security, and request-boundary layer for the R3D BIM Audit Platform (BIMAP)  
-> **Runtime position:** Outer Level-6 interface above BIMAP application commands/queries/services and below the composition root (`bootstrap.py`) and HTTP server
+> **Repository path:** `api/`  
+> **Runtime package:** `applications.bimap.api`  
+> **Architectural role:** HTTP admission, transport validation, authorization hand-off, response projection, and cross-cutting web policy for the R3D BIM Audit Platform  
+> **Composition owner:** `bootstrap.py` / deployment composition; the API does not construct infrastructure, domain repositories, SLAI agents, or audit-engine internals
 
 ---
 
 ## 1. Purpose
 
-The `api/` package exposes BIMAP's supported service capabilities over HTTP without moving business rules, infrastructure ownership, or SLAI runtime construction into the web layer. It translates HTTP requests into already-constructed application commands and queries, applies cross-cutting transport controls, and projects safe BIMAP responses back to clients.
+The `api/` package is BIMAP's public HTTP boundary. It turns HTTP requests into calls to already-constructed application commands, queries, and services, and turns application results into safe HTTP responses.
 
-The API layer exists to answer questions such as:
+The package is intentionally thin in business meaning. It may validate transport shape, authentication state, route authorization, media type, request size, idempotency headers, correlation identifiers, and response serialization, but it must not become a second implementation of BIMAP's domain rules or application workflows.
 
-- Which BIMAP application use cases are currently reachable over HTTP?
-- How are route handlers supplied with already-built commands, queries, services, and trusted deployment hooks?
-- Where is the `/api/v1` namespace mounted without duplicating it across every route module?
-- How are request and correlation identifiers generated and propagated safely?
-- How are body/header/rate limits enforced before expensive processing begins?
-- Which HTTP security headers and host/HTTPS controls apply to the deployment?
-- How are domain/application/contract/audit/reporting/SLAI failures converted into safe HTTP responses?
-- Which admission checks must be supplied by deployment composition rather than invented inside route code?
-- Which operational health claims can the current implementation make without overstating system readiness?
+The current API covers:
 
-The API package does **not** own BIM business rules, order-transition legality, product pricing or limits, payment-provider verification logic, object-storage layout, malware scanning, deterministic BIM analysis, SLAI agent construction, report generation, retention policy, database schemas, worker retry policy, or frontend state. Those responsibilities remain in their authoritative BIMAP layers.
+- service liveness/readiness;
+- customer signup, verification, login, logout, and session-backed authentication;
+- account profile access/update;
+- product discovery;
+- order creation, retrieval, listing, and cancellation;
+- upload staging and upload validation;
+- audit submission, audit status, and persisted Audit Workspace retrieval;
+- recurring entitlement admission;
+- checkout and payment webhooks;
+- report listing and download-link issuance;
+- deletion requests;
+- model conversion;
+- structured model-data extraction; and
+- optional administrative review/order/report access.
+
+The central rule is:
+
+> **The API owns HTTP semantics; the application layer owns use-case semantics.**
 
 ---
 
-## 2. Architectural principles
-
-### 2.1 The API is an admission and presentation boundary
-
-BIMAP's API receives HTTP input, applies transport/admission controls, delegates to application use cases, and returns safe external projections.
+## 2. Architectural position
 
 ```mermaid
 flowchart TB
-    CLIENT[Frontend / API Client / Provider Webhook]
-    API[bimap/api]
-    CMD[app/commands]
-    QUERY[app/queries]
-    SERVICE[app/services]
-    PORTS[app/ports]
+    CLIENT[Next.js frontend / API client]
+    MW[api/middleware]
+    ROUTES[api/routes]
+    APP[app commands / queries / services]
+    DOMAIN[domain + contracts]
     ENGINE[audit_engine]
-    REPORTING[reporting]
-    SLAI[slai adapter]
-    CONTRACTS[contracts]
-    DOMAIN[domain]
+    SLAIPORT[app/ports/slai.py]
+    INFRA[infra adapters]
+    SLAI[slai adapter/runtime boundary]
 
-    CLIENT --> API
-    API --> CMD
-    API --> QUERY
-    API --> SERVICE
-    CMD --> SERVICE
-    QUERY --> PORTS
-    SERVICE --> PORTS
-    SERVICE --> ENGINE
-    SERVICE --> REPORTING
-    SERVICE --> CONTRACTS
-    SERVICE --> DOMAIN
-    PORTS --> CONTRACTS
-    ENGINE --> CONTRACTS
-    CONTRACTS --> DOMAIN
+    CLIENT --> MW --> ROUTES --> APP
+    APP --> DOMAIN
+    APP --> ENGINE
+    APP --> SLAIPORT
+    INFRA -. implements app ports .-> APP
+    SLAI -. structurally implements SLAIPort .-> SLAIPORT
 
-    DOMAIN -. must not import .-> API
-    CONTRACTS -. must not import .-> API
-    SERVICE -. must not import .-> API
+    ROUTES -. must not own .-> DOMAIN
+    ROUTES -. must not construct .-> INFRA
+    ROUTES -. must not invoke agents directly .-> SLAI
 ```
 
-The central dependency rule is:
-
-> **The API may invoke inward-facing application capabilities; lower BIMAP layers must never depend on HTTP/FastAPI modules.**
-
-### 2.2 Bootstrap owns construction
-
-`api/app.py` is an application factory, not the global composition root. `bootstrap.py` constructs concrete adapters and application handlers, builds the API dependency container, and passes it into `create_app()`.
-
-```mermaid
-flowchart LR
-    BOOT[bootstrap.py] --> ADAPTERS[Concrete adapters]
-    BOOT --> SERVICES[Application services]
-    BOOT --> HANDLERS[Commands / queries]
-    BOOT --> DEPS[APIDependencies]
-    DEPS --> FACTORY[api.app.create_app]
-    FACTORY --> FASTAPI[FastAPI application]
-```
-
-`api/app.py` must never import `bootstrap.py`. This prevents a composition cycle and keeps API construction deterministic/testable.
-
-### 2.3 One owner per concern
-
-| Concern | Authoritative owner |
-|---|---|
-| HTTP application construction | `api/app.py` |
-| API dependency container/request lookup | `api/dependencies.py` |
-| Request/correlation IDs | `api/middleware/correlation.py` |
-| Lower-error to safe HTTP mapping | `api/middleware/error_mapping.py` |
-| Transport body/header/rate limits | `api/middleware/request_limits.py` |
-| Host/HTTPS/security-response headers | `api/middleware/security.py` |
-| API error vocabulary | `api/utils/api_errors.py` |
-| Framework-neutral HTTP/ASGI mechanics | `api/utils/api_helpers.py` |
-| FastAPI route parsing/authorization utilities | `api/routes/_shared.py` |
-| HTTP route behavior | `api/routes/*.py` |
-| Application use cases | `app/commands`, `app/queries`, `app/services` |
-| Business meaning/invariants | `domain/` |
-| Stable external DTO/schema semantics | `contracts/` |
-| Deterministic audit behavior | `audit_engine/` |
-| SLAI integration | `slai/` + `app/ports/slai.py` |
-| Report construction | `reporting/` |
-| Concrete provider/client construction | `bootstrap.py` / infrastructure adapters |
-
-No API module should recreate a lower-layer concept simply because it needs to expose that concept over HTTP.
+`api/app.py:create_app()` is the HTTP composition boundary immediately below BIMAP bootstrap. It receives an already-built `APIDependencies` container and mounts the route groups. It deliberately does not instantiate repositories, storage, queues, payment providers, SLAI agents, converters, extractors, product catalogs, or application services.
 
 ---
 
 ## 3. Package structure
 
 ```text
-bimap/api/
-├── __init__.py
+api/
 ├── README.md
+├── __init__.py
 ├── app.py
 ├── dependencies.py
 │
@@ -131,10 +85,16 @@ bimap/api/
 ├── routes/
 │   ├── __init__.py
 │   ├── _shared.py
+│   ├── account.py
 │   ├── admin.py
+│   ├── audits.py
+│   ├── auth.py
 │   ├── checkout.py
+│   ├── conversions.py
+│   ├── data_extractions.py
 │   ├── deletion.py
 │   ├── downloads.py
+│   ├── entitlements.py
 │   ├── health.py
 │   ├── orders.py
 │   ├── products.py
@@ -148,927 +108,402 @@ bimap/api/
     └── api_helpers.py
 ```
 
-The route modules are intentionally unversioned internally. `api/app.py` mounts their routers under the deployment API namespace, currently defaulting to `/api/v1`.
+This tree reflects the current BIMAP route surface. Older documentation that omitted `account.py`, `audits.py`, `auth.py`, `conversions.py`, `data_extractions.py`, or `entitlements.py` is no longer representative of the application.
 
 ---
 
-## 4. Internal dependency direction
+## 4. Core module responsibilities
 
-```mermaid
-flowchart BT
-    ERR[utils/api_errors.py]
-    HELP[utils/api_helpers.py]
-    ERR --> HELP
-
-    HELP --> CORR[middleware/correlation.py]
-    HELP --> LIMIT[middleware/request_limits.py]
-    HELP --> SEC[middleware/security.py]
-    HELP --> MAP[middleware/error_mapping.py]
-    ERR --> CORR
-    ERR --> LIMIT
-    ERR --> SEC
-    ERR --> MAP
-
-    HELP --> SHARED[routes/_shared.py]
-    ERR --> SHARED
-    SHARED --> ROUTES[routes/*.py]
-
-    DEPS[dependencies.py] --> APP[app.py]
-    ROUTES --> APP
-    CORR --> APP
-    LIMIT --> APP
-    SEC --> APP
-    MAP --> APP
-```
-
-The arrows mean **"is consumed by"**.
-
-Important reverse dependencies are forbidden:
-
-```text
-api/utils/*              MUST NOT import middleware, routes, or app.py
-api/middleware/*         MUST NOT import routes or construct application services
-api/routes/*             MUST NOT import bootstrap.py or concrete infrastructure
-api/dependencies.py      MUST NOT import bootstrap.py or construct adapters
-api/app.py               MUST NOT import bootstrap.py
-app/*                    MUST NOT import api/*
-domain/*                 MUST NOT import api/*
-contracts/*              MUST NOT import api/*
-audit_engine/*           MUST NOT import api/*
-reporting/*              MUST NOT import api/*
-slai/*                   MUST NOT import api/*
-```
+| Module | Responsibility | Must not own |
+|---|---|---|
+| `app.py` | Create FastAPI app, validate API settings, construct route groups from injected dependencies, install exception handlers and middleware | repositories, domain policy, SLAI construction, audit rules |
+| `dependencies.py` | Typed API dependency container and route-hook installation | provider implementations, business mutations |
+| `middleware/correlation.py` | Request/correlation ID validation and propagation | business identifiers or audit identity |
+| `middleware/error_mapping.py` | Final safe mapping of BIMAP/API failures to HTTP problem responses | application/domain exception semantics themselves |
+| `middleware/request_limits.py` | Request/body/header limits and optional rate-limiter integration | plan/product quotas |
+| `middleware/security.py` | HTTP security policy and response/request security enforcement | account authentication implementation |
+| `routes/_shared.py` | Reusable route authorization and route-boundary helpers | product/domain policy |
+| `routes/*` | HTTP parsing, authorization hand-off, command/query invocation, response mapping | lower-layer orchestration implementation |
+| `utils/api_errors.py` | Stable API error vocabulary and public-safe error metadata | lower-layer error definitions |
+| `utils/api_helpers.py` | Transport validation/serialization/header helpers | domain/business decisions |
 
 ---
 
-## 5. Application factory (`app.py`)
+## 5. Application factory and middleware order
 
-`create_app()` is the sole FastAPI application factory for the BIMAP API package.
-
-Its responsibilities are limited to:
-
-1. validate the already-built API dependency container;
-2. validate explicit API composition settings;
-3. create the `FastAPI` instance;
-4. attach the dependency container to `app.state.container`;
-5. construct the current route groups from injected handlers/hooks;
-6. mount route groups under the configured API prefix;
-7. install framework exception translation;
-8. install BIMAP middleware in the required runtime order;
-9. expose route-group/settings metadata through application state for diagnostics.
-
-It must not:
-
-- read YAML/environment variables directly;
-- create repositories or storage/payment/queue clients;
-- initialize AgentFactory/SharedMemory/agents;
-- build application services from ports;
-- hard-code product or transport thresholds;
-- infer customer authorization policy;
-- invent CORS origins or proxy-trust behavior.
-
-### 5.1 API settings
-
-`APISettings` keeps HTTP composition explicit.
-
-| Setting | Meaning |
-|---|---|
-| `request_limits` | Existing `RequestLimitPolicy`; body/header limits are deployment-owned |
-| `security` | Existing `SecurityPolicy`; host/HTTPS/security-header policy is deployment-owned |
-| `api_prefix` | Common router mount namespace; default `/api/v1` |
-| `title` | OpenAPI/application title metadata |
-| `correlation_header` | Inbound/outbound correlation header name |
-| `request_id_header` | Server-owned request-ID response header name |
-| `max_correlation_id_length` | Correlation identifier bound; cannot exceed canonical 128-character context bound |
-| `reject_invalid_correlation` | Reject malformed inbound IDs instead of silently normalizing them |
-| `openapi_url` | Optional OpenAPI schema endpoint |
-| `docs_url` | Optional Swagger UI endpoint; requires OpenAPI enabled |
-| `redoc_url` | Optional ReDoc endpoint; requires OpenAPI enabled |
-
-OpenAPI and interactive documentation are disabled by default. A deployment must explicitly expose them.
-
-### 5.2 Route mounting
-
-Individual route classes declare paths relative to their own router prefixes. `create_app()` supplies the shared external prefix:
+`create_app()` installs BIMAP's middleware in the following effective outer-to-inner order:
 
 ```text
-RouteProducts: /products
-RouteOrders:   /orders/...
-RouteHealth:   /health/...
-
-                    ↓ create_app(api_prefix="/api/v1")
-
-/api/v1/products
-/api/v1/orders/...
-/api/v1/health/...
+ErrorMapping
+    ↓
+CorrelationMiddleware
+    ↓
+Security
+    ↓
+RequestLimits
+    ↓
+FastAPI routing / route handler
 ```
-
-This avoids repeating API-version literals across route modules and allows controlled version-prefix changes at the application boundary.
-
-### 5.3 Internal admin surface
-
-Administrative routes are not mounted by default. They are enabled only when an `APIAdminDependencies` bundle is supplied. That bundle contains its own authorization hook, allowing admin access policy to remain stricter and separate from customer-route authorization.
-
-This prevents the existence of `RouteAdmin` from automatically making an internal operational surface part of every public deployment.
-
----
-
-## 6. Dependency container (`dependencies.py`)
-
-`dependencies.py` formalizes the boundary between the composition root and FastAPI.
-
-```mermaid
-flowchart TD
-    BOOT[bootstrap.py]
-    USE[APIUseCases]
-    HOOKS[APIRouteHooks]
-    HEALTH[APIHealthDependencies]
-    ADMIN[APIAdminDependencies optional]
-    DEPS[APIDependencies]
-    APP[FastAPI.state.container]
-    REQ[Request]
-
-    BOOT --> USE
-    BOOT --> HOOKS
-    BOOT --> HEALTH
-    BOOT --> ADMIN
-    USE --> DEPS
-    HOOKS --> DEPS
-    HEALTH --> DEPS
-    ADMIN --> DEPS
-    DEPS --> APP
-    APP --> REQ
-```
-
-### 6.1 `APIUseCases`
-
-`APIUseCases` contains only handlers consumed by the currently registered customer/provider route surface:
-
-```text
-CreateOrder
-CancelOrder
-GetOrder
-ListOrders
-GetProducts
-CreateUploadSlot
-ValidateUploads
-BeginCheckout
-HandlePayment
-ListReports
-RequestDeletion
-```
-
-The API container deliberately does not require unrelated application handlers merely because they exist. For example, audit enqueue execution and report release are not injected into this HTTP surface when no current route safely exposes those operations.
-
-### 6.2 `APIRouteHooks`
-
-Several security/ownership capabilities cannot be inferred from the current domain/repository ports and therefore remain trusted injected hooks:
-
-| Hook | Responsibility |
-|---|---|
-| `authorizer` | Authentication/tenant/resource authorization for customer-facing routes |
-| `upload_manifest_validator` | Trusted staged-upload completeness/admission check before lifecycle validation |
-| `report_id_resolver` | Resolve already-authorized report IDs for one order without inventing a global repository scan |
-| `download_url_issuer` | Issue a short-lived download capability after manifest/artifact authorization |
-| `deletion_admission_gate` | Apply deployment/legal/accounting deletion admission requirements |
-| `deletion_object_resolver` | Resolve trusted storage object IDs; client input never supplies these IDs |
-| `payment_signature_header` | Provider-specific webhook signature header name, injected without hard-coding a provider |
-
-All callable hooks are mandatory for the route groups that consume them; no permissive default is provided.
-
-### 6.3 `APIHealthDependencies`
-
-The health bundle supplies:
-
-- the existing `SLAIHealthCheck`;
-- injected SLAI factory/runtime object;
-- injected SharedMemory/runtime object;
-- the explicitly required SLAI agent names;
-- optional pre-resolved agent objects;
-- whether detailed diagnostics may be exposed.
-
-The API does not redefine the runtime type contract of AgentFactory/SharedMemory. `SLAIHealthCheck` remains the owner of health validation.
-
-### 6.4 `APIAdminDependencies`
-
-The optional admin bundle contains:
-
-- `ReviewService` for the governance operations the current admin route can actually support;
-- a dedicated admin authorization hook.
-
-Global admin order/job/review scans are not fabricated when the current repository/query layer does not define those read models.
-
-### 6.5 Request-scoped retrieval
-
-`install_api_dependencies()` stores one immutable container on:
-
-```text
-FastAPI.state.container
-```
-
-`get_api_dependencies(request)` resolves it through:
-
-```text
-request.app.state.container
-```
-
-Replacing an installed container with another object is rejected. A running application must not silently switch repositories, payment handlers, authorization hooks, or SLAI runtime objects after route construction.
-
----
-
-## 7. Middleware pipeline
-
-The runtime order is:
-
-```mermaid
-flowchart TD
-    HTTP[HTTP request]
-    ERR[ErrorMapping]
-    CORR[CorrelationMiddleware]
-    SEC[Security]
-    LIMIT[RequestLimits]
-    FASTAPI[FastAPI routing]
-    ROUTE[BIMAP route]
-
-    HTTP --> ERR
-    ERR --> CORR
-    CORR --> SEC
-    SEC --> LIMIT
-    LIMIT --> FASTAPI
-    FASTAPI --> ROUTE
-```
-
-Response flow unwinds in reverse.
 
 This ordering is intentional:
 
-- `ErrorMapping` is outermost so middleware and route failures can become safe problem responses;
-- correlation state is established before security/limit/downstream work where possible;
-- transport security rejects invalid host/scheme metadata before route logic;
-- request limits reject oversized/over-rate traffic before application work;
-- route/application code receives only traffic that crossed the generic admission controls.
+1. `ErrorMapping` can observe failures from middleware and routes.
+2. Correlation state is established before downstream security, limit, and use-case failures are emitted.
+3. HTTP security runs before business handlers.
+4. request-size/header/rate-limit admission happens before expensive application work.
 
-Starlette middleware registration is performed inner-first so the resulting runtime stack has the order above.
-
----
-
-## 8. Correlation and request identity
-
-`CorrelationMiddleware` maintains two distinct identifiers:
-
-### `request_id`
-
-- generated by BIMAP for every HTTP request;
-- never selected by the client;
-- identifies one concrete API request/response cycle;
-- useful for logs and operational tracing.
-
-### `correlation_id`
-
-- may be supplied by a client/upstream system;
-- must satisfy strict ASCII/syntax/length validation;
-- may connect multiple HTTP/service operations into one trace;
-- is observability metadata only.
-
-Neither identifier is:
-
-- authentication;
-- authorization;
-- an idempotency key;
-- an order ID;
-- an audit job ID;
-- a payment event ID.
-
-Duplicate or malformed correlation headers are not treated as trustworthy metadata.
-
----
-
-## 9. HTTP security boundary
-
-`Security` and `SecurityPolicy` own generic transport hardening only.
-
-Supported concerns include:
-
-- exact Host-header validation;
-- optional exact-host allowlisting;
-- optional HTTPS requirement based on trusted ASGI scheme;
-- `X-Content-Type-Options: nosniff` baseline;
-- optional Referrer-Policy;
-- optional X-Frame-Options;
-- optional Content-Security-Policy;
-- optional Permissions-Policy;
-- optional HSTS configuration.
-
-The security middleware deliberately does **not** own:
-
-- authentication or tenant authorization;
-- CORS policy;
-- CSRF policy for a future cookie-authentication design;
-- webhook provider-signature verification;
-- upload malware scanning;
-- BIM evidence privacy/governance;
-- SLAI Safety/Privacy decisions.
-
-### 9.1 Proxy trust
-
-The middleware does not implicitly trust `X-Forwarded-Host`, `X-Forwarded-Proto`, or similar headers. A production reverse proxy/ASGI server must establish trustworthy client/scheme metadata before BIMAP receives the request.
-
-### 9.2 CORS
-
-No permissive CORS middleware is installed by default. Allowed browser origins are deployment-specific and must not be guessed from repository structure or frontend code.
-
----
-
-## 10. Request and rate limits
-
-`RequestLimits` enforces transport-level bounds, not commercial product rules.
-
-`RequestLimitPolicy` can configure:
-
-- maximum request body bytes;
-- maximum header count;
-- maximum raw header bytes.
-
-An optional injected `RateLimiter` can enforce distributed/client-aware rate policy.
-
-```mermaid
-flowchart LR
-    REQ[HTTP request] --> HEAD[Header bounds]
-    HEAD --> LEN[Content-Length precheck]
-    LEN --> RATE[Injected rate-limit decision]
-    RATE --> STREAM[Actual streamed body count]
-    STREAM --> ROUTE[FastAPI route]
-```
-
-The body limit is enforced against actual streamed bytes, not only `Content-Length`, so omitting or falsifying the header cannot bypass the configured bound.
-
-### 10.1 Separation from product limits
-
-Transport limits must not duplicate `domain/products/limits.py`.
-
-Examples:
+The API default namespace is:
 
 ```text
-RequestLimitPolicy.max_body_bytes
-    = HTTP transport admission bound
-
-ProductLimits
-    = configured BIMAP product/commercial scope
+/api/v1
 ```
 
-A deployment may choose compatible values, but the API middleware does not become the authoritative product-limit model.
+The application also exposes two non-business service routes outside that prefix:
 
-### 10.2 Rate-limit persistence
+- `/` — service discovery only;
+- `/favicon.ico` — empty response for browser favicon noise.
 
-The API defines an asynchronous rate-limit decision boundary, not an in-memory global counter. Production rate-limiting state must be implemented by a deployment-appropriate adapter if limits must remain correct across multiple workers/processes/hosts.
+The root route is **not** a liveness/readiness substitute. Health belongs to the dedicated health route group.
 
----
-
-## 11. Error model and HTTP mapping
-
-`api/utils/api_errors.py` defines the stable API-level error vocabulary. `ErrorMapping` translates lower BIMAP failures by class/code semantics rather than exception-message parsing.
-
-General mapping policy:
-
-| Failure class | HTTP behavior |
-|---|---:|
-| Invalid API/application/domain input | 400 |
-| Explicit missing resource | 404 |
-| State/concurrency conflict | 409 |
-| Request too large | 413 |
-| Unsupported media type | 415 |
-| Engine/structured request unprocessable | 422 |
-| Rate limit | 429 |
-| Request headers too large | 431 |
-| Dependency unavailable | 503 |
-| Dependency timeout | 504 |
-| Internal integrity/configuration/serialization failures | 500 |
-
-### 11.1 Public versus technical error data
-
-API errors separate:
-
-- technical operator message;
-- safe client message;
-- stable machine-readable error code;
-- HTTP status;
-- bounded/redacted diagnostic context;
-- optional safe response headers;
-- nested cause object retained only for chaining.
-
-Lower-layer exception text, raw payloads, signed URLs, tokens, cookies, storage keys, filenames, and provider details are not copied into client responses.
-
-### 11.2 Problem responses
-
-Mapped errors use `application/problem+json` with BIMAP's stable `code` discriminator and correlation ID when available. BIMAP uses `about:blank` until a public stable problem-type URI registry exists.
-
-### 11.3 FastAPI-owned validation/routing outcomes
-
-FastAPI request-validation failures are re-routed through the BIMAP API error boundary as safe 422 responses without exposing Pydantic input payloads.
-
-Routing statuses that already have a BIMAP API error type are translated into that error vocabulary. HTTP 405 remains a framework routing/protocol response with no copied detail body and only safe protocol metadata such as `Allow`.
+OpenAPI and interactive documentation are disabled by default and must be explicitly enabled through `APISettings`.
 
 ---
 
-## 12. FastAPI route boundary helpers
+## 6. Current route groups
 
-`routes/_shared.py` is deliberately narrower than `utils/api_helpers.py`.
+All public business routes are mounted below the configured API prefix, normally `/api/v1`.
 
-### `api/utils/api_helpers.py`
-
-Owns framework-neutral HTTP/ASGI mechanics such as:
-
-- structured method-start diagnostics;
-- ASGI request/response types;
-- header syntax/access/mutation;
-- request/correlation state;
-- Content-Length parsing;
-- canonical JSON bytes;
-- safe problem responses.
-
-### `api/routes/_shared.py`
-
-Owns FastAPI route-specific behavior such as:
-
-- request authorization hook invocation;
-- strict JSON-object parsing;
-- duplicate JSON-member rejection;
-- exact request field-set validation;
-- idempotency-header extraction;
-- order projection through `OrderContract`;
-- report-ID resolver invocation;
-- route JSON responses.
-
-This split prevents framework-specific request handling from leaking into middleware utilities while avoiding duplicated logic across route modules.
-
----
-
-## 13. Current HTTP route surface
-
-All paths below are relative to the default `/api/v1` prefix.
-
-### 13.1 Health
-
-| Method | Path | Responsibility |
+| Route module | Primary HTTP namespace | Current responsibility |
 |---|---|---|
-| `GET` | `/health/live` | Side-effect-free SLAI integration liveness |
-| `GET` | `/health/ready` | Current SLAI runtime/required-agent readiness |
+| `health.py` | `/health` | Liveness and readiness, including SLAI-facing health through injected dependencies |
+| `products.py` | `/products` | Product catalog projection |
+| `auth.py` | `/auth` | Signup, dual-channel signup verification, login, logout, resend verification codes |
+| `account.py` | `/account` | Current account/profile surface, including profile/avatar-related hooks where configured |
+| `orders.py` | `/orders` | Create, read, list, and cancel account-bound orders |
+| `uploads.py` | `/orders/{order_id}/uploads...` | Upload slot creation, staging, validation/admission |
+| `audits.py` | `/orders/{order_id}/audit...` | Start audit, read audit status, retrieve completed Audit Workspace |
+| `entitlements.py` | `/orders/{order_id}/entitle` | Explicit recurring/bonus/unlimited usage admission |
+| `checkout.py` | `/orders/{order_id}/checkout` | Checkout initiation |
+| `reports.py` | `/orders/{order_id}/reports` | Report-manifest listing |
+| `downloads.py` | `/orders/{order_id}/...` | Authorized report/download URL issuance |
+| `deletion.py` | `/orders/{order_id}/...` | Governed deletion request admission |
+| `webhooks.py` | `/webhooks/payment` | Payment-provider event verification/handling |
+| `conversions.py` | `/conversions` | Conversion capabilities and authenticated model conversion |
+| `data_extractions.py` | `/data-extractions` | Extraction capabilities and authenticated data-extraction package generation |
+| `admin.py` | `/admin` | Optional admin review/order/report endpoints; mounted only when admin dependencies are configured |
 
-### 13.2 Products
+### 6.1 Authentication endpoints
 
-| Method | Path | Responsibility |
-|---|---|---|
-| `GET` | `/products` | Return configured product/tier/limit views from injected `GetProducts` |
-
-The route does not read YAML or hard-code prices/limits.
-
-### 13.3 Orders
-
-| Method | Path | Responsibility |
-|---|---|---|
-| `POST` | `/orders` | Create one configured BIMAP order |
-| `GET` | `/orders/{order_id}` | Read one authorized order projection |
-| `POST` | `/orders/{order_id}/cancel` | Apply canonical cancellation through `CancelOrder` |
-
-There is no fabricated public global-order listing endpoint because the current repository/query boundary does not define customer ownership/pagination/filter semantics.
-
-### 13.4 Upload lifecycle
-
-| Method | Path | Responsibility |
-|---|---|---|
-| `POST` | `/orders/{order_id}/uploads` | Enter the supported upload-staging lifecycle through `CreateUploadSlot` |
-| `POST` | `/orders/{order_id}/validate` | Commit upload validation only after trusted manifest admission |
-
-The API does not pretend the current `Storage` port exposes a provider-neutral presigned upload-slot operation when it does not.
-
-### 13.5 Checkout
-
-| Method | Path | Responsibility |
-|---|---|---|
-| `POST` | `/orders/{order_id}/checkout` | Begin provider-neutral checkout through `BeginCheckout` |
-
-Browser checkout completion is not authoritative proof of payment.
-
-### 13.6 Payment webhook
-
-| Method | Path | Responsibility |
-|---|---|---|
-| `POST` | `/webhooks/payment` | Preserve raw body and pass provider signature/body to `HandlePayment` |
-
-The provider-specific signature-header name is injected. The route does not parse provider event schemas itself.
-
-Payment handling and audit enqueueing remain separate. A successful payment webhook does not fabricate or submit an `AuditJob` without the authoritative application orchestration required to do so.
-
-### 13.7 Reports
-
-| Method | Path | Responsibility |
-|---|---|---|
-| `GET` | `/orders/{order_id}/reports` | Resolve explicit authorized report IDs and return persisted manifests |
-
-The API does not invent `Repository.list_reports()` or silently infer ownership. `OrderReportIdResolver` supplies the explicit authorized ID set.
-
-Report release is not exposed as arbitrary HTTP input because the existing `ReleaseReport` use case requires authoritative findings/evidence/governance/report/storage identities that should not be constructed from untrusted client payloads.
-
-### 13.8 Downloads
-
-| Method | Path | Responsibility |
-|---|---|---|
-| `POST` | `/orders/{order_id}/download/{artifact_id}` | Issue an authorized short-lived download grant |
-
-The route resolves report/artifact identity first, then calls the injected `DownloadURLIssuer`. It does not construct object-store bucket paths or signed URLs itself.
-
-### 13.9 Retention-governed deletion
-
-| Method | Path | Responsibility |
-|---|---|---|
-| `POST` | `/orders/{order_id}/delete` | Execute the currently supported due-retention deletion operation |
-
-The current domain/application model does not contain a durable pending deletion-request aggregate. The route therefore does not claim to enqueue a future deletion request or return a fabricated `202 Accepted` workflow.
-
-Client input never supplies storage object IDs. Trusted composition resolves them after authorization.
-
-### 13.10 Internal admin routes
-
-When `APIAdminDependencies` is configured, the following internal surface is mounted:
-
-| Method | Path | Responsibility |
-|---|---|---|
-| `GET` | `/admin/orders/{order_id}` | Authorized order point-read |
-| `GET` | `/admin/reports/{report_id}` | Authorized report-manifest point-read |
-| `GET` | `/admin/reviews/{review_id}` | Governance review point-read |
-| `POST` | `/admin/reviews/{review_id}/decisions` | Append one governance decision |
-
-No global admin dashboard search API is fabricated where the current repository/query ports do not provide defined query semantics.
-
----
-
-## 14. Authorization and trusted admission hooks
-
-Authorization is an API-boundary dependency because the current BIMAP order aggregate does not itself define account/customer ownership. Route modules therefore do not guess ownership from order IDs or accept unverified client claims.
-
-The `RouteAuthorizer` hook receives:
+The current `RouteAuth` group registers:
 
 ```text
-Request
-operation name
-optional resource ID
+POST /auth/signup
+POST /auth/verify-signup
+POST /auth/login
+POST /auth/logout
+POST /auth/resend-signup-codes
 ```
 
-It returns an optional normalized actor identifier or raises an explicit API authorization error.
+Successful authentication uses the opaque `bimap_session` cookie. Cookie creation/deletion belongs to the API because cookie semantics are transport concerns; identity verification and session issuance belong to `AuthenticationService` and its application port.
 
-Protected route behavior follows this order where relevant:
+The route does not hash passwords, generate verification codes, send SMS/e-mail directly, or own account lifecycle rules.
 
-```mermaid
-flowchart LR
-    REQ[Request] --> VALIDATE[Validate path/header basics]
-    VALIDATE --> AUTH[Authorize]
-    AUTH --> RESOLVE[Resolve protected resource]
-    RESOLVE --> USECASE[Invoke application use case]
-```
+### 6.2 Audit endpoints
 
-Authorization before protected existence lookup reduces the risk of turning resource endpoints into identifier-enumeration oracles.
-
-Trusted admission hooks are not substitutes for application/domain invariants. They supply deployment information that the canonical model does not yet represent, after which application services still enforce their own rules.
-
----
-
-## 15. Idempotency
-
-Mutating HTTP routes that correspond to application operations with explicit idempotency semantics read a required `Idempotency-Key` header through shared route helpers.
-
-The API does not reinterpret that value as a correlation ID or generate a replacement silently.
+The current `RouteAudits` group registers:
 
 ```text
-X-Request-ID       -> one HTTP request instance
-X-Correlation-ID   -> observability trace relationship
-Idempotency-Key    -> stable semantic retry identity for a mutating use case
+POST /orders/{order_id}/audit
+GET  /orders/{order_id}/audit/status
+GET  /orders/{order_id}/audit/workspace
 ```
 
-Distributed exactly-once behavior still depends on the application/persistence/queue/provider guarantees defined by lower layers. HTTP middleware alone cannot guarantee exactly-once effects across databases, brokers, object stores, and external payment systems.
+`POST /audit` is not a direct call into `AuditEngine`. The route coordinates already-defined application boundaries: audit input preparation, upload validation, entitlement admission, immutable `AuditJob` creation/submission, and the relevant order/use-case checks.
+
+`GET /audit/workspace` reads the persisted completed workspace through `GetAuditWorkspace` → `AuditResultStore`. This is the transport path intended for the frontend Audit Workspace after deterministic audit + SLAI processing has completed.
+
+### 6.3 Conversion endpoints
+
+`RouteConversions` exposes:
+
+- a capability endpoint; and
+- authenticated conversion execution.
+
+The API does not infer support from file extensions on its own. `ModelConversionService` resolves the uploaded filename against the capabilities advertised by the configured `ModelConverter` infrastructure graph.
+
+### 6.4 Data extraction endpoints
+
+`RouteDataExtractions` exposes:
+
+- `/data-extractions/capabilities`; and
+- authenticated multipart extraction execution.
+
+Authentication intentionally occurs before multipart parsing so an unauthenticated request cannot force large upload spooling first.
+
+The route projects `email_available` from the application service. In the current implementation this is `False`; the existence of an `ArtifactMailer` infrastructure adapter must not be interpreted as an active API delivery path until the application service is wired to it.
 
 ---
 
-## 16. Request parsing and serialization discipline
+## 7. HTTP-to-application flow
 
-BIMAP route input handling is intentionally strict.
-
-### JSON requests
-
-Route helpers:
-
-- require UTF-8 JSON-compatible media types where JSON is required;
-- reject invalid JSON;
-- reject duplicate JSON object member names;
-- require a JSON object rather than silently accepting arbitrary arrays/scalars;
-- reject unsupported object fields instead of ignoring them;
-- keep optional/required fields explicit per endpoint.
-
-Rejecting unknown fields prevents a caller from believing an unsupported option was accepted.
-
-### Responses
-
-Application/domain values are projected through existing contracts/view models where available. The API should not serialize arbitrary internal object graphs, SLAI traces, provider objects, or storage metadata directly.
-
-Sensitive state-changing/resource responses use `Cache-Control: no-store` where the current route behavior requires it.
-
----
-
-## 17. Health semantics
-
-The current health route is deliberately scoped to the health abstraction that BIMAP actually has: `SLAIHealthCheck`.
-
-### Liveness
-
-Answers whether required SLAI integration modules/surfaces can be discovered and inspected without a fatal integration failure.
-
-### Readiness
-
-Answers whether the injected SLAI runtime components and explicitly required agent set are ready to accept governed BIMAP work.
-
-The health endpoint does **not** currently claim comprehensive health for:
-
-- database persistence;
-- object storage;
-- payment provider;
-- malware scanner;
-- queue/broker;
-- notifications;
-- external rendering services.
-
-Those systems do not yet share one BIMAP health-port abstraction. The API must not fabricate green status for capabilities it did not inspect.
-
-Detailed SLAI component diagnostics are disabled by default and may be explicitly enabled for an appropriately protected operational deployment.
-
----
-
-## 18. File security and evidence admission
-
-The generic API security middleware is not a file-security scanner.
-
-The secure evidence path remains conceptually:
-
-```text
-HTTP upload/staging request
-    -> authorization/admission
-    -> application UploadService
-    -> storage boundary
-    -> malware scanning / upload validation
-    -> canonical validated evidence
-    -> audit_engine
-```
-
-Raw customer uploads must not be forwarded directly from FastAPI middleware into the audit engine or SLAI runtime.
-
-`UploadManifestValidator` verifies deployment-specific completeness/admission before `ValidateUploads` commits the lifecycle transition; it does not replace malware scanning or canonical application validation.
-
----
-
-## 19. Payment boundary
-
-The API keeps browser checkout behavior separate from provider payment truth.
+A normal request should follow this shape:
 
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant API as BIMAP API
-    participant CMD as BeginCheckout
-    participant PAY as Payment Port
-    participant P as Provider
-    participant WH as Payment Webhook
-    participant HP as HandlePayment
+    participant M as API middleware
+    participant R as Route handler
+    participant U as App command/query/service
+    participant P as App port
+    participant I as Infra/SLAI implementation
 
-    C->>API: POST /orders/{id}/checkout
-    API->>CMD: begin checkout
-    CMD->>PAY: provider-neutral checkout
-    PAY-->>C: customer action data
-
-    P->>WH: signed webhook + raw body
-    WH->>HP: signature + raw body
-    HP->>PAY: verify/normalize event
-    HP-->>WH: authoritative payment result
+    C->>M: HTTP request
+    M->>M: correlation/security/limits
+    M->>R: admitted request
+    R->>R: parse + transport validation
+    R->>R: authenticate/authorize if required
+    R->>U: typed use-case input
+    U->>P: provider-neutral dependency call
+    P->>I: runtime implementation
+    I-->>U: result
+    U-->>R: application result
+    R->>R: public response projection
+    R-->>C: HTTP response
 ```
 
-The API route does not hard-code Stripe, Adyen, Mollie, or another provider signature header/event schema. Provider-specific configuration is injected.
+Transport validation should terminate at the route boundary. Once input has been converted into application/domain values, lower layers should not receive FastAPI `Request`, `Response`, `UploadFile`, HTTP status codes, cookies, or header semantics unless a dedicated port explicitly models them.
 
 ---
 
-## 20. Reports, downloads, and storage separation
+## 8. Authentication and authorization boundaries
 
-Report metadata and downloadable storage capabilities remain separate concepts.
+Authentication and authorization are related but distinct.
+
+### Authentication
+
+`auth.py` resolves a session cookie through `AuthenticationService`. The service coordinates the canonical BIMAP `Account` with the abstract `Authentication` port.
+
+The API may:
+
+- read/write the session cookie;
+- reject a missing/expired HTTP session;
+- map routine login/signup failures to safe public messages.
+
+It must not:
+
+- store credential hashes;
+- verify passwords itself;
+- generate OTPs;
+- access Twilio/SMTP/SLAI authentication classes directly.
+
+### Authorization
+
+Order/report/upload/audit routes use injected route authorization hooks from `APIRouteHooks` / `_shared.py`. Routes should authorize against the relevant resource identifier before revealing resource-specific state.
+
+Admin routes are conditional and must not be mounted merely because normal customer routes exist.
+
+---
+
+## 9. Audit Workspace contract at the HTTP boundary
+
+The current completed-audit path is:
 
 ```mermaid
 flowchart LR
-    ORDER[Authorized order] --> IDS[OrderReportIdResolver]
-    IDS --> QUERY[ListReports]
-    QUERY --> MAN[ReportManifest]
-    MAN --> ART[Artifact selection]
-    ART --> ISSUER[DownloadURLIssuer]
-    ISSUER --> GRANT[Short-lived HTTPS grant]
+    START[POST /orders/:id/audit]
+    APP[Application audit workflow]
+    DET[AuditEngine deterministic AuditResult]
+    SLAI[SLAIPort / SLAI mapped result]
+    EXEC[AuditExecutionResult]
+    STORE[AuditResultStore]
+    QUERY[GetAuditWorkspace]
+    GET[GET /orders/:id/audit/workspace]
+    UI[Frontend Audit Workspace]
+
+    START --> APP --> DET --> SLAI --> EXEC --> STORE
+    STORE --> QUERY --> GET --> UI
 ```
 
-`ReportManifest` identifies artifacts and reproducibility metadata. It is not treated as an object-storage client or bucket-key registry.
+The deterministic finding set remains authoritative. The SLAI result is supplemental and is validated so it cannot silently replace the deterministic `FindingContract` sequence. The persisted workspace contains the combined application result as JSON-safe data.
 
-The download issuer is the deployment seam for generating a short-lived capability. Signed URLs are not logged.
-
----
-
-## 21. Deletion separation
-
-Deletion has three separate boundaries:
-
-1. route/resource authorization;
-2. deployment-specific deletion admission (`DeletionAdmissionGate`);
-3. trusted object-ID resolution (`DeletionObjectResolver`);
-4. application retention/deletion execution (`RequestDeletion`).
-
-This prevents a request body from selecting arbitrary storage objects for deletion and prevents the API from inventing legal-hold/accounting semantics that the current application model does not represent.
+The API should therefore expose the persisted application record, not reconstruct an Audit Workspace from transient SLAI state inside the route layer.
 
 ---
 
-## 22. Observability and logging
+## 10. Error model
 
-API public operations and significant helpers emit method-start diagnostics using `announce_api_action()` or the corresponding package helper. `PrettyPrinter` provides concise operator-facing status; the structured logger records bounded operational metadata.
+`api/utils/api_errors.py` is the API error vocabulary. Lower-layer failures should be translated at the correct boundary rather than leaked directly.
 
-Permitted examples include:
-
-- route/middleware/component name;
-- request/correlation ID;
-- order/report/finding identifiers where safe;
-- HTTP status code;
-- configured route/middleware counts;
-- coarse readiness state;
-- whether an optional feature is configured.
-
-Logs must avoid:
-
-- raw BIM/document contents;
-- request bodies unless a separately governed scrubbed telemetry design exists;
-- webhook signatures;
-- authorization/cookie/token values;
-- signed/presigned URLs;
-- provider response bodies;
-- storage keys/paths treated as sensitive;
-- uploaded filenames where diagnostic redaction policy treats them as sensitive;
-- nested exception messages from unknown providers;
-- SLAI chain-of-thought or private reasoning traces.
-
-Exception construction itself does not emit duplicate error logs. The architectural handling boundary owns final failure logging.
-
----
-
-## 23. Security and privacy properties
-
-The API follows fail-closed behavior at externally visible trust boundaries.
-
-Examples:
-
-- invalid/ambiguous Host metadata is rejected;
-- malformed correlation metadata is rejected by default;
-- authorization hooks have no permissive fallback;
-- upload-manifest validation has no permissive fallback;
-- report ownership/ID resolution is injected rather than inferred from a global scan;
-- download capabilities are issued only after manifest/artifact resolution;
-- deletion storage IDs are never accepted from the client;
-- lower-layer error details are not exposed to clients;
-- health does not claim readiness for uninspected dependencies;
-- admin routes are opt-in and have a separate authorizer;
-- OpenAPI/docs are opt-in;
-- CORS policy is not guessed.
-
----
-
-## 24. Frontend boundary
-
-The BIMAP frontend communicates with this package over HTTPS. It must not import Python modules or SLAI runtime code directly.
+Expected flow:
 
 ```text
-frontend/
-    -> HTTPS
-    -> /api/v1/...
-    -> bimap/api
-    -> bimap/app
+DomainError / AppError / provider failure
+        ↓
+application boundary translation where required
+        ↓
+APIError with safe public semantics
+        ↓
+ErrorMapping middleware
+        ↓
+HTTP problem response
 ```
 
-The frontend may receive only external/customer-safe API representations. Internal SLAI runtime objects, private reasoning traces, storage bucket paths, credentials, raw evidence internals, and provider secrets are not frontend contracts.
+The API must not expose:
+
+- raw stack traces;
+- provider secrets;
+- storage paths;
+- customer source-file contents;
+- agent internals;
+- raw authentication-provider error strings.
+
+FastAPI/Starlette validation/routing exceptions are also intercepted so default detail-bearing framework responses do not bypass BIMAP's error boundary.
 
 ---
 
-## 25. Configuration and composition
+## 11. Idempotency
 
-Production configuration belongs above the API package. A composition root is expected to construct, as applicable:
+State-changing routes should reuse the application's existing idempotency semantics rather than invent route-local transaction rules.
+
+Examples include:
+
+- audit start;
+- upload validation/staging;
+- entitlement consumption;
+- checkout/payment handling;
+- conversion/extraction operations where their command/service contract requires an idempotency key.
+
+`RouteAudits` derives stage-specific keys from the request idempotency key for its internal coordinated steps. This prevents one HTTP operation from accidentally reusing the same raw key for semantically different mutations while preserving replayability.
+
+---
+
+## 12. Dependency injection
+
+`APIDependencies` is installed on the FastAPI application by `install_api_dependencies()`. `api/app.py` then constructs route groups from the injected command/query/service objects and trusted hooks.
+
+The intended ownership is:
 
 ```text
-Repository implementation
-Storage implementation
-Malware implementation
-Payment implementation
-Queue implementation
-Notifications implementation
-Clock implementation
-SLAI adapter/runtime
-ProductCatalog / ProductLimits
-Application services
-Commands / queries
-Trusted route hooks
-SLAI health checker/runtime references
-RequestLimitPolicy
-SecurityPolicy
-Optional distributed RateLimiter
+deployment_bimap.py / bootstrap.py
+        ↓ constructs
+application services + commands + queries + infrastructure adapters
+        ↓ packages as
 APIDependencies
-APISettings
-FastAPI application via create_app()
+        ↓ consumed by
+api/app.py:create_app()
+        ↓ constructs
+route groups
 ```
 
-Conceptual composition:
-
-```python
-api_dependencies = APIDependencies(
-    use_cases=APIUseCases(...),
-    route_hooks=APIRouteHooks(...),
-    health=APIHealthDependencies(...),
-    admin=APIAdminDependencies(...) if admin_surface_enabled else None,
-)
-
-api_settings = APISettings(
-    request_limits=request_limit_policy,
-    security=security_policy,
-)
-
-application = create_app(
-    api_dependencies,
-    settings=api_settings,
-    rate_limiter=rate_limiter,
-)
-```
-
-The omitted values must be supplied by the actual bootstrap/configuration implementation. The API package does not provide fake defaults for infrastructure/authentication/business policy.
+A route module must not import a concrete infrastructure adapter merely because that adapter happens to be used in local development.
 
 ---
 
-## 26. Testing strategy
+## 13. Security invariants
 
-API tests should cover transport behavior and use-case delegation without retesting lower-layer implementation internals.
+The API layer should preserve the following invariants:
 
-Recommended categories:
-
-1. **Application-factory tests** — dependency/state installation, route mounting, admin opt-in, middleware order, API prefix validation.
-2. **Dependency-container tests** — type validation, required hooks, immutable/fail-closed container replacement, request resolution.
-3. **Route-contract tests** — methods/paths/statuses, strict JSON fields, idempotency header requirements, authorization-before-resource-resolution behavior.
-4. **Middleware tests** — correlation propagation, duplicate IDs, Host/HTTPS rejection, response security headers, streamed body limit, header limits, rate-limit decision behavior.
-5. **Error-mapping tests** — stable lower exception families map to correct safe statuses without message/context leakage.
-6. **Security tests** — no token/signature/signed URL/raw body leakage in public problem responses or structured logs.
-7. **Webhook tests** — exact raw body/signature pass-through to `HandlePayment`; no provider-specific parsing in the route.
-8. **Upload tests** — manifest validator required; untrusted client cannot self-certify uploads.
-9. **Report/download tests** — authorization before report resolution; missing/ambiguous artifacts handled safely; signed URL not logged.
-10. **Deletion tests** — admission gate and object resolver required; client cannot choose storage IDs.
-11. **Health tests** — liveness/readiness statuses reflect only `SLAIHealthCheck`; detailed diagnostics remain disabled unless explicitly configured.
-12. **Framework exception tests** — FastAPI validation/404 outcomes become safe BIMAP responses and 405 does not expose framework detail payloads.
-
-Production integration tests should additionally run behind the intended reverse proxy/ASGI server so scheme/host/proxy-trust behavior matches deployment reality.
+1. **Authenticate before expensive body processing where possible.**
+2. **Authorize resource access before returning resource-specific existence/details.**
+3. **Use bounded request/header/correlation input.**
+4. **Keep session tokens opaque to business logic.**
+5. **Do not log credentials, OTPs, raw session tokens, or customer model bytes.**
+6. **Use safe response projections instead of serializing arbitrary internal objects.**
+7. **Do not allow client input to choose arbitrary SLAI agents, infrastructure providers, local paths, or executable backends.**
+8. **Keep OpenAPI/docs disabled unless deployment policy explicitly exposes them.**
 
 ---
 
-## 27. Deliberate non-goals and current omissions
+## 14. Current integration boundaries
 
-The current API intentionally does not fabricate the following capabilities:
+The API may depend on application abstractions and selected contract/domain values needed for input/output typing. It must not collapse the architecture by taking ownership of lower-layer behavior.
 
-- global customer order search/list/pagination without an ownership/read-model port;
-- global report search/list/pagination without a defined query port;
-- provider-neutral presigned upload-slot API when `Storage` does not expose one;
-- arbitrary HTTP report release from untrusted findings/evidence/governance input;
-- browser redirect as authoritative payment confirmation;
-- automatic audit enqueueing directly inside the payment webhook route;
-- client-selected object-store paths/keys or deletion object IDs;
-- persistent pending-deletion workflow when no deletion-request aggregate exists;
-- database/storage/payment/queue health claims without explicit health ports;
-- permissive CORS defaults;
-- implicit trust of forwarding headers;
-- hard-coded transport body/header/rate thresholds;
-- hard-coded product prices/limits;
-- framework middleware authentication policy that duplicates a dedicated identity/authorization integration;
-- direct API construction of SLAI AgentFactory/SharedMemory/agents.
-
-These omissions preserve architectural truth. A capability should be introduced only when its domain/application/port semantics are explicitly defined.
-
----
-
-## 28. Operational invariants
-
-A production BIMAP API deployment should preserve the following invariants:
+Allowed direction:
 
 ```text
-bootstrap constructs; API consumes
-routes translate; application decides
-middleware protects transport; domain owns business truth
-request ID != correlation ID != idempotency key
-HTTP limits != product limits
-security headers != authorization
-upload admission != malware scanning
-payment checkout != payment truth
-report manifest != storage object key
-health claim <= dependencies actually inspected
-admin surface is explicit, not automatic
-client errors never reveal lower-layer private diagnostics
+api
+ ↓
+app
+ ↓
+domain / contracts / audit_engine boundaries
 ```
 
-These boundaries keep the BIMAP HTTP interface replaceable, testable, auditable, and consistent with the platform's inward-facing dependency architecture.
+Runtime implementations are injected from the outside:
+
+```text
+infra ──implements──> app ports <──implemented structurally by── slai adapter
+```
+
+Forbidden patterns include:
+
+```text
+api/routes/* -> infra.local.InMemoryRepository
+api/routes/* -> src.agents.*
+api/routes/* -> ifcopenshell / trimesh / Blender subprocess
+api/routes/* -> payment provider SDK
+api/routes/* -> direct SQL/storage client
+```
+
+---
+
+## 15. Testing expectations
+
+API tests should focus on transport behavior rather than re-testing domain internals.
+
+At minimum, cover:
+
+- app creation with valid/invalid `APISettings`;
+- middleware order and correlation propagation;
+- safe framework error mapping;
+- authentication cookie behavior;
+- unauthorized/forbidden route behavior;
+- idempotency-header requirements;
+- route payload validation and unsupported-field rejection;
+- audit start/status/workspace routing;
+- conversion/extraction capability projection;
+- multipart limits and early authentication;
+- admin route conditional mounting;
+- no leakage of internal exception messages.
+
+Use injected fakes/stubs at application-port boundaries. Do not require production infrastructure just to test HTTP mapping.
+
+---
+
+## 16. Extension checklist
+
+When adding a new API feature:
+
+1. Confirm the use case already exists in `app/` or create it there first.
+2. Add/extend a provider-neutral app port if an external capability is required.
+3. Keep the route responsible only for HTTP parsing, auth/authorization hand-off, use-case invocation, and response mapping.
+4. Add the route group to `api/routes/__init__.py`.
+5. Add the dependency to `APIDependencies`/its nested dependency group rather than constructing it in the route.
+6. Mount the route group in `_construct_route_groups()`.
+7. Map expected lower-layer failures to the existing API error vocabulary.
+8. Add request-size/security/idempotency behavior where applicable.
+9. Update this README's package tree and route table.
+
+---
+
+## 17. Current source-level notes
+
+The API tree itself is materially ahead of older documentation. The most important documentation corrections are:
+
+- customer account/authentication routes are now first-class;
+- audit execution has explicit status and persisted workspace endpoints;
+- conversion and data extraction are first-class authenticated services;
+- entitlement admission is exposed explicitly;
+- `create_app()` currently mounts all of these route groups and conditionally mounts admin routes;
+- the API depends on injected application objects rather than constructing the new infrastructure itself.
+
+These are architectural changes, not merely additional endpoints, and should be reflected in any root-level BIMAP architecture documentation as well.
+
+---
+
+## 18. Summary
+
+`api/` is BIMAP's controlled web boundary. Its production-ready role is to make the application safely reachable over HTTP while keeping business policy, deterministic audit meaning, persistence, provider integrations, and SLAI internals outside the transport layer.
+
+The current design should be preserved as:
+
+> **HTTP request → middleware → route validation/auth → application command/query/service → injected port implementation → application result → safe HTTP projection.**
