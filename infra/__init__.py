@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         InProcessQueue,
         SystemClock,
     )
+    from .sqlite_audit_results import SQLiteAuditResultStore
 
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "InMemoryRepository",
     "InMemoryStorage",
     "InProcessQueue",
+    "SQLiteAuditResultStore",
     "SystemClock",
 ]
 
@@ -59,6 +61,10 @@ def __getattr__(name: str) -> Any:
     if name == "ReportLabDataExtractionPDFRenderer":
         from .reportlab_data_extraction_renderer import ReportLabDataExtractionPDFRenderer
         return ReportLabDataExtractionPDFRenderer
+
+    if name == "SQLiteAuditResultStore":
+        from .sqlite_audit_results import SQLiteAuditResultStore
+        return SQLiteAuditResultStore
 
     if name in {
         "DevelopmentMalware",
