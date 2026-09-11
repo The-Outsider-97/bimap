@@ -414,15 +414,15 @@ AgentTaskBuilder = Callable[
 class SLAIOrchestrator:
     """Policy-governed runtime bridge from BIMAP into SLAI v2.3 agents."""
 
-    _ANALYSIS_ORDER: tuple[str, ...] = (
+    _ANALYSIS_ORDER = (
         "collaborative",
-        "execution",
-        "knowledge",
-        "language",
-        "perception",
-        "planning",
         "reader",
+        "perception",
+        "knowledge",
         "reasoning",
+        "planning",
+        "language",
+        "execution",
     )
 
     def __init__(
