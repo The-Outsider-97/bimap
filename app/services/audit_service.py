@@ -212,8 +212,7 @@ class AuditService:
             )
         if not isinstance(audit_results, AuditResultStore):
             raise AppConfigurationError(
-                "audit_results must implement "
-                "the AuditResultStore port.",
+                "audit_results must implement the AuditResultStore port.",
                 component=_COMPONENT,
                 operation="initialize",
                 field="audit_results",
@@ -552,8 +551,12 @@ class AuditService:
                 field="result.product_code",
                 context={
                     "job_id": target.job_id,
-                    "job_product_code": product.value,
-                    "result_product_code": result.product_code.value,
+                    "job_product_code": getattr(product, "value", product),
+                    "result_product_code": getattr(
+                        result.product_code,
+                        "value",
+                        result.product_code,
+                    ),
                 },
             )
         self._validate_job_evidence_binding(
@@ -567,7 +570,7 @@ class AuditService:
                 "event": "audit_service_deterministic_completed",
                 "job_id": target.job_id,
                 "order_id": target.order_id,
-                    "product_code": getattr(product, "value", product),
+                "product_code": getattr(product, "value", product),
                 "evidence_count": result.evidence_count,
                 "finding_count": result.finding_count,
                 "rule_result_count": result.rule_result_count,
@@ -641,7 +644,7 @@ class AuditService:
         workspace_record = AuditResultRecord(
             order_id=target.order_id,
             job_id=target.job_id,
-            product_code=deterministic.product_code.value,
+            product_code=deterministic.product_code.value, # type: ignore
             completed_at=self.clock.now(),
             payload=result.to_dict(),
         )
@@ -658,6 +661,50 @@ class AuditService:
             }
         )
         return result
+
+    def _persist_execution_result(self, result: AuditExecutionResult) -> AuditResultRecord:
+        """
+        Persist one fully validated deterministic + SLAI execution result.
+
+        Persistence occurs only after ``AuditExecutionResult`` has validated the
+        product identity, job/order identity, and unchanged deterministic finding
+        set. A failed persistence write therefore prevents the worker from
+        advertising a completed workspace that cannot actually be retrieved.
+        """
+
+        announce_app_action(
+            printer,
+            logger,
+            component=_COMPONENT,
+            action="Persisting completed audit workspace",
+            event="audit_workspace_persist_start",
+            context={
+                "job_id": result.job.job_id,
+                "order_id": result.job.order_id,
+            },
+        )
+
+        product_code = result.deterministic.product_code.value # type: ignore
+        record = AuditResultRecord(
+            order_id=result.job.order_id,
+            job_id=result.job.job_id,
+            product_code=product_code,
+            completed_at=result.slai.completed_at,
+            payload=result.to_dict(),
+        )
+        saved = self.audit_results.save(record)
+        logger.info(
+            {
+                "event":
+                    "audit_workspace_persisted",
+                "job_id": saved.job_id,
+                "order_id": saved.order_id,
+                "product_code":
+                    saved.product_code,
+            }
+        )
+
+        return saved
 
 
 __all__ = [
