@@ -49,6 +49,18 @@ logger = get_logger("SLAI Result Mapper")
 printer = PrettyPrinter()
 
 
+_PAYLOAD_UNSET = object()
+_GOVERNANCE_OUTPUT_AGENTS = (
+    frozenset(
+        {
+            "quality",
+            "privacy",
+            "safety",
+            "evaluation",
+        }
+    )
+)
+
 @dataclass(frozen=True, slots=True)
 class MappedAgentOutput:
     """BIMAP-owned projection of one SLAI invocation output."""
@@ -498,33 +510,142 @@ class SLAIResultMapper:
                 cause=exc,
             ) from exc
 
-        mapped_outputs: list[MappedAgentOutput] = []
         warnings: list[str] = []
-        for invocation in orchestration_result.invocations:
-            mapped, warning = self._map_invocation(invocation)
-            mapped_outputs.append(mapped)
-            if warning is not None:
-                warnings.append(warning)
 
-        if orchestration_result.terminated_early:
-            warnings.append(
-                f"orchestration_terminated_early:{orchestration_result.termination_reason}"
-            )
+        # --------------------------------------------------------------
+        # Normalize the final Privacy-produced payload first.
+        # --------------------------------------------------------------
 
         sanitized_payload = None
         if orchestration_result.privacy_sanitized_payload is not None:
-            sanitized_payload, serializable = self._project_json_value(
+            (sanitized_payload, serializable) = self._project_json_value(
                 orchestration_result.privacy_sanitized_payload,
                 field="privacy_sanitized_payload",
             )
+
             if not serializable:
                 raise SLAIResultMappingError(
-                    "PrivacyAgent produced a modified egress payload that cannot be represented safely by BIMAP.",
+                    "PrivacyAgent produced a modified payload that cannot be represented safely by BIMAP.",
                     component="result_mapper",
-                    operation="map_privacy_payload",
-                    field="privacy_sanitized_payload",
+                    operation=("map_privacy_payload"),
+                    field=("privacy_sanitized_payload"),
                     context={"job_id": orchestration_result.job_id},
                 )
+
+
+        privacy_modified = any(
+            (
+                gate.gate
+                is GovernanceGate.PRIVACY
+                and gate.disposition
+                is GateDisposition.MODIFY
+            )
+            for gate in gates
+        )
+
+
+        sanitized_agent_outputs = (
+            self._extract_privacy_sanitized_agent_outputs(sanitized_payload)
+            if privacy_modified
+            else {}
+        )
+
+
+        # --------------------------------------------------------------
+        # Build the persisted/public supplemental output projection.
+        # --------------------------------------------------------------
+
+        mapped_outputs: list[MappedAgentOutput] = []
+
+        for invocation in (orchestration_result.invocations):
+            agent_name = (normalize_agent_name(invocation.agent, field=("invocation.agent"),
+                    error_type=(SLAIResultMappingError),
+                )
+            )
+
+            # Raw native Quality/Privacy/Safety/Evaluation payloads are not
+            # persisted as supplemental intelligence. Their authoritative
+            # BIMAP-facing interpretation already exists in governance_gates.
+            if (
+                agent_name
+                in _GOVERNANCE_OUTPUT_AGENTS
+            ):
+                mapped, warning = (
+                    self._map_invocation(
+                        invocation,
+                        payload_override=None,
+                        note_override=(
+                            "governance_output_"
+                            "normalized_only"
+                        ),
+                    )
+                )
+
+            # When egress Privacy requested MODIFY, analysis output must be
+            # sourced from Privacy's sanitized supplemental-output projection.
+            elif (
+                privacy_modified
+                and invocation.phase
+                is OrchestrationPhase.ANALYSIS
+            ):
+                if (
+                    agent_name
+                    in sanitized_agent_outputs
+                ):
+                    mapped, warning = (
+                        self._map_invocation(
+                            invocation,
+                            payload_override=(
+                                sanitized_agent_outputs[
+                                    agent_name
+                                ]
+                            ),
+                            note_override=(
+                                "privacy_sanitized"
+                            ),
+                        )
+                    )
+
+                else:
+                    # Privacy legitimately omitted this analysis output.
+                    # Fail closed by retaining invocation metadata only.
+                    mapped, warning = (
+                        self._map_invocation(
+                            invocation,
+                            payload_override=None,
+                            note_override=(
+                                "privacy_redacted"
+                            ),
+                        )
+                    )
+
+            else:
+                mapped, warning = (
+                    self._map_invocation(
+                        invocation
+                    )
+                )
+
+            mapped_outputs.append(
+                mapped
+            )
+
+            if warning is not None:
+                warnings.append(
+                    warning
+                )
+
+
+        if (
+            orchestration_result
+            .terminated_early
+        ):
+            warnings.append(
+                (
+                    "orchestration_terminated_early:"
+                    f"{orchestration_result.termination_reason}"
+                )
+            )
 
         result = SLAIMappedResult(
             job_id=orchestration_result.job_id,
@@ -548,6 +669,120 @@ class SLAIResultMapper:
             len(result.agent_outputs),
             len(result.mapping_warnings),
         )
+        return result
+
+    def _extract_privacy_sanitized_agent_outputs(self, sanitized_payload: Any) -> dict[str, Any]:
+        """
+        Extract Privacy-approved supplemental agent outputs.
+
+        Privacy receives the orchestration egress mapping containing
+        ``supplemental_agent_outputs``. When Privacy returns MODIFY, this
+        method treats only the sanitized representation as eligible for
+        persistence/customer-facing mapping.
+
+        Missing outputs are intentionally interpreted as redacted rather than
+        falling back to the original unsanitized invocation output.
+        """
+
+        if sanitized_payload is None:
+            return {}
+
+        if not isinstance(
+            sanitized_payload,
+            Mapping,
+        ):
+            raise SLAIResultMappingError(
+                "Privacy sanitized payload must be a mapping.",
+                component="result_mapper",
+                operation=(
+                    "extract_privacy_outputs"
+                ),
+                field=(
+                    "privacy_sanitized_payload"
+                ),
+                context={
+                    "received_type":
+                        type(
+                            sanitized_payload
+                        ).__name__,
+                },
+            )
+
+        raw_outputs = (
+            sanitized_payload.get(
+                "supplemental_agent_outputs"
+            )
+        )
+
+        # Privacy may intentionally remove the complete supplemental-output
+        # collection. That means no raw analysis output is eligible to escape.
+        if raw_outputs is None:
+            return {}
+
+        if not isinstance(
+            raw_outputs,
+            Mapping,
+        ):
+            raise SLAIResultMappingError(
+                "Privacy sanitized supplemental_agent_outputs must be a mapping when present.",
+                component="result_mapper",
+                operation=(
+                    "extract_privacy_outputs"
+                ),
+                field=(
+                    "supplemental_agent_outputs"
+                ),
+                context={
+                    "received_type":
+                        type(
+                            raw_outputs
+                        ).__name__,
+                },
+            )
+
+        result: dict[str, Any] = {}
+
+        for (
+            raw_agent,
+            raw_output,
+        ) in raw_outputs.items():
+            agent = normalize_agent_name(
+                raw_agent,
+                field=(
+                    "supplemental_agent_outputs."
+                    "agent"
+                ),
+                error_type=(
+                    SLAIResultMappingError
+                ),
+            )
+
+            projected, serializable = (
+                self._project_json_value(
+                    raw_output,
+                    field=(
+                        "privacy_sanitized_outputs."
+                        f"{agent}"
+                    ),
+                )
+            )
+
+            if not serializable:
+                raise SLAIResultMappingError(
+                    "Privacy-approved supplemental SLAI output is not JSON-safe.",
+                    component=(
+                        "result_mapper"
+                    ),
+                    operation=(
+                        "extract_privacy_outputs"
+                    ),
+                    field=agent,
+                )
+
+            result[
+                agent
+            ] = projected
+
         return result
 
     # Backward-compatible semantic alias for callers that used the scaffold's
@@ -604,14 +839,36 @@ class SLAIResultMapper:
             )
         return result
 
-    def _map_invocation(self, invocation: AgentInvocationRecord) -> tuple[MappedAgentOutput, str | None]:
+    def _map_invocation(
+        self,
+        invocation: AgentInvocationRecord,
+        *,
+        payload_override: Any = (_PAYLOAD_UNSET),
+        note_override: str | None = None,
+    ) -> tuple[MappedAgentOutput, str | None]:
+        """
+        Map one SLAI invocation into the persisted BIMAP projection.
+
+        ``payload_override`` is used only by the result-mapping boundary:
+
+        - governance payloads may be intentionally suppressed because their
+        normalized BIMAP representation already exists in governance_gates;
+        - Privacy MODIFY may replace analysis output with its sanitized version;
+        - Privacy may intentionally remove an output entirely.
+
+        Invocation success/error metadata remains unchanged.
+        """
+
         announce_method_start(
             printer,
             logger,
             "SLAI RESULT",
             "Mapping one SLAI invocation output",
-            context={"agent": getattr(invocation, "agent", None)},
+            context={
+                "agent": getattr(invocation, "agent", None),
+            },
         )
+
         if not isinstance(invocation, AgentInvocationRecord):
             raise SLAIResultMappingError(
                 "Invocation must be an AgentInvocationRecord.",
@@ -620,39 +877,102 @@ class SLAIResultMapper:
                 field="invocation",
             )
 
-        output_type = type(invocation.output).__name__ if invocation.output is not None else None
-        payload, serializable = self._project_json_value(
-            invocation.output,
-            field=f"agent_outputs.{invocation.phase.value}.{invocation.agent}",
+        original_output = (invocation.output)
+
+        output_type = (
+            type(
+                original_output
+            ).__name__
+            if original_output is not None
+            else None
         )
+
+        effective_output = (
+            original_output
+            if payload_override
+            is _PAYLOAD_UNSET
+            else payload_override
+        )
+
+        payload, serializable = (
+            self._project_json_value(
+                effective_output,
+                field=(
+                    "agent_outputs."
+                    f"{invocation.phase.value}."
+                    f"{invocation.agent}"
+                ),
+            )
+        )
+
         warning: str | None = None
-        note: str | None = None
-        if not serializable and invocation.output is not None:
-            note = f"opaque_non_json_output:{output_type}"
-            warning = f"{invocation.phase.value}:{invocation.agent}:{note}"
-            if self.strict_supplemental_outputs:
+        note = note_override
+
+        if (
+            not serializable
+            and effective_output
+            is not None
+        ):
+            opaque_note = (
+                "opaque_non_json_output:"
+                f"{type(effective_output).__name__}"
+            )
+
+            note = (
+                opaque_note
+                if note is None
+                else (
+                    f"{note};"
+                    f"{opaque_note}"
+                )
+            )
+
+            warning = (
+                f"{invocation.phase.value}:"
+                f"{invocation.agent}:"
+                f"{opaque_note}"
+            )
+
+            if (
+                self.strict_supplemental_outputs
+            ):
                 raise SLAIResultMappingError(
                     "SLAI supplemental output is not JSON-safe and strict mapping is enabled.",
                     component="result_mapper",
                     operation="map_invocation",
                     context={
-                        "agent": invocation.agent,
-                        "phase": invocation.phase.value,
-                        "output_type": output_type,
+                        "agent":
+                            invocation.agent,
+                        "phase":
+                            invocation.phase.value,
+                        "output_type":
+                            output_type,
                     },
                 )
 
         mapped = MappedAgentOutput(
             agent=invocation.agent,
-            phase=invocation.phase.value,
-            succeeded=invocation.succeeded,
+            phase=(invocation.phase.value),
+            succeeded=(invocation.succeeded),
             output_type=output_type,
             serializable=serializable,
-            payload=payload if serializable else None,
-            error=None if invocation.error is None else dict(invocation.error),
+            payload=(
+                payload
+                if serializable
+                else None
+            ),
+            error=(
+                None
+                if invocation.error
+                is None
+                else dict(
+                    invocation.error
+                )
+            ),
             note=note,
         )
-        return mapped, warning
+
+        return (mapped, warning)
 
     def _project_json_value(self, value: Any, *, field: str) -> tuple[Any, bool]:
         announce_method_start(
