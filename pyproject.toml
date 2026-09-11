@@ -50,7 +50,10 @@ dependencies = [
     "uvicorn[standard]~=0.52.4",
     "PyYAML>=6.0,<7",
     "ifcopenshell~=0.8.5",
+    "ezdxf~=1.4.4",
+    "trimesh~=4.11.1",
     "python-multipart~=0.0.32",
+    "reportlab~=5.0.1",
     "twilio~=9.11.0",
 ]
 
