@@ -326,13 +326,7 @@ class AuditService:
             )
         return order
 
-    def _validate_job_evidence_binding(
-        self,
-        job: AuditJob,
-        result: AuditResult,
-        *,
-        operation: str,
-    ) -> None:
+    def _validate_job_evidence_binding(self, job: AuditJob, result: AuditResult, *, operation: str) -> None:
         """Require every explicit job evidence reference to exist in the result."""
         announce_app_action(
             printer,
@@ -641,25 +635,25 @@ class AuditService:
             deterministic=deterministic,
             slai=slai_result,
         )
-        workspace_record = AuditResultRecord(
-            order_id=target.order_id,
-            job_id=target.job_id,
-            product_code=deterministic.product_code.value, # type: ignore
-            completed_at=self.clock.now(),
-            payload=result.to_dict(),
-        )
 
-        self.audit_results.save(workspace_record)
+        self._persist_execution_result(result)
+
         logger.info(
             {
                 "event": "audit_service_run_completed",
                 "job_id": target.job_id,
                 "order_id": target.order_id,
-                "product_code": getattr(deterministic.product_code, "value", deterministic.product_code),
+                "product_code":
+                    getattr(
+                        deterministic.product_code,
+                        "value",
+                        deterministic.product_code,
+                    ),
                 "authoritative_finding_count": deterministic.finding_count,
                 "slai_terminated_early": bool(slai_result.terminated_early),
             }
         )
+
         return result
 
     def _persist_execution_result(self, result: AuditExecutionResult) -> AuditResultRecord:
