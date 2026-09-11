@@ -33,6 +33,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ..ports.audit_results import AuditResultRecord, AuditResultStore
+from ..ports.clock import Clock
 from ..ports.queue import Queue, QueueReceipt
 from ..ports.repositories import Repository
 from ..ports.slai import *
@@ -179,6 +181,8 @@ class AuditService:
         slai: SLAIPort,
         repository: Repository,
         *,
+        audit_results: AuditResultStore,
+        clock: Clock,
         queue: Queue | None = None,
     ) -> None:
         announce_app_action(
@@ -206,6 +210,23 @@ class AuditService:
                 field="repository",
                 context={"received_type": type(repository).__name__},
             )
+        if not isinstance(audit_results, AuditResultStore):
+            raise AppConfigurationError(
+                "audit_results must implement "
+                "the AuditResultStore port.",
+                component=_COMPONENT,
+                operation="initialize",
+                field="audit_results",
+                context={"received_type": type(audit_results).__name__},
+            )
+        if not isinstance(clock, Clock):
+            raise AppConfigurationError(
+                "clock must implement the Clock port.",
+                component=_COMPONENT,
+                operation="initialize",
+                field="clock",
+                context={"received_type": type(clock).__name__},
+            )
         if not isinstance(slai, SLAIPort):
             raise AppConfigurationError(
                 "slai must implement the BIMAP SLAI application port.",
@@ -226,6 +247,8 @@ class AuditService:
         self.audit_engine = audit_engine
         self.slai = slai
         self.repository = repository
+        self.audit_results = audit_results
+        self.clock = clock
         self.queue = queue
 
         logger.info(
@@ -342,12 +365,7 @@ class AuditService:
                 },
             )
 
-    def enqueue_audit(
-        self,
-        job: AuditJob,
-        *,
-        idempotency_key: str | None = None,
-    ) -> QueueReceipt:
+    def enqueue_audit(self, job: AuditJob, *, idempotency_key: str | None = None) -> QueueReceipt:
         """Submit a queued ``AuditJob`` through the configured queue port.
 
         Order-state mutation is intentionally not hidden inside this method.
@@ -620,17 +638,21 @@ class AuditService:
             deterministic=deterministic,
             slai=slai_result,
         )
+        workspace_record = AuditResultRecord(
+            order_id=target.order_id,
+            job_id=target.job_id,
+            product_code=deterministic.product_code.value,
+            completed_at=self.clock.now(),
+            payload=result.to_dict(),
+        )
 
+        self.audit_results.save(workspace_record)
         logger.info(
             {
                 "event": "audit_service_run_completed",
                 "job_id": target.job_id,
                 "order_id": target.order_id,
-                "product_code": getattr(
-                    deterministic.product_code,
-                    "value",
-                    deterministic.product_code,
-                ),
+                "product_code": getattr(deterministic.product_code, "value", deterministic.product_code),
                 "authoritative_finding_count": deterministic.finding_count,
                 "slai_terminated_early": bool(slai_result.terminated_early),
             }
