@@ -1,116 +1,79 @@
 # BIMAP Domain Layer
 
-> **Package:** `bimap.domain`  
-> **Architectural role:** Pure business/domain model for the R3D BIM Audit Platform (BIMAP)  
-> **Runtime position:** Below contracts, audit orchestration, application services, API, workers, reporting, persistence, and SLAI integration
+> **Repository path:** `domain/`  
+> **Runtime package:** `applications.bimap.domain`  
+> **Architectural role:** canonical business vocabulary, aggregates, value objects, lifecycle rules, invariants, and policy semantics for BIMAP
 
 ---
 
 ## 1. Purpose
 
-The `domain/` package defines the stable business concepts and invariants that BIMAP operates on after external input has crossed the ingestion/normalization boundary. It is the lowest BIMAP-specific layer and therefore must remain independent from web frameworks, payment providers, storage SDKs, databases, worker frameworks, report renderers, and the SLAI runtime.
+The `domain/` package contains BIMAP's provider-independent business model. It is the place where concepts such as customer accounts, account plans, rewards, orders, products, evidence, findings, reviews, report coverage, and requirements acquire canonical meaning.
 
-The domain layer exists to answer questions such as:
+The domain layer must remain independent of:
 
-- What constitutes a BIMAP evidence object and its provenance?
-- How is project-scoped evidence aggregated without losing traceability?
-- What is a finding, and how are severity and confidence represented independently?
-- What are the valid BIMAP order states and structural state transitions?
-- What product identities and product-scope concepts exist?
-- How are product limits represented without hard-coding unverified commercial thresholds?
-- What governance outcomes and human-review records mean inside BIMAP?
-- What requirement and coverage concepts should higher layers eventually consume?
+- FastAPI and HTTP;
+- databases/object stores/message brokers;
+- payment-provider SDKs;
+- e-mail/SMS providers;
+- IfcOpenShell, Blender, Trimesh, Revit, DWG/CAD backends;
+- SLAI agents and orchestration;
+- frontend state.
 
-The domain layer does **not** decide HTTP status codes, database schemas, payment behavior, queue retries, storage locations, report layout, SLAI agent selection, or external JSON-schema compatibility. Those concerns belong to higher architectural layers.
+The central rule is:
+
+> **If a rule defines what a BIMAP business object is or which state is valid, it belongs in the domain. If it defines how a use case is coordinated or persisted, it belongs elsewhere.**
 
 ---
 
-## 2. Architectural principles
-
-BIMAP follows an evidence-first model: source provenance and normalized evidence are established before deterministic checks and higher-order reasoning are performed. The domain package therefore prioritizes stable identifiers, immutable values, explicit state, traceability, and deterministic serialization over convenience-oriented mutable objects.
-
-### 2.1 Dependency direction
-
-```mermaid
-flowchart BT
-    U[domain/utils] --> P[domain/evidence/provenance.py]
-    U --> E[domain/evidence/models.py]
-    P --> E
-    E --> PE[domain/evidence/project_evidence.py]
-    P --> PE
-
-    U --> S[domain/findings/severity.py]
-    U --> C[domain/findings/confidence.py]
-    S --> F[domain/findings/models.py]
-    C --> F
-    P --> F
-
-    U --> OS[domain/orders/states.py]
-    OS --> OE[domain/orders/events.py]
-    OE --> OM[domain/orders/models.py]
-    OS --> OM
-    OM --> OT[domain/orders/transitions.py]
-    OE --> OT
-    OS --> OT
-
-    U --> PM[domain/products/models.py]
-    PM --> PL[domain/products/limits.py]
-
-    U --> GD[domain/governance/decisions.py]
-    GD --> GR[domain/governance/review.py]
-    F --> GR
-
-    U --> RM[domain/requirements/models.py]
-    U --> RC[domain/reports/coverage.py]
-```
-
-The arrows above mean **"is consumed by"**. A lower-level module must never import a higher-level module merely to reuse convenience logic.
-
-### 2.2 Layer boundary
+## 2. Architectural position
 
 ```mermaid
 flowchart TB
-    API[API / Workers] --> APP[Application Services]
-    APP --> ENGINE[Audit Engine]
-    APP --> PORTS[Application Ports]
-    ENGINE --> CONTRACTS[Contracts]
-    ENGINE --> DOMAIN[Domain]
-    CONTRACTS --> DOMAIN
-    REPORTING[Reporting] --> DOMAIN
-    REPORTING --> CONTRACTS
-    SLAI[SLAI Adapter] --> DOMAIN
-    SLAI --> CONTRACTS
+    API[api]
+    APP[app]
+    DOM[domain]
+    INFRA[infra]
+    SLAI[slai]
 
-    DOMAIN -. must not depend on .-> API
-    DOMAIN -. must not depend on .-> APP
-    DOMAIN -. must not depend on .-> ENGINE
-    DOMAIN -. must not depend on .-> SLAI
+    API --> APP --> DOM
+    INFRA -. adapts persistence/provider contracts around .-> APP
+    SLAI -. supplements audits through app SLAIPort .-> APP
+
+    DOM -. no dependency on .-> API
+    DOM -. no dependency on .-> INFRA
+    DOM -. no dependency on .-> SLAI
 ```
 
-The intended rule is simple:
-
-> **Higher layers consume the domain. The domain does not consume higher layers.**
+Domain objects may be consumed by the application layer, Audit Engine, reporting/governance code, and contracts where appropriate. Runtime implementations must adapt to the domain rather than forcing provider-specific semantics into it.
 
 ---
 
 ## 3. Package structure
 
 ```text
-bimap/domain/
+domain/
+├── README.md
 ├── __init__.py
+│
+├── accounts/
+│   ├── __init__.py
+│   ├── models.py
+│   ├── plans.py
+│   └── rewards.py
 │
 ├── evidence/
 │   ├── __init__.py
-│   ├── provenance.py
 │   ├── models.py
-│   └── project_evidence.py
+│   ├── project_evidence.py
+│   └── provenance.py
 │
 ├── findings/
 │   ├── __init__.py
-│   ├── severity.py
 │   ├── confidence.py
 │   ├── models.py
-│   └── schema_export.py        # legacy/empty placeholder; do not extend
+│   ├── schema_export.py
+│   └── severity.py
 │
 ├── governance/
 │   ├── __init__.py
@@ -119,15 +82,15 @@ bimap/domain/
 │
 ├── orders/
 │   ├── __init__.py
-│   ├── states.py
 │   ├── events.py
 │   ├── models.py
+│   ├── states.py
 │   └── transitions.py
 │
 ├── products/
 │   ├── __init__.py
-│   ├── models.py
-│   └── limits.py
+│   ├── limits.py
+│   └── models.py
 │
 ├── reports/
 │   ├── __init__.py
@@ -143,507 +106,444 @@ bimap/domain/
     └── domain_helpers.py
 ```
 
-`findings/schema_export.py` should not become an active domain responsibility. External JSON-schema generation belongs to `bimap/contracts/schema_export.py`, because schemas version the external interchange contract rather than the internal domain model.
+The `accounts/` package is a current first-class domain area and must be included in all architectural documentation. Older domain documentation that starts directly at evidence/findings/orders is incomplete.
 
 ---
 
-## 4. Module responsibilities
+## 4. Domain design principles
 
-| Module | Responsibility | Allowed BIMAP dependencies | Must not own |
-|---|---|---|---|
-| `domain/utils/domain_errors.py` | Stable domain exception hierarchy | Standard library only | HTTP mapping, logging policy, retry policy |
-| `domain/utils/domain_helpers.py` | Shared deterministic validation, time, hash, mapping, and immutable JSON-value helpers | `domain_errors.py` | File I/O, persistence, network calls |
-| `domain/evidence/provenance.py` | Source identity, integrity, extraction/version metadata, timestamps, traceability | domain utils | Evidence aggregation, ingestion |
-| `domain/evidence/models.py` | Canonical normalized evidence units and logical source locations | domain utils, provenance | Project aggregation, parsing |
-| `domain/evidence/project_evidence.py` | Immutable project-scoped evidence aggregate and aggregate invariants | domain utils, evidence models, provenance | Ingestion/normalization |
-| `domain/findings/severity.py` | Potential impact classification | domain utility primitives only | Confidence policy |
-| `domain/findings/confidence.py` | Certainty representation independent from impact | domain utility primitives only | Severity policy |
-| `domain/findings/models.py` | Canonical immutable findings and finding aggregation | severity, confidence, provenance, domain utils | Report rendering, SLAI reasoning |
-| `domain/orders/states.py` | Authoritative order-state vocabulary | domain utils | Transition legality |
-| `domain/orders/events.py` | Append-only domain events associated with order lifecycle changes | states, domain utils | Persistence/event transport |
-| `domain/orders/models.py` | Canonical immutable Order aggregate | states, events, domain utils | Transition graph, payment SDKs |
-| `domain/orders/transitions.py` | Sole structural authority for valid state-to-state movement | states, events, models, domain utils | Commercial authorization/refund policy |
-| `domain/products/models.py` | Product identity, scope, tier/catalog concepts | domain utils | Hard-coded prices or unverified limits |
-| `domain/products/limits.py` | Validated product-limit definitions and deterministic evaluation | product models, domain utils | Final commercial thresholds |
-| `domain/governance/decisions.py` | Governance outcomes and append-only decision history | domain utils | SLAI-specific implementation details |
-| `domain/governance/review.py` | Review state and relationships between findings and governance decisions | findings, governance decisions, domain utils | API/admin workflow |
-| `domain/requirements/models.py` | Canonical requirement/source/status model boundary | domain utils | Document parsing, requirement extraction |
-| `domain/reports/coverage.py` | Domain representation of evidence/requirement coverage results | domain utils | Coverage computation or report rendering |
+### 4.1 Canonical ownership
 
----
+Each business fact should have one canonical owner.
 
-## 5. Evidence model
+Examples:
 
-BIMAP treats traceability as a domain invariant rather than report decoration. Evidence is therefore separated into provenance, normalized evidence items, and project aggregation.
+- `Account.plan_code` owns the account's current plan assignment.
+- order lifecycle legality belongs to the order state/transition model.
+- product audit scope belongs to `domain.products`, not account-plan quotas.
+- finding severity/confidence semantics belong to `domain.findings`.
+- recurring account usage quota semantics belong to `domain.accounts.plans`.
 
-```mermaid
-flowchart LR
-    SOURCE[Source file / export] --> PROV[Provenance]
-    PROV --> ITEM[EvidenceItem]
-    LOC[LogicalLocation] --> ITEM
-    ITEM --> PROJECT[ProjectEvidence]
-    PROJECT --> ENGINE[Audit Engine]
-    ENGINE --> FINDING[Finding]
-    PROV --> FINDING
-```
+Higher layers may project these values but should not create competing mutable mappings.
 
-### 5.1 `evidence/provenance.py`
+### 4.2 Immutable value-rich models
 
-`provenance.py` owns source identity and source-integrity semantics. An original filename is descriptive metadata, not authoritative identity; stable internal IDs and content hashes provide the stronger traceability mechanism.
+Most domain models are validated dataclasses/enums/value objects. Construction and semantic mutation should preserve invariants immediately, not rely on a later database or API validation pass.
 
-The module should remain below `models.py` and `project_evidence.py` so provenance can be reused without importing complete evidence aggregates.
+### 4.3 Provider neutrality
 
-### 5.2 `evidence/models.py`
+Domain models may carry identifiers for external systems when business identity requires them, but they must not carry provider sessions, secrets, SDK objects, HTTP request state, file handles, or runtime clients.
 
-`models.py` owns the smallest canonical evidence units after ingestion/normalization. Logical locations preserve where evidence came from, using one or more source-specific locators such as page, row, element, or path.
+### 4.4 Explicit time
 
-### 5.3 `evidence/project_evidence.py`
-
-`ProjectEvidence` is the project-scoped aggregate. Its current implementation explicitly protects invariants such as unique evidence IDs and consistent source identity/hash/type relationships. It does not parse source files and it does not normalize raw input; those responsibilities remain in `audit_engine/ingestion` and `audit_engine/normalization`.
+Domain timestamps are normalized to coherent UTC values using domain helpers. Temporal invariants should be enforced where the business meaning is known.
 
 ---
 
-## 6. Finding model
+## 5. Accounts domain
 
-The finding model deliberately separates **severity** from **confidence**.
+`domain/accounts/` is the largest material addition compared with the older README.
 
-```mermaid
-flowchart LR
-    SEV[Severity\nimpact if valid] --> FINDING[Finding]
-    CONF[Confidence\ncertainty finding is correct] --> FINDING
-    PROV[Provenance\nwhy finding exists] --> FINDING
+### 5.1 `accounts/models.py` — canonical account aggregate
 
-    FINDING --> AGG[ModelFindings]
-```
+`Account` is BIMAP's canonical customer-account aggregate.
 
-This distinction is fundamental:
+It owns BIMAP-specific profile and identity state such as:
 
-- **Severity** answers: *How significant would this issue be if the finding is valid?*
-- **Confidence** answers: *How certain is BIMAP that the finding is correct?*
+- `account_id`;
+- external/reusable `auth_user_id` binding;
+- username;
+- normalized e-mail;
+- E.164 phone number;
+- ISO country code;
+- name/surname;
+- occupation/business/avatar profile fields;
+- `plan_code`;
+- account lifecycle status;
+- verification timestamps;
+- optimistic-concurrency `version`.
 
-A highly severe finding with weak evidence must not be represented as certain merely because its potential impact is large. Likewise, a completely certain naming deviation should not automatically become critical.
+It deliberately does **not** store:
 
-The external customer/report contract is broader than the internal `Finding` value object and belongs in `bimap/contracts/finding.py`. Fields such as versioned `rule_id`, automation type, evidence references, expected/observed values, remediation, and verification method are external audit-contract concerns and should not be duplicated independently across multiple layers.
+- plaintext credentials;
+- password hashes;
+- verification codes;
+- access/refresh tokens;
+- authentication-provider secrets.
 
----
-
-## 7. Order domain
-
-The order domain is explicitly separated into state identity, events, the aggregate, and transition authority.
-
-### 7.1 Dependency chain
-
-```mermaid
-flowchart LR
-    STATES[states.py] --> EVENTS[events.py]
-    STATES --> MODELS[models.py]
-    EVENTS --> MODELS
-    STATES --> TRANS[transitions.py]
-    EVENTS --> TRANS
-    MODELS --> TRANS
-```
-
-The reverse imports are forbidden. In particular:
+Current account states are:
 
 ```text
-models.py       MUST NOT import transitions.py
-states.py       MUST NOT import models.py/events.py/transitions.py
-events.py       MUST NOT import models.py/transitions.py
+pending_verification
+active
+suspended
+closed
 ```
 
-### 7.2 State machine
+Important invariants include:
 
-```mermaid
-stateDiagram-v2
-    [*] --> draft
-    draft --> uploading
-    uploading --> upload_validated
-    upload_validated --> payment_pending
-    payment_pending --> paid
-    paid --> queued
-    queued --> ingesting
-    ingesting --> analyzing
-    analyzing --> governance_review
-    governance_review --> packaging
-    packaging --> delivered
+- active/suspended accounts require verified e-mail and phone channels;
+- a fully verified account cannot remain `pending_verification`;
+- verification timestamps cannot precede creation or exceed `updated_at`;
+- account timestamps must be coherent;
+- every semantic mutation increments the optimistic-concurrency version exactly once.
 
-    uploading --> upload_rejected
-    payment_pending --> payment_failed
-    ingesting --> analysis_failed
-    analyzing --> analysis_failed
-    governance_review --> review_required
+### 5.2 Canonical plan ownership
 
-    draft --> cancelled
-    uploading --> cancelled
-    upload_validated --> cancelled
-    payment_pending --> cancelled
-
-    draft --> expired
-    uploading --> expired
-    upload_validated --> expired
-    payment_pending --> expired
-
-    paid --> refunded
-    queued --> refunded
-    ingesting --> refunded
-    analyzing --> refunded
-```
-
-The state graph is structural. Whether a user is *authorized* to cancel, whether a refund is contractually allowed, or whether a payment provider accepted a refund belongs to the application/service layer.
-
-### 7.3 Idempotency and event history
-
-Order transitions should remain timestamped and represented through append-only domain events. Cross-process idempotency still requires persistence-level uniqueness/transactional guarantees; the domain layer can represent an idempotency key but cannot by itself guarantee distributed exactly-once execution.
+`Account.plan_code` is the source of truth for the account-level plan assignment. Application services that need the account's plan must resolve this field from the canonical account repository instead of maintaining an independent mutable entitlement-plan map.
 
 ---
 
-## 8. Product domain
+## 6. Account plans and recurring usage
 
-BIMAP exposes three primary product identities:
+`accounts/plans.py` owns account-plan semantics only. It must not absorb audit-product limits, individual audit product pricing, payment-provider behavior, authentication, or points-ledger state.
 
-```mermaid
-flowchart TD
-    P[BIMAP Products]
-    P --> RFA[Family Audit]
-    P --> QA[BIM QA]
-    P --> COMBINED[Combined Audit]
-```
-
-`products/models.py` owns product identity, product scope, tier/catalog concepts, and catalog integrity. `products/limits.py` depends on those identities and represents bounded product constraints.
-
-Final prices, accepted-input quotas, family counts, document counts, and upload-size thresholds must **not** be invented in the domain layer. Those values belong in product configuration once commercially selected and validated. The domain should validate configured values rather than create them.
-
----
-
-## 9. Governance domain
-
-Governance data is separate from the technical finding itself.
-
-```mermaid
-flowchart LR
-    FINDING[Finding] --> REVIEW[Governance Review]
-    DECISION[Decision] --> REVIEW
-    REVIEW --> APPROVED[approved]
-    REVIEW --> SUPPRESSED[suppressed]
-    REVIEW --> REQUIRED[review_required]
-    REVIEW --> BLOCKED[blocked]
-```
-
-Governance decisions record release policy; they do not rewrite severity, confidence, or source provenance. Decision history should remain append-only so overrides are auditable rather than silently mutating prior conclusions.
-
-The `domain/governance` package contains BIMAP-owned governance semantics. The separate `bimap/slai/governance.py` integration layer may translate SLAI Quality/Privacy/Safety/Evaluation outcomes into these domain types, but the domain must never import SLAI.
-
----
-
-## 10. Requirements and coverage
-
-### `requirements/models.py`
-
-This module is the intended canonical home for requirement identity, requirement source, assessment state, and related requirement-domain value objects. The current file is still a light scaffold and should be completed before `audit_engine/bim_qa/requirement_matrix.py` begins relying on it heavily.
-
-### `reports/coverage.py`
-
-This module is the intended domain representation of evidence/requirement coverage results. It must remain separate from `audit_engine/validation/coverage.py`:
+### 6.1 Current plan codes
 
 ```text
-domain/reports/coverage.py
-    = coverage result/value model
-
-audit_engine/validation/coverage.py
-    = coverage calculation / validation logic
+basic
+pro
+plus
+business
 ```
 
-The current file is still a light scaffold and should not yet be treated as a complete customer-facing metric implementation.
-
----
-
-## 11. Domain utilities
-
-### 11.1 `utils/domain_errors.py`
-
-The domain error hierarchy provides stable machine-readable error codes and contextual diagnostic fields without importing HTTP, persistence, logging policy, or retry policy. Higher layers should map these errors rather than inspect exception-message text.
-
-### 11.2 `utils/domain_helpers.py`
-
-The helper module centralizes deterministic primitives that would otherwise be duplicated across evidence, findings, orders, products, and governance. Its responsibilities include:
-
-- timezone-aware UTC normalization;
-- deterministic text validation;
-- stable unique text values;
-- probability normalization;
-- content-hash algorithm and digest validation;
-- bytes hashing and digest verification;
-- string-keyed mapping validation;
-- immutable JSON-compatible domain values;
-- reversible conversion of frozen JSON-domain values back to ordinary JSON-ready data.
-
-File loading, object storage, malware scanning, document parsing, and network access do not belong here.
-
----
-
-## 12. Error-handling policy
-
-Domain errors should describe violations of domain rules rather than transport failures.
-
-```mermaid
-flowchart LR
-    INVALID[Invalid domain value] --> DOMAINERR[DomainError]
-    DOMAINERR --> APP[Application boundary]
-    APP --> APIERR[HTTP/API mapping]
-    APP --> WORKER[Worker failure/retry policy]
-    APP --> LOG[Operational logging]
-```
-
-Examples of domain-appropriate failures include:
-
-- invalid domain identifiers;
-- invalid confidence values;
-- naive or ambiguous timestamps;
-- duplicate evidence IDs;
-- conflicting source hash/type information;
-- invalid order transitions;
-- invalid product-limit definitions;
-- governance invariant violations.
-
-Examples that **do not** belong in `domain_errors.py` include:
-
-- S3 connection failures;
-- Stripe/API errors;
-- PostgreSQL exceptions;
-- FastAPI request errors;
-- Redis worker errors;
-- SLAI agent execution errors.
-
-Those failures should be translated at the relevant higher boundary.
-
----
-
-## 13. Logging and PrettyPrinter policy
-
-The domain implementation currently uses SLAI's `get_logger` and `PrettyPrinter` in several modules. Where method-start status output is retained, it must remain content-free and must not expose customer evidence, source document text, authentication material, or other sensitive payloads.
-
-Recommended pattern:
-
-```python
-logger = get_logger("BIMAP Domain <Area>")
-printer = PrettyPrinter()
-
-
-def _announce(action: str) -> None:
-    printer.status("<AREA>", action, "info")
-    logger.debug({"event": "domain_method_start", "action": action})
-```
-
-Do not log full evidence values or raw project content. IDs, rule identifiers, state names, counts, versions, and non-sensitive timing/diagnostic metadata are preferable.
-
----
-
-## 14. Immutability and determinism
-
-The domain should prefer immutable dataclasses/value objects where practical.
-
-Why:
-
-1. audit results must remain reproducible;
-2. provenance must not silently change after a finding is created;
-3. append-only histories are easier to reason about than mutable audit logs;
-4. immutable aggregates reduce accidental cross-request/shared-state mutation;
-5. deterministic serialization supports hashing, report manifests, regression testing, and later external schema validation.
-
-Mutation-like operations should therefore generally return validated replacement objects rather than modify an instance in place.
-
----
-
-## 15. Relationship to `contracts/`
-
-The domain and contracts layers are related but not interchangeable.
-
-```mermaid
-flowchart LR
-    EXT[External JSON/API/Exporter Data] --> CONTRACT[contracts/*]
-    CONTRACT --> DOMAIN[domain/*]
-    DOMAIN --> ENGINE[audit_engine/*]
-    ENGINE --> DOMAIN
-    DOMAIN --> CONTRACTOUT[contracts/* serialization]
-    CONTRACTOUT --> REPORT[Reports / APIs / Workers]
-```
-
-### Domain owns
-
-- internal business meaning;
-- immutable business values;
-- invariants;
-- state transitions;
-- evidence identity/provenance semantics;
-- severity/confidence semantics;
-- governance meaning.
-
-### Contracts own
-
-- schema versions;
-- external field names;
-- interchange DTOs;
-- backward/forward compatibility policy;
-- JSON Schema generation;
-- machine-readable report/job/order/evidence representations.
-
-A JSON field should not be added to a domain object solely because one external client wants it. Likewise, an external contract must not redefine domain concepts such as severity independently.
-
----
-
-## 16. Relationship to the audit engine
-
-The audit engine consumes the domain; the domain does not know that the audit engine exists.
-
-```mermaid
-flowchart TB
-    INGEST[audit_engine/ingestion] --> NORMALIZE[audit_engine/normalization]
-    NORMALIZE --> EVIDENCE[domain/evidence]
-    EVIDENCE --> RULES[audit_engine/rules]
-    RULES --> FINDINGS[domain/findings]
-    FINDINGS --> VALIDATE[audit_engine/validation]
-```
-
-`domain/evidence/project_evidence.py` therefore represents normalized project evidence, but does not implement parsing. `domain/findings/models.py` represents findings, but does not decide which audit rules execute.
-
----
-
-## 17. Circular-import prevention rules
-
-The following rules should be treated as architectural constraints:
-
-1. `domain/utils/domain_errors.py` imports no other BIMAP module.
-2. `domain/utils/domain_helpers.py` may import domain errors but no concrete domain model.
-3. Evidence provenance does not import evidence models or project aggregates.
-4. Evidence models do not import `project_evidence.py`.
-5. Severity and confidence do not import finding models.
-6. Order states do not import events, models, or transitions.
-7. Order models do not import transitions.
-8. Product models do not import product limits.
-9. Governance decisions do not import review orchestration.
-10. The domain never imports `contracts`, `audit_engine`, `app`, `api`, `reporting`, `workers`, or `slai`.
-11. Package `__init__.py` files should avoid broad wildcard aggregation when it would eagerly load sibling modules.
-12. Shared behavior belongs in `domain/utils`, not in cross-imports between sibling packages.
-
-### Example of a safe order import chain
+### 6.2 Current usage kinds
 
 ```text
-states.py
-   ↑
-events.py
-   ↑
-models.py
-   ↑
-transitions.py
+audit
+conversion
+data_extraction
 ```
 
-### Example of a forbidden cycle
+These usage kinds represent recurring account-level service entitlements. They are distinct from product-specific audit scope.
+
+### 6.3 Renewal cadences
 
 ```text
-models.py
-   ↓
-transitions.py
-   ↓
-models.py
+weekly
+monthly
+none
 ```
 
----
+The domain intentionally defines the cadence category, not the calendar interpretation. Whether `weekly` means ISO week, subscription anniversary, or another contractual window is a deployment/application policy supplied through the entitlement service's renewal resolver.
 
-## 18. Extension rules
-
-When adding a new domain concept:
-
-1. Determine whether it is truly domain/business meaning or an external representation.
-2. Place leaf enums/value objects below aggregates.
-3. Prefer dependency inversion over importing a higher layer.
-4. Reuse `domain_helpers.py` instead of implementing another normalization function.
-5. Use `DomainError` subclasses for domain failures.
-6. Keep customer/raw evidence out of logs by default.
-7. Use immutable dataclasses/value objects when practical.
-8. Add deterministic `to_dict`/`from_dict` behavior only where the domain itself benefits from it; external schema compatibility remains a contracts concern.
-9. Do not hard-code commercial values that remain configurable or unverified.
-10. Add regression tests for every new invariant.
-
----
-
-## 19. Testing expectations
-
-Domain tests should run without requiring:
-
-- FastAPI;
-- PostgreSQL;
-- object storage;
-- Redis;
-- payment-provider credentials;
-- external network access;
-- SLAI agent execution.
-
-Recommended test categories:
-
-```mermaid
-flowchart TD
-    TESTS[Domain Tests]
-    TESTS --> VALUES[Value-object validation]
-    TESTS --> INVARIANTS[Aggregate invariants]
-    TESTS --> STATE[Order-state transitions]
-    TESTS --> SERIAL[Deterministic serialization]
-    TESTS --> HASH[Provenance/hash integrity]
-    TESTS --> GOVERN[Governance history]
-    TESTS --> NEG[Negative/adversarial cases]
-```
-
-For evidence and findings, negative tests are particularly important because BIMAP must represent unsupported, unknown, contradictory, or invalid states explicitly rather than silently manufacturing certainty.
-
----
-
-## 20. Current implementation status
-
-The domain package is not uniformly complete yet. At the current repository state:
-
-- `evidence/` contains substantial canonical evidence, provenance, and project-aggregate implementations;
-- `findings/` contains implemented severity, confidence, finding, and finding-aggregate logic;
-- `orders/` contains a substantial order-state, event, aggregate, and transition implementation;
-- `products/` contains implemented product/catalog and configurable limit models without inventing final commercial thresholds;
-- `governance/` contains substantial decision and review models;
-- `requirements/models.py` remains a scaffold;
-- `reports/coverage.py` remains a scaffold;
-- `findings/schema_export.py` is an empty legacy placeholder and should not become an active schema authority;
-- `contracts/schema_export.py` should remain the single external JSON-schema authority.
-
-This README therefore documents both the implemented lower-level architecture and the boundary that remaining domain work should preserve.
-
----
-
-## 21. Architectural source documents
-
-The domain model should remain aligned with the project architecture and evidence-first boundaries defined in:
-
-- [`../docs/whitepaper.pdf`](../docs/whitepaper.pdf)
-- the R3D BIM Audit Platform implementation report;
-- the versioned external schemas under `../contracts/` as they stabilize.
-
-Where implementation and documentation disagree, the discrepancy should be resolved explicitly through code review rather than silently changing domain meaning.
-
----
-
-## 22. Summary
-
-`bimap.domain` is BIMAP's stable semantic core. It should remain small in dependency surface but strict in invariants:
+### 6.4 Quota modes
 
 ```text
-Evidence provenance
-        ↓
-Normalized evidence
-        ↓
-Project aggregates
-        ↓
-Deterministic audit logic (outside domain)
-        ↓
-Findings
-        ↓
-Governance decisions
-        ↓
-Contracts / reporting / application workflows (outside domain)
+finite
+unlimited
 ```
 
-The domain does not perform the audit by itself. It defines the trustworthy objects on which the rest of BIMAP operates.
+`UsageQuota` enforces:
+
+- finite quotas require a positive integer limit and a real renewal cadence;
+- unlimited quotas cannot carry a finite limit;
+- unlimited quotas use `RenewalCadence.NONE`.
+
+`AccountPlan` binds:
+
+- plan code;
+- display name;
+- base purchase discount;
+- maximum effective purchase discount;
+- a quota for every supported `UsageKind`.
+
+The base discount cannot exceed the effective discount cap.
+
+---
+
+## 7. Rewards domain
+
+`accounts/rewards.py` owns reward event and point-redemption semantics.
+
+### 7.1 Reward event types
+
+Current events include:
+
+```text
+audit_completed
+conversion_completed
+data_extraction_completed
+purchase_completed
+```
+
+### 7.2 Redemption types
+
+Current redemption intents include:
+
+```text
+extra_audit
+extra_conversion
+extra_data_extraction
+purchase_discount
+```
+
+Extra-use redemptions map back to the corresponding `UsageKind`.
+
+### 7.3 Points ledger
+
+`PointsLedgerEntry` is a validated immutable ledger value containing:
+
+- entry identity;
+- account identity;
+- signed non-zero points delta;
+- reason;
+- source identity; and
+- UTC occurrence time.
+
+The domain defines point meaning and reward cost policy; persistence and atomic account balance handling belong to the application/infrastructure layers.
+
+---
+
+## 8. Orders domain
+
+`domain/orders/` owns the canonical order aggregate and lifecycle rules.
+
+| Module | Responsibility |
+|---|---|
+| `models.py` | Order aggregate and validated order state |
+| `states.py` | Canonical lifecycle state vocabulary and state groupings |
+| `events.py` | Domain events/intents associated with order lifecycle changes |
+| `transitions.py` | Legal transition authority and transition invariants |
+
+Higher layers must not mutate order state arbitrarily. Application services/commands should use the domain transition authority and persist the resulting aggregate revision using optimistic concurrency.
+
+The order is also the authoritative commercial/audit work anchor used by application services to verify:
+
+- product identity;
+- account ownership;
+- lifecycle admission;
+- audit job revision binding.
+
+---
+
+## 9. Products domain
+
+`domain/products/` owns BIMAP audit-product meaning and limits.
+
+This area is distinct from account-plan quotas:
+
+```text
+Account plan quota:
+    "How many uses may this account consume in a renewal window?"
+
+Product definition/limit:
+    "What does this purchased/audited product contain or permit?"
+```
+
+Do not move product-specific audit scope into `AccountPlan`, and do not use account quota configuration as an audit-engine rule source.
+
+---
+
+## 10. Evidence domain
+
+`domain/evidence/` owns normalized evidence identity/provenance semantics used by deterministic auditing.
+
+| Module | Responsibility |
+|---|---|
+| `models.py` | Core evidence item/value definitions |
+| `project_evidence.py` | Project-oriented evidence representation |
+| `provenance.py` | Evidence origin/traceability metadata |
+
+Evidence should remain grounded and traceable. A finding that claims support from evidence should reference canonical evidence identifiers rather than embedding unverifiable free-form assertions.
+
+---
+
+## 11. Findings domain
+
+`domain/findings/` owns authoritative finding semantics.
+
+| Module | Responsibility |
+|---|---|
+| `models.py` | Finding domain model |
+| `severity.py` | Canonical severity vocabulary/ordering/validation |
+| `confidence.py` | Canonical confidence semantics |
+| `schema_export.py` | Reserved/export-related schema surface; currently minimal |
+
+The deterministic Audit Engine is the primary producer of authoritative findings. SLAI may supplement interpretation, but it must not mutate canonical finding identity/evidence linkage through the application boundary.
+
+This is protected operationally by `SLAIRequest`/`invoke_slai()` in `app/ports/slai.py`.
+
+---
+
+## 12. Governance domain
+
+`domain/governance/` owns human/governance review semantics.
+
+- `review.py` defines canonical review state/values.
+- `decisions.py` defines governance decision semantics.
+
+This domain is separate from SLAI runtime governance. SLAI's internal execution gating decides whether supplemental agent output may be used; BIMAP domain governance represents BIMAP business/review decisions.
+
+Do not conflate these two forms of governance.
+
+---
+
+## 13. Requirements domain
+
+`domain/requirements/models.py` owns normalized requirement semantics used by applicable audit products.
+
+Requirements are audit inputs/business values. They are not HTTP payload definitions and not SLAI prompts.
+
+The deterministic audit path should normalize/validate requirement meaning before supplemental reasoning consumes grounded results.
+
+---
+
+## 14. Reports domain
+
+`domain/reports/coverage.py` owns report/coverage-related business values at the domain level.
+
+Binary rendering, PDF generation, download URLs, e-mail transport, storage keys, and provider-specific report delivery belong outside the domain.
+
+---
+
+## 15. Domain errors and helpers
+
+### `utils/domain_errors.py`
+
+Defines the domain-specific error vocabulary, including validation/invariant failures. Domain errors should express business invalidity without HTTP status codes or provider semantics.
+
+### `utils/domain_helpers.py`
+
+Provides shared domain normalization helpers such as:
+
+- text validation;
+- mapping validation;
+- UTC datetime normalization;
+- optional value normalization.
+
+These helpers should remain deterministic and side-effect-light.
+
+---
+
+## 16. Boundary with the application layer
+
+The application layer may:
+
+- create/transition validated domain aggregates;
+- persist them through ports;
+- coordinate multiple aggregates/providers;
+- choose when a use case is attempted;
+- translate domain failures to application errors.
+
+The domain layer should not know:
+
+- which API endpoint triggered the operation;
+- whether persistence is in-memory, PostgreSQL, or another provider;
+- which payment/authentication provider is active;
+- which SLAI agents are available;
+- whether an IFC file was parsed with IfcOpenShell.
+
+---
+
+## 17. Boundary with SLAI
+
+SLAI is not a domain authority.
+
+The safe direction is:
+
+```text
+Domain + deterministic Audit Engine
+        ↓ authoritative result
+Application SLAIRequest
+        ↓
+SLAI anti-corruption/runtime integration
+        ↓ supplemental mapped result
+Application invariant validation
+```
+
+SLAI must not create competing account plans, order states, product limits, requirement truth, evidence identity, or finding identity.
+
+---
+
+## 18. Persistence considerations
+
+Domain aggregates may contain optimistic-concurrency versions, but persistence behavior belongs to app ports/infrastructure.
+
+Examples:
+
+- `Account.version` supports canonical account write concurrency.
+- `Order.version` supports authoritative order lifecycle concurrency.
+
+The domain defines valid object revisions; a repository adapter enforces persistence preconditions.
+
+Do not add database transaction objects, ORM sessions, SQL fragments, or storage clients to domain models.
+
+---
+
+## 19. Security and privacy rules
+
+Domain models should contain only information that is part of the business object itself.
+
+In particular:
+
+- credentials and session tokens are not account fields;
+- verification codes are not account fields;
+- payment secrets are not order fields;
+- raw uploaded binary data is not evidence metadata;
+- agent prompts/internal traces are not findings;
+- provider error strings are not governance decisions.
+
+Sensitive values should be minimized and normalized at the correct boundary.
+
+---
+
+## 20. Testing expectations
+
+Domain tests should be deterministic and require no network/provider infrastructure.
+
+Priority cases include:
+
+- valid/invalid account identity fields;
+- account lifecycle and verification invariants;
+- account optimistic-concurrency version increments under semantic mutation;
+- plan code parsing;
+- complete quota coverage for every `UsageKind`;
+- finite/unlimited quota invariants;
+- plan discount-cap invariant;
+- rewards award/redemption calculations;
+- order transition legality;
+- evidence provenance consistency;
+- finding severity/confidence normalization;
+- requirement validation;
+- UTC timestamp ordering.
+
+A domain unit test should not need FastAPI, SMTP, Twilio, IfcOpenShell, Blender, a database, or SLAI.
+
+---
+
+## 21. Current documentation corrections
+
+Compared with the older domain README, the current repository requires these corrections:
+
+1. `accounts/` is now a major domain package and must appear in the package tree and architecture narrative.
+2. Account plan assignment is canonical on `Account.plan_code`.
+3. Recurring account quotas now explicitly cover audits, conversions, and data extractions.
+4. Rewards/points semantics are represented in `accounts/rewards.py`.
+5. Account verification/lifecycle invariants are part of the domain, while credentials/session mechanics remain outside it.
+6. Account plan quotas and product audit limits are separate concepts and must remain separate.
+
+---
+
+## 22. Extension checklist
+
+When adding a domain concept:
+
+1. Confirm it is genuinely business meaning rather than application/provider behavior.
+2. Identify one canonical owner package/model.
+3. Prefer validated enums/value objects/immutable dataclasses where appropriate.
+4. Enforce invariants during construction or canonical mutation.
+5. Keep provider/network/HTTP concerns out.
+6. Define explicit serialization only when a stable cross-layer representation is required.
+7. Add domain-specific tests with no external services.
+8. Update package exports and this README.
+
+---
+
+## 23. Summary
+
+`domain/` is BIMAP's semantic foundation. The updated domain model now includes a mature customer-account area alongside the existing order, product, evidence, finding, governance, requirement, and report concepts.
+
+The layer should remain strict:
+
+> **Domain defines truth and valid state; application coordinates use cases; infrastructure persists/integrates; API transports; SLAI supplements but does not redefine domain truth.**
