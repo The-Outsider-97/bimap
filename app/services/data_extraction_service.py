@@ -11,6 +11,8 @@ from enum import Enum
 from pathlib import PurePath
 from typing import BinaryIO, cast
 
+from ..ports.accounts import *
+from ..ports.artifact_mailer import *
 from ..ports.clock import Clock
 from ..ports.data_extraction import *
 from ..ports.malware import *
@@ -144,6 +146,8 @@ class DataExtractionService:
         "_malware",
         "_entitlement",
         "_clock",
+        "_accounts",
+        "_artifact_mailer",
         "_max_source_bytes",
     )
 
@@ -155,6 +159,8 @@ class DataExtractionService:
         entitlement: EntitlementService,
         clock: Clock,
         *,
+        accounts: Accounts,
+        artifact_mailer: ArtifactMailer | None = None,
         max_source_bytes: int | None = None,
     ) -> None:
         announce_app_action(
@@ -204,6 +210,18 @@ class DataExtractionService:
                 field="clock",
                 context={"received_type": type(clock).__name__},
             )
+        if not isinstance(accounts, Accounts):
+            raise AppConfigurationError(
+                "accounts must implement the BIMAP Accounts port.",
+                component=_COMPONENT,
+                operation="initialize",
+                field="accounts",
+                context={
+                    "received_type": type(accounts).__name__,
+                },
+            )
+
+        self._accounts = accounts
         if max_source_bytes is not None and (
             isinstance(max_source_bytes, bool)
             or not isinstance(max_source_bytes, int)
@@ -437,12 +455,7 @@ class DataExtractionService:
         info.external_attr = 0o600 << 16
         return info
 
-    def _build_package(
-        self,
-        *,
-        output_stem: str,
-        document: dict[str, object],
-    ) -> DataExtractionPackage:
+    def _build_package(self, *, output_stem: str, document: dict[str, object]) -> DataExtractionPackage:
         json_filename = f"{output_stem}-extraction.json"
         pdf_filename = f"{output_stem}-extraction.pdf"
         package_filename = f"{output_stem}-extraction.zip"
@@ -550,6 +563,26 @@ class DataExtractionService:
             operation="extract",
             max_length=512,
         )
+        account = self._accounts.get_account(
+            normalized_account_id
+        )
+
+        if account is None:
+            raise AppValidationError(
+                "Data-extraction account does not exist.",
+                component=_COMPONENT,
+                operation="extract",
+                field="account_id",
+                context={
+                    "account_id": normalized_account_id,
+                },
+            )
+
+        requester_name = (
+            f"{account.name} {account.surname}"
+        ).strip()
+
+        recipient_email = account.email
         normalized_extraction_id = require_app_text(
             extraction_id,
             field="extraction_id",
@@ -684,27 +717,21 @@ class DataExtractionService:
             "extraction": {
                 "extraction_id": normalized_extraction_id,
                 "generated_at": generated_at,
-                "datasets": tuple(item.value for item in selected),
+                "datasets": tuple(
+                    item.value
+                    for item in selected
+                ),
+                "requested_by": {
+                    "account_id": normalized_account_id,
+                    "display_name": requester_name,
+                },
             },
             "source": {
-                "filename": normalized_filename,
-                "content_type": normalized_content_type,
-                "size_bytes": source_size,
-                "sha256": source_hash,
-                "source_format": source_format.value,
-                "schema": inspection.schema,
-                "entity_count": inspection.product_count,
-                # Compatibility keys for the existing PDF renderer.  Remove
-                # them only when its field names are migrated in the same change.
-                "ifc_schema": inspection.schema,
-                "product_count": inspection.product_count,
+                # existing source fields
             },
             "model": extracted.to_dict(),
         }
-        package = self._build_package(
-            output_stem=self._output_stem(normalized_filename),
-            document=document,
-        )
+        package = self._build_package(output_stem=self._output_stem(normalized_filename), document=document )
 
         logger.info(
             {
