@@ -14,6 +14,86 @@ export type AuditSeverity =
   | "low"
   | "informational";
 
+export type SLAIGateDisposition =
+  | "allow"
+  | "modify"
+  | "review"
+  | "block"
+  | "unknown";
+
+
+export type SLAIGovernanceGateDto = {
+  readonly gate: string;
+  readonly disposition: SLAIGateDisposition;
+  readonly source_token: string | null;
+  readonly reason_codes: readonly string[];
+  readonly details: Readonly<
+    Record<string, unknown>
+  >;
+};
+
+
+export type SLAIAgentOutputDto = {
+  readonly agent: string;
+  readonly phase: string;
+  readonly succeeded: boolean;
+  readonly output_type: string | null;
+  readonly serializable: boolean;
+  readonly payload: unknown;
+  readonly error:
+    | Readonly<Record<string, unknown>>
+    | null;
+  readonly note: string | null;
+};
+
+
+export type SLAIMappedResultDto = {
+  readonly job_id: string;
+  readonly order_id: string;
+  readonly correlation_id: string;
+
+  /**
+   * Exact deterministic FindingContracts passed
+   * through the SLAI boundary unchanged.
+   *
+   * This collection is NOT a second SLAI-generated
+   * finding set.
+   */
+  readonly authoritative_findings:
+    readonly AuditFindingDto[];
+
+  readonly governance_gates:
+    readonly SLAIGovernanceGateDto[];
+
+  readonly agent_outputs:
+    readonly SLAIAgentOutputDto[];
+
+  readonly started_at: string;
+  readonly completed_at: string;
+
+  readonly terminated_early: boolean;
+  readonly termination_reason:
+    | string
+    | null;
+
+  readonly privacy_sanitized_payload:
+    unknown;
+
+  readonly mapping_warnings:
+    readonly string[];
+
+  readonly gate_blocked: boolean;
+
+  readonly gate_review_required:
+    boolean;
+
+  readonly requires_modified_payload:
+    boolean;
+
+  readonly automatic_release_allowed:
+    boolean;
+};
+
 export type AuditFindingDto = {
   readonly schema_version: string;
   readonly finding_id: string;
@@ -91,7 +171,7 @@ export type AuditDeterministicDto = {
 export type AuditExecutionPayloadDto = {
   readonly job: Readonly<Record<string, unknown>>;
   readonly deterministic: AuditDeterministicDto;
-  readonly slai: Readonly<Record<string, unknown>>;
+  readonly slai: SLAIMappedResultDto;
 };
 
 export type AuditWorkspaceDto = {
@@ -250,6 +330,65 @@ function scalarText(value: unknown): string | null {
 
 function canonicalKey(value: string): string {
   return value.replace(/[^A-Za-z0-9]/g, "").toLowerCase();
+}
+
+export function slaiOutputsForAgent(
+  workspace: AuditWorkspaceDto | null,
+  agent: string,
+): readonly SLAIAgentOutputDto[] {
+  if (!workspace) {
+    return [];
+  }
+
+  const normalized =
+    agent.trim().toLowerCase();
+
+  if (!normalized) {
+    return [];
+  }
+
+  return workspace.payload.slai.agent_outputs.filter(
+    (output) =>
+      output.agent.toLowerCase() === normalized,
+  );
+}
+
+
+export function latestSlaiOutputForAgent(
+  workspace: AuditWorkspaceDto | null,
+  agent: string,
+): SLAIAgentOutputDto | null {
+  const outputs =
+    slaiOutputsForAgent(
+      workspace,
+      agent,
+    );
+
+  return outputs.length > 0
+    ? outputs[outputs.length - 1]
+    : null;
+}
+
+
+export function slaiGovernanceGate(
+  workspace: AuditWorkspaceDto | null,
+  gate: string,
+): SLAIGovernanceGateDto | null {
+  if (!workspace) {
+    return null;
+  }
+
+  const normalized =
+    gate.trim().toLowerCase();
+
+  return (
+    workspace.payload.slai.governance_gates.find(
+      (item) =>
+        item.gate.toLowerCase()
+        === normalized,
+    )
+    ?? null
+  );
 }
 
 export function normalizeElementAlias(value: string): string {
