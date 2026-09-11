@@ -14,6 +14,7 @@ application layer.
 from __future__ import annotations
 
 import tempfile
+
 from pathlib import Path
 from typing import BinaryIO, Protocol, runtime_checkable
 
@@ -40,17 +41,10 @@ class RevitExtractionBackend(Protocol):
     """
 
     @property
-    def capabilities(
-        self,
-    ) -> tuple[DataExtractionCapability, ...]:
+    def capabilities(self) -> tuple[DataExtractionCapability, ...]:
         ...
 
-    def inspect_file(
-        self,
-        path: Path,
-        *,
-        source_format: ExtractionSourceFormat,
-    ) -> DataSourceInspection:
+    def inspect_file(self, path: Path, *, source_format: ExtractionSourceFormat) -> DataSourceInspection:
         ...
 
     def extract_file(
@@ -68,10 +62,7 @@ class RevitDataExtractor(DataExtractor):
 
     __slots__ = ("_backend", "_capabilities", "_supported_formats")
 
-    def __init__(
-        self,
-        backend: RevitExtractionBackend,
-    ) -> None:
+    def __init__(self, backend: RevitExtractionBackend) -> None:
         announce_app_action(
             printer,
             logger,
@@ -133,9 +124,7 @@ class RevitDataExtractor(DataExtractor):
                     },
                 )
 
-            source = ExtractionSourceFormat.parse(
-                capability.source_format
-            )
+            source = ExtractionSourceFormat.parse(capability.source_format)
             if source not in allowed_formats:
                 raise AppConfigurationError(
                     "Revit backend may advertise RVT/RFA sources only.",
@@ -166,9 +155,7 @@ class RevitDataExtractor(DataExtractor):
                 ).value,
             )
         )
-        self._supported_formats = frozenset(
-            supported_formats
-        )
+        self._supported_formats = frozenset(supported_formats)
 
         logger.info(
             {
@@ -188,15 +175,8 @@ class RevitDataExtractor(DataExtractor):
     def capabilities(self) -> tuple[DataExtractionCapability, ...]:
         return self._capabilities
 
-    def _require_supported(
-        self,
-        source_format: ExtractionSourceFormat | str,
-        *,
-        operation: str,
-    ) -> ExtractionSourceFormat:
-        source = ExtractionSourceFormat.parse(
-            source_format
-        )
+    def _require_supported(self, source_format: ExtractionSourceFormat | str, *, operation: str) -> ExtractionSourceFormat:
+        source = ExtractionSourceFormat.parse(source_format)
         if source not in self._supported_formats:
             raise UnsupportedAppInputError(
                 "Configured Revit backend does not support this source format.",
@@ -207,10 +187,7 @@ class RevitDataExtractor(DataExtractor):
                     "source_format": source.value,
                     "supported": tuple(
                         item.value
-                        for item in sorted(
-                            self._supported_formats,
-                            key=lambda value: value.value,
-                        )
+                        for item in sorted(self._supported_formats, key=lambda value: value.value)
                     ),
                 },
             )
@@ -244,10 +221,7 @@ class RevitDataExtractor(DataExtractor):
                 chunk = source.read(_COPY_CHUNK_BYTES)
                 if not chunk:
                     break
-                if not isinstance(
-                    chunk,
-                    (bytes, bytearray, memoryview),
-                ):
+                if not isinstance(chunk, (bytes, bytearray, memoryview)):
                     raise UnsupportedAppInputError(
                         "Revit source stream yielded non-binary data.",
                         component=_COMPONENT,
@@ -264,10 +238,7 @@ class RevitDataExtractor(DataExtractor):
                 field="source",
             )
 
-    def _capability_for(
-        self,
-        source: ExtractionSourceFormat,
-    ) -> DataExtractionCapability:
+    def _capability_for(self, source: ExtractionSourceFormat) -> DataExtractionCapability:
         capability = next(
             (
                 item
@@ -311,16 +282,8 @@ class RevitDataExtractor(DataExtractor):
             )
         return inspection
 
-    def inspect(
-        self,
-        stream: BinaryIO,
-        *,
-        source_format: ExtractionSourceFormat,
-    ) -> DataSourceInspection:
-        source = self._require_supported(
-            source_format,
-            operation="inspect",
-        )
+    def inspect(self, stream: BinaryIO, *, source_format: ExtractionSourceFormat) -> DataSourceInspection:
+        source = self._require_supported(source_format, operation="inspect")
 
         with tempfile.TemporaryDirectory(
             prefix="bimap-revit-extract-"
@@ -333,10 +296,7 @@ class RevitDataExtractor(DataExtractor):
             self._materialize(stream, source_path)
 
             try:
-                inspection = self._backend.inspect_file(
-                    source_path,
-                    source_format=source,
-                )
+                inspection = self._backend.inspect_file(source_path, source_format=source)
             except AppError:
                 raise
             except Exception as exc:
@@ -348,11 +308,7 @@ class RevitDataExtractor(DataExtractor):
                     cause=exc,
                 ) from exc
 
-        return self._validate_inspection(
-            inspection,
-            source=source,
-            operation="inspect",
-        )
+        return self._validate_inspection(inspection, source=source, operation="inspect")
 
     def extract(
         self,
@@ -419,11 +375,7 @@ class RevitDataExtractor(DataExtractor):
                 },
             )
 
-        self._validate_inspection(
-            result.inspection,
-            source=source,
-            operation="extract",
-        )
+        self._validate_inspection(result.inspection, source=source, operation="extract")
         return result
 
 
