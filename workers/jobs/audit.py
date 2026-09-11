@@ -1,19 +1,19 @@
 """
-Asynchronous BIMAP audit-worker entry.
+BIMAP audit-worker entry.
 
 This module is an outer execution adapter. It delegates the complete supported
 audit sequence to ``AuditService.run_audit`` and does not reconstruct ingestion,
 normalization, deterministic rule execution, SLAI invocation, result mapping, or
 governance policy inside the worker.
 
-The current ``AuditService`` requires the authoritative order to already be in a
-valid active audit state (``INGESTING`` or ``ANALYZING``). This worker therefore
-does not manufacture order transitions around the service call.
+The worker owns only worker-bound lifecycle orchestration:
 
-The scaffold's previous ``ReviewService`` import is intentionally removed.
-``ReviewService.request_review`` requires explicit review identifiers, reason
-codes, and/or a caller-owned confidence threshold. A worker must not invent
-those governance inputs merely because an audit completed.
+    QUEUED -> INGESTING -> ANALYZING
+        -> resolve prepared audit input
+        -> AuditService.run_audit(...)
+        -> GOVERNANCE_REVIEW
+
+The deterministic/SLAI audit is executed exactly once.
 """
 
 from __future__ import annotations
@@ -41,9 +41,18 @@ _COMPONENT = "worker_audit"
 class WorkerAudit:
     """Execute one validated active ``AuditJob`` through ``AuditService``."""
 
-    __slots__ = ("_service", "_order_service", "_audit_inputs",)
+    __slots__ = (
+        "_service",
+        "_order_service",
+        "_audit_inputs",
+    )
 
-    def __init__(self, service: AuditService, order_service: OrderService, audit_inputs: AuditInputService) -> None:
+    def __init__(
+        self,
+        service: AuditService,
+        order_service: OrderService,
+        audit_inputs: AuditInputService,
+    ) -> None:
         announce_worker_action(
             printer,
             logger,
@@ -60,7 +69,7 @@ class WorkerAudit:
                 field="service",
             )
 
-        if not isinstance( order_service, OrderService):
+        if not isinstance(order_service, OrderService):
             raise WorkerConfigurationError(
                 "order_service must be an OrderService.",
                 component=_COMPONENT,
@@ -82,16 +91,10 @@ class WorkerAudit:
 
         logger.debug(
             {
-                "event":
-                    "worker_audit_initialized",
-                "service_type":
-                    type(
-                        service
-                    ).__name__,
-                "order_service_type":
-                    type(
-                        order_service
-                    ).__name__,
+                "event": "worker_audit_initialized",
+                "service_type": type(service).__name__,
+                "order_service_type": type(order_service).__name__,
+                "audit_input_service_type": type(audit_inputs).__name__,
             }
         )
 
@@ -135,35 +138,25 @@ class WorkerAudit:
                 context={"received_type": type(job).__name__},
             )
 
-        order = (self._order_service.get_order(job.order_id))
+        order = self._order_service.get_order(job.order_id)
 
-        if (order.state is OrderState.QUEUED):
-            order = (
-                self._order_service
-                .transition(
-                    order.order_id,
-                    OrderState.INGESTING,
-                    idempotency_key=(
-                        f"{job.job_id}:ingesting"
-                    ),
-                    actor="bimap-worker",
-                )
+        if order.state is OrderState.QUEUED:
+            order = self._order_service.transition(
+                order.order_id,
+                OrderState.INGESTING,
+                idempotency_key=f"{job.job_id}:ingesting",
+                actor="bimap-worker",
             )
 
-        if (order.state is OrderState.INGESTING):
-            order = (
-                self._order_service
-                .transition(
-                    order.order_id,
-                    OrderState.ANALYZING,
-                    idempotency_key=(
-                        f"{job.job_id}:analyzing"
-                    ),
-                    actor="bimap-worker",
-                )
+        if order.state is OrderState.INGESTING:
+            order = self._order_service.transition(
+                order.order_id,
+                OrderState.ANALYZING,
+                idempotency_key=f"{job.job_id}:analyzing",
+                actor="bimap-worker",
             )
 
-        if (order.state is not OrderState.ANALYZING):
+        if order.state is not OrderState.ANALYZING:
             raise WorkerValidationError(
                 "Audit worker requires an analyzing order.",
                 component=_COMPONENT,
@@ -172,13 +165,36 @@ class WorkerAudit:
                 job_type="audit",
                 job_id=job.job_id,
                 context={
-                    "order_id":
-                        order.order_id,
-                    "state":
-                        order.state.value,
+                    "order_id": order.order_id,
+                    "state": order.state.value,
                 },
             )
 
+        # Resolve the canonical prepared input only when the caller has not
+        # supplied an explicit evidence payload.
+        if family_payload is None and project_payload is None:
+            if job.evidence_manifest_ref is None:
+                raise WorkerValidationError(
+                    "AuditJob does not reference a prepared audit-input manifest.",
+                    component=_COMPONENT,
+                    operation="execute",
+                    field="job.evidence_manifest_ref",
+                    job_type="audit",
+                    job_id=job.job_id,
+                )
+
+            resolved = self._audit_inputs.resolve(
+                job.evidence_manifest_ref,
+                expected_order_id=job.order_id,
+                expected_product_code=job.product_code,
+            )
+
+            family_payload = resolved.family_payload
+            project_payload = resolved.project_payload
+
+        # Execute exactly once. The previous implementation invoked
+        # AuditService.run_audit() once before resolving the prepared input and
+        # then a second time afterwards.
         result = run_worker_dependency(
             lambda: self._service.run_audit(
                 job,
@@ -198,90 +214,6 @@ class WorkerAudit:
             component=_COMPONENT,
             operation="execute",
             message="AuditService failed while executing an audit job.",
-            context={"job_id": job.job_id, "order_id": job.order_id},
-            error_type=WorkerAuditError,
-        )
-        if (
-            order.state
-            is not OrderState.ANALYZING
-        ):
-            raise WorkerValidationError(
-                "Audit worker requires an analyzing order.",
-                component=_COMPONENT,
-                operation="execute",
-                field="order.state",
-                job_type="audit",
-                job_id=job.job_id,
-                context={
-                    "order_id":
-                        order.order_id,
-                    "state":
-                        order.state.value,
-                },
-            )
-
-        # ---------------------------------------------------------
-        # Resolve canonical prepared audit input
-        # ---------------------------------------------------------
-
-        if (
-            family_payload is None
-            and project_payload is None
-        ):
-            if job.evidence_manifest_ref is None:
-                raise WorkerValidationError(
-                    "AuditJob does not reference a "
-                    "prepared audit-input manifest.",
-                    component=_COMPONENT,
-                    operation="execute",
-                    field=(
-                        "job.evidence_manifest_ref"
-                    ),
-                    job_type="audit",
-                    job_id=job.job_id,
-                )
-
-            resolved = (
-                self._audit_inputs.resolve(
-                    job.evidence_manifest_ref,
-                    expected_order_id=(
-                        job.order_id
-                    ),
-                    expected_product_code=(
-                        job.product_code
-                    ),
-                )
-            )
-
-            family_payload = resolved.family_payload
-            project_payload = resolved.project_payload
-
-        # ---------------------------------------------------------
-        # Execute deterministic + SLAI audit
-        # ---------------------------------------------------------
-
-        result = run_worker_dependency(
-            lambda: self._service.run_audit(
-                job,
-                family_payload=family_payload,
-                project_payload=project_payload,
-                requirements=requirements,
-                family_rule_ids=family_rule_ids,
-                family_versions=family_versions,
-                project_rule_ids=project_rule_ids,
-                project_versions=project_versions,
-                metadata=metadata,
-                requested_agents=requested_agents,
-                correlation_id=correlation_id,
-                max_context_bytes=max_context_bytes,
-                task_overrides=task_overrides,
-            ),
-            component=_COMPONENT,
-            operation="execute",
-            message=(
-                "AuditService failed while "
-                "executing an audit job."
-            ),
             context={
                 "job_id": job.job_id,
                 "order_id": job.order_id,
@@ -295,58 +227,14 @@ class WorkerAudit:
             component=_COMPONENT,
             operation="execute",
             message=(
-                "AuditService returned an unsupported "
-                "audit execution result."
+                "AuditService returned an unsupported audit execution result."
             ),
         )
 
         if (
-            validated.job.job_id
-            != job.job_id
-            or validated.job.order_id
-            != job.order_id
+            validated.job.job_id != job.job_id
+            or validated.job.order_id != job.order_id
         ):
-            raise WorkerIntegrityError(
-                "Audit worker result is bound "
-                "to a different job/order.",
-                component=_COMPONENT,
-                operation="execute",
-                field="result.job",
-                job_type="audit",
-                job_id=job.job_id,
-                context={
-                    "requested_order_id": job.order_id,
-                    "returned_job_id": validated.job.job_id,
-                    "returned_order_id": validated.job.order_id,
-                },
-            )
-
-        # Result is validated and persisted by AuditService
-        # before the observable lifecycle advances.
-        self._order_service.transition(
-            job.order_id,
-            OrderState.GOVERNANCE_REVIEW,
-            idempotency_key=(
-                f"{job.job_id}:governance-review"
-            ),
-            actor="bimap-worker",
-        )
-        validated = require_worker_result(
-            result,
-            AuditExecutionResult,
-            component=_COMPONENT,
-            operation="execute",
-            message="AuditService returned an unsupported audit execution result.",
-        )
-
-        self._order_service.transition(
-            job.order_id,
-            OrderState.GOVERNANCE_REVIEW,
-            idempotency_key=(f"{job.job_id}:governance-review"),
-            actor="bimap-worker",
-        )
-
-        if validated.job.job_id != job.job_id or validated.job.order_id != job.order_id:
             raise WorkerIntegrityError(
                 "Audit worker result is bound to a different job/order.",
                 component=_COMPONENT,
@@ -361,6 +249,15 @@ class WorkerAudit:
                 },
             )
 
+        # AuditService validates and persists the workspace result before the
+        # externally visible lifecycle is advanced.
+        self._order_service.transition(
+            job.order_id,
+            OrderState.GOVERNANCE_REVIEW,
+            idempotency_key=f"{job.job_id}:governance-review",
+            actor="bimap-worker",
+        )
+
         logger.info(
             {
                 "event": "worker_audit_completed",
@@ -373,9 +270,12 @@ class WorkerAudit:
                 ),
                 "finding_count": validated.deterministic.finding_count,
                 "evidence_count": validated.deterministic.evidence_count,
-                "slai_terminated_early": bool(validated.slai.terminated_early),
+                "slai_terminated_early": bool(
+                    validated.slai.terminated_early
+                ),
             }
         )
+
         return validated
 
 
