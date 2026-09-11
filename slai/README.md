@@ -1,115 +1,74 @@
-# BIMAP SLAI Integration Layer
+# BIMAP ↔ SLAI Integration Layer
 
-> **Package:** `bimap.slai`  
-> **Architectural role:** Governed anti-corruption and runtime-integration boundary between the R3D BIM Audit Platform (BIMAP) and SLAI v2.3  
-> **Runtime position:** Above BIMAP domain/contracts and the deterministic audit engine; below application services/workers; adjacent to the SLAI runtime installed at the SLAI repository root
+> **Repository path:** `slai/`  
+> **Runtime package:** `applications.bimap.slai`  
+> **Architectural role:** governed anti-corruption layer between authoritative BIMAP audit output and the heterogeneous SLAI v2.3 agent runtime
 
 ---
 
 ## 1. Purpose
 
-The `slai/` package is BIMAP's controlled boundary into SLAI. It allows BIMAP to use selected SLAI capabilities for contextual analysis, cross-evidence reasoning, quality/privacy/safety/evaluation gating, language synthesis, observability, and other explicitly authorized functions without allowing the SLAI runtime to become the owner of BIMAP's domain model, deterministic audit rules, order lifecycle, or report contracts.
+The `slai/` package integrates SLAI intelligence into BIMAP without allowing SLAI to become the owner of BIM audit truth, customer business state, or deterministic compliance findings.
 
-The package exists to answer questions such as:
+Its responsibilities are deliberately narrow:
 
-- Which SLAI agents may BIMAP invoke for a particular deployment profile?
-- How is a versioned BIMAP `AuditJob` converted into an immutable runtime envelope without embedding raw files or application objects?
-- How does BIMAP verify SLAI liveness and readiness before a paid audit job starts?
-- How are SLAI agents created through the existing SLAI `AgentFactory` without duplicating factory lifecycle logic?
-- How does BIMAP pass job-scoped grounded state through SLAI `SharedMemory` without using global unscoped keys?
-- How are ingress and egress governance stages kept distinct from contextual analysis stages?
-- How are SLAI-native Quality, Privacy, Safety, and Evaluation outcomes translated into stable BIMAP governance dispositions?
-- How are SLAI outputs mapped back into BIMAP without rewriting authoritative deterministic findings?
-- Which object does an application service or worker call so it does not need to know about `AgentFactory`, `SharedMemory`, or individual agents?
-- How are failures represented with stable error codes and non-sensitive diagnostics?
+- validate and bound the BIMAP context sent to SLAI;
+- decide which SLAI agents are permitted for a BIMAP job;
+- translate grounded BIMAP audit data into verified SLAI-native task payloads;
+- create/invoke only approved agents through the SLAI runtime;
+- apply privacy/quality/safety/governance gates around supplemental processing;
+- perform health/readiness checks;
+- map runtime outputs into a stable BIMAP-facing result; and
+- preserve the deterministic authoritative `FindingContract` set unchanged.
 
-The package does **not** own raw-file upload security, BIM/RFA parsing, deterministic rule execution, requirement extraction, order/payment state transitions, queue retry/exactly-once guarantees, report rendering, object-storage publication, or customer authorization. Those concerns remain in their corresponding BIMAP layers.
+The central rule is:
 
-The governing architectural principle is:
-
-> **BIMAP owns audit meaning; SLAI supplies policy-approved reasoning and governance capabilities around grounded BIMAP evidence.**
+> **SLAI enhances a completed grounded BIMAP audit; it does not replace the deterministic Audit Engine.**
 
 ---
 
-## 2. Architectural principles
-
-### 2.1 SLAI is a governed runtime dependency, not BIMAP's domain model
-
-BIMAP is installed inside the SLAI repository and runs from the SLAI root, but source-tree proximity does not collapse the architectural layers.
+## 2. Architectural position
 
 ```mermaid
 flowchart TB
-    API[API / Worker / Application Service] --> ADAPTER[bimap/slai/adapter.py]
-    ADAPTER --> ENV[bimap/slai/job_envelope.py]
-    ADAPTER --> ORCH[bimap/slai/orchestration.py]
-    ORCH --> POLICY[bimap/slai/agent_policy.py]
-    ORCH --> HEALTH[bimap/slai/health.py]
-    ORCH --> SLAI[SLAI AgentFactory + SharedMemory + selected agents]
-    SLAI --> ORCH
-    ORCH --> MAPPER[bimap/slai/result_mapper.py]
-    MAPPER --> GOV[bimap/slai/governance.py]
-    MAPPER --> CONTRACTS[bimap/contracts]
-    MAPPER --> DOMAIN[bimap/domain]
+    ENGINE[Deterministic AuditEngine]
+    APP[app/services/AuditService]
+    PORT[app/ports/slai.py]
+    ADAPTER[slai/adapter.py]
+    ENV[slai/job_envelope.py]
+    POLICY[slai/agent_policy.py]
+    TASK[slai/task_builder.py]
+    ORCH[slai/orchestration.py]
+    GOV[slai/governance.py]
+    MAP[slai/result_mapper.py]
+    SLAI[SLAI v2.3 agents/runtime]
+    STORE[AuditResultStore]
 
-    DOMAIN -. must not import .-> ADAPTER
-    CONTRACTS -. must not import .-> ORCH
-    SLAI -. does not own .-> DOMAIN
+    ENGINE -->|AuditResult + authoritative findings| APP
+    APP -->|SLAIRequest| PORT
+    PORT -. structurally implemented by .-> ADAPTER
+    ADAPTER --> ENV
+    ADAPTER --> ORCH
+    POLICY --> ORCH
+    TASK --> ORCH
+    GOV --> ORCH
+    ORCH --> SLAI
+    ORCH --> MAP
+    MAP --> ADAPTER
+    ADAPTER -->|mapped SlaiResult| APP
+    APP --> STORE
 ```
 
-The intended rule is one-way:
-
-> **Higher BIMAP integration code may consume SLAI; lower BIMAP domain/contracts must not depend on the SLAI integration package.**
-
-### 2.2 Evidence first, contextual reasoning second
-
-The integration layer assumes that BIMAP has already established a grounded audit context from controlled evidence. It must not allow generative or probabilistic reasoning to silently replace deterministic facts.
-
-```mermaid
-flowchart LR
-    RAW[Controlled source package] --> INGEST[Audit ingestion / normalization]
-    INGEST --> RULES[Deterministic RFA / BIM QA checks]
-    RULES --> GROUND[Grounded BIMAP context]
-    GROUND --> SLAI[bimap/slai]
-    SLAI --> SUPP[Supplemental reasoning / prioritization / explanation]
-    RULES --> AUTH[Authoritative FindingContract records]
-    SUPP --> MAP[Result mapper]
-    AUTH --> MAP
-    MAP --> DOWNSTREAM[Governance / reporting / fulfilment]
-```
-
-SLAI output is therefore supplemental unless a future explicit contract defines a new inferred-finding workflow. The current mapper does not manufacture findings from arbitrary agent text.
-
-### 2.3 One authoritative owner per concept
-
-| Concept | Authoritative owner |
-|---|---|
-| SLAI integration error vocabulary | `slai/utils/slai_errors.py` |
-| SLAI boundary validation/serialization helpers | `slai/utils/slai_helpers.py` |
-| BIMAP SLAI agent authorization | `slai/agent_policy.py` |
-| External audit work contract | `contracts/audit_job.py` |
-| BIMAP-to-SLAI runtime envelope | `slai/job_envelope.py` |
-| SLAI liveness/readiness interpretation | `slai/health.py` |
-| SLAI-native gate normalization | `slai/governance.py` |
-| SLAI agent construction/invocation sequence | `slai/orchestration.py` |
-| SLAI-to-BIMAP supplemental result projection | `slai/result_mapper.py` |
-| Application-facing SLAI façade | `slai/adapter.py` |
-| Canonical BIMAP finding interchange schema | `contracts/finding.py` |
-| Canonical finding severity/confidence/provenance | `domain/findings/*` |
-| Canonical governance decisions/reviews | `domain/governance/*` |
-| SLAI agent construction/cache/lifecycle internals | SLAI `src/agents/agent_factory.py` |
-| SLAI shared runtime memory internals | SLAI `src/agents/collaborative/shared_memory.py` |
-
-No sibling integration module should recreate these responsibilities.
+The app-facing contract is now explicitly defined in `app/ports/slai.py`. The `SLAIAdapter` is the runtime implementation of that structural port.
 
 ---
 
 ## 3. Package structure
 
 ```text
-bimap/slai/
-├── __init__.py
+slai/
 ├── README.md
-│
+├── __init__.py
 ├── adapter.py
 ├── agent_policy.py
 ├── governance.py
@@ -117,755 +76,607 @@ bimap/slai/
 ├── job_envelope.py
 ├── orchestration.py
 ├── result_mapper.py
+├── task_builder.py
 │
 └── utils/
-    ├── __all__.py
+    ├── __init__.py
     ├── slai_errors.py
     └── slai_helpers.py
 ```
 
-Configuration is intentionally external to the package implementation:
+`task_builder.py` is a current first-class part of the integration and must appear in the package tree and dependency description. Older documentation that omits it is incomplete. The utilities package uses `utils/__init__.py`; there is no architectural `utils/__all__.py` module.
+
+---
+
+## 4. What this layer is — and is not
+
+### It is
+
+- an anti-corruption layer;
+- a runtime safety/governance boundary;
+- a task-translation boundary;
+- a health/readiness boundary;
+- a result-mapping boundary;
+- a controlled place where BIMAP may invoke selected SLAI agents.
+
+### It is not
+
+- the deterministic BIM audit engine;
+- a parser for raw customer RVT/RFA/IFC/DWG files;
+- an order/account/payment/entitlement service;
+- a persistence layer;
+- a report renderer;
+- a replacement for domain governance/review;
+- a general-purpose gateway exposing every SLAI agent to the BIMAP frontend.
+
+---
+
+## 5. Application-facing SLAI port
+
+The stable public boundary consumed by `AuditService` lives in `app/ports/slai.py`, not in this package.
+
+Current port concepts are:
 
 ```text
-bimap/configs/slai_profile.yaml
-        ↓
-bimap/bootstrap.py
-        ↓
-SLAIAgentPolicy(profile=...)
+SlaiResult
+SlaiHealth
+SLAIRequest
+SLAIPort
+invoke_slai(...)
 ```
 
-`agent_policy.py` does not independently reopen the YAML file. Bootstrap/application composition owns configuration loading and passes the resolved profile into the integration layer.
-
----
-
-## 4. Module responsibilities
-
-| Module | Primary responsibility | Allowed BIMAP/SLAI dependencies | Must not own |
-|---|---|---|---|
-| `utils/slai_errors.py` | Stable integration exception hierarchy, retry metadata, redacted diagnostic context | standard library, SLAI logger/PrettyPrinter | orchestration logic, HTTP mapping, raw evidence logging |
-| `utils/slai_helpers.py` | Shared validation, UTC timestamps, canonical JSON, hashing, safe diagnostics, health/decision normalization | SLAI integration errors, standard library | agent construction, domain rules |
-| `agent_policy.py` | Allow/deny and tier policy for BIMAP's SLAI agent surface | integration utils, injected profile data | AgentFactory construction, YAML I/O, audit sequencing |
-| `job_envelope.py` | Immutable integrity-checked runtime envelope around `AuditJob` and grounded context | `contracts/audit_job.py`, agent policy, integration utils | raw files, database clients, SLAI agents, queue retries |
-| `health.py` | Side-effect-free liveness/readiness assessment of SLAI runtime components and selected agents | integration utils; injected factory/memory/agents | constructing runtime components, application monitoring backend |
-| `governance.py` | Translate native Quality/Privacy/Safety/Evaluation outputs into neutral BIMAP gate dispositions and canonical finding governance | domain governance/findings, integration utils | agent invocation, product threshold invention |
-| `orchestration.py` | Construct selected agents through SLAI `AgentFactory`, coordinate phase ordering, shared-memory handoff, native invocation and runtime result capture | policy/envelope/health/governance, SLAI factory/shared memory | deterministic BIM rules, result rendering, report release decisions |
-| `result_mapper.py` | Project orchestration outputs into BIMAP-owned supplemental results while preserving authoritative `FindingContract` records unchanged | orchestration, governance, finding contract | inferred finding fabrication, deterministic rule mutation |
-| `adapter.py` | Narrow application-facing façade combining envelope creation, orchestration, mapping, health and lifecycle | orchestration, result mapper, audit/finding contracts | API routing, worker retry policy, formal app-port semantics not yet defined |
-
----
-
-## 5. Internal dependency direction
-
-The package is intentionally layered to prevent circular imports.
-
-```mermaid
-flowchart BT
-    ERR[utils/slai_errors.py]
-    HELP[utils/slai_helpers.py]
-    ERR --> HELP
-
-    HELP --> POLICY[agent_policy.py]
-    HELP --> ENV[job_envelope.py]
-    POLICY --> ENV
-
-    HELP --> HEALTH[health.py]
-    HELP --> GOV[governance.py]
-
-    POLICY --> ORCH[orchestration.py]
-    ENV --> ORCH
-    HEALTH --> ORCH
-    GOV --> ORCH
-
-    ORCH --> MAP[result_mapper.py]
-    GOV --> MAP
-
-    ENV --> ADAPTER[adapter.py]
-    ORCH --> ADAPTER
-    MAP --> ADAPTER
-```
-
-The arrows mean **"is consumed by"**.
-
-Important reverse imports are forbidden:
+`SLAIPort` exposes only:
 
 ```text
-utils/*               MUST NOT import any higher slai module
-agent_policy.py       MUST NOT import orchestration.py/adapter.py
-job_envelope.py       MUST NOT import orchestration.py/result_mapper.py/adapter.py
-health.py             MUST NOT import orchestration.py/adapter.py
-governance.py         MUST NOT import orchestration.py/result_mapper.py/adapter.py
-orchestration.py      MUST NOT import result_mapper.py/adapter.py
-result_mapper.py      MUST NOT import adapter.py
-contracts/*           MUST NOT import bimap/slai/*
-domain/*              MUST NOT import bimap/slai/*
-```
-
----
-
-## 6. Agent policy
-
-`SLAIAgentPolicy` is the authorization boundary between the BIMAP product and SLAI's broader research/runtime surface.
-
-### 6.1 Baseline agent tiers
-
-The baseline profile is deliberately narrower than the complete SLAI agent registry.
-
-| Tier | Baseline agents | Meaning |
-|---|---|---|
-| **Core** | collaborative, evaluation, reader, knowledge, language, observability, planning, privacy, quality, reasoning, safety | Required baseline BIMAP SLAI capabilities |
-| **Conditional** | perception | Allowed only when the job genuinely contains relevant image/screenshot evidence |
-| **Supporting** | execution | Available for controlled approved execution/packaging roles, not a default reasoning requirement |
-| **Deferred** | learning, adaptive | Disabled until a separately governed feedback/learning design is established |
-| **Disabled** | qnn | No demonstrated BIMAP requirement; hard-disabled in the baseline policy |
-
-The policy is fail-closed: unknown agents are not implicitly authorized, and hard-disabled entries cannot be turned into a normal enabled agent through accidental profile data.
-
-### 6.2 Policy versus factory
-
-```mermaid
-flowchart LR
-    PROFILE[Resolved BIMAP SLAI profile] --> POLICY[SLAIAgentPolicy]
-    REQUEST[Envelope requested_agents] --> POLICY
-    POLICY -->|approved names only| ORCH[SLAIOrchestrator]
-    ORCH --> FACTORY[SLAI AgentFactory]
-```
-
-`AgentFactory` answers *how* to construct a registered SLAI agent. `SLAIAgentPolicy` answers *whether BIMAP is allowed to request it*. The two responsibilities must not be merged.
-
----
-
-## 7. Job envelope
-
-`SLAIJobEnvelope` is the stable BIMAP runtime work unit consumed by orchestration.
-
-It composes rather than replaces the existing external `AuditJob` contract.
-
-```mermaid
-flowchart LR
-    ORDER[OrderContract] --> JOB[AuditJob]
-    EVIDENCE[Approved evidence refs / manifest ref] --> JOB
-    JOB --> ENV[SLAIJobEnvelope]
-    CONTEXT[Grounded JSON-safe audit context] --> ENV
-    POLICY[Policy-approved requested agents] --> ENV
-    ENV --> ORCH[SLAIOrchestrator]
-```
-
-The envelope carries:
-
-- the immutable `AuditJob`;
-- policy-approved requested agents;
-- grounded JSON-safe BIMAP context;
-- a correlation identifier;
-- a UTC creation timestamp;
-- a deterministic context digest.
-
-It intentionally does **not** carry:
-
-- raw customer file bytes;
-- database/storage clients;
-- `AgentFactory` or agent instances;
-- complete application aggregates;
-- report renderer state;
-- queue retry state.
-
-`assert_integrity()` verifies that the grounded context still matches its recorded digest. `assert_policy()` revalidates the requested agent set against the effective policy before runtime execution.
-
----
-
-## 8. Health model
-
-`SLAIHealthCheck` separates **liveness** from **readiness**.
-
-```mermaid
-flowchart TD
-    LIVE[Liveness] --> M1[logs.logger importable]
-    LIVE --> M2[AgentFactory importable]
-    LIVE --> M3[SharedMemory importable]
-
-    READY[Readiness] --> FACT[Factory health]
-    READY --> MEM[SharedMemory health]
-    READY --> AG[Required selected-agent health]
-
-    FACT --> STATE{Aggregate state}
-    MEM --> STATE
-    AG --> STATE
-    STATE --> HEALTHY[healthy / ready]
-    STATE --> DEGRADED[degraded]
-    STATE --> UNAVAILABLE[unavailable]
-```
-
-A process can be alive while a required agent is not ready. Application/worker code should therefore use readiness before starting an audit job that depends on a declared agent set.
-
-Health checking does not instantiate agents by itself. Runtime creation remains the orchestrator/factory responsibility.
-
----
-
-## 9. Orchestration lifecycle
-
-`SLAIOrchestrator` is the only BIMAP SLAI module that constructs and directly invokes SLAI agents.
-
-### 9.1 Runtime construction
-
-The orchestrator creates a single `SharedMemory` and `AgentFactory` when they are not injected. It requests only envelope-authorized agents through:
-
-```text
-AgentFactory.get_agent(agent_name, shared_memory=shared_memory)
-```
-
-It does **not** manually call every agent's `initialize()` method. SLAI v2.3 `AgentFactory` already owns construction, dependency resolution, caching, constructor injection, lifecycle state, fallback handling, and release/shutdown behavior. Repeating that lifecycle inside BIMAP would create duplicate initialization and ownership ambiguity.
-
-### 9.2 Phase sequence
-
-```mermaid
-flowchart TD
-    ENV[Validated SLAIJobEnvelope] --> READY[Prepare agents + readiness check]
-    READY --> IQ[Ingress Quality]
-    IQ --> IP[Ingress Privacy]
-    IP --> ANALYSIS[Contextual analysis agents]
-    ANALYSIS --> EQ[Egress Quality]
-    EQ --> EV[Egress Evaluation]
-    EV --> ES[Egress Safety]
-    ES --> EP[Egress Privacy]
-    EP --> OBS[Observability]
-    OBS --> RESULT[SLAIOrchestrationResult]
-
-    IQ -->|block/review/unknown| EARLY[Early termination]
-    IP -->|block/review/unknown| EARLY
-    EARLY --> RESULT
-```
-
-The contextual analysis order is deterministic within BIMAP:
-
-```text
-collaborative
-→ reader
-→ perception       # only if requested/allowed
-→ knowledge
-→ reasoning
-→ planning
-→ language
-→ execution        # only if requested/allowed
-```
-
-The order does not imply that every product must invoke every optional agent. `requested_agents` and policy remain authoritative.
-
-### 9.3 Ingress versus egress gates
-
-Ingress gates evaluate whether the grounded payload is fit to enter the SLAI analysis path. Egress gates evaluate the resulting analysis state before downstream release handling.
-
-An ingress Privacy `modify` decision replaces the current orchestration payload with the returned `sanitized_payload`; it does not mutate the immutable job envelope or original external evidence contract.
-
-### 9.4 Early termination
-
-`review`, `block`, and `unknown` ingress dispositions prevent the normal analysis sequence. The orchestration result records:
-
-- `terminated_early=True`;
-- an explicit `termination_reason`;
-- all invocations completed before termination;
-- whatever governance gates actually returned.
-
-Missing later gates remain missing at orchestration time and become explicit `UNKNOWN` results when `SLAIGovernance.evaluate_gates()` evaluates the required gate set. They are never silently interpreted as approval.
-
----
-
-## 10. Agent-native task contract boundary
-
-This boundary is intentionally strict because the current repository does not yet define a canonical BIMAP application-level SLAI task DTO in `app/ports/slai.py` or `audit_engine/result.py`.
-
-SLAI v2.3 agents do not all consume the same task schema. For example:
-
-| Agent | Verified invocation surface used by BIMAP | Important shape constraint |
-|---|---|---|
-| Quality | `perform_task(task_data)` | mapping; normal batch evaluation expects records plus dataset/source identity |
-| Privacy | `perform_task_privacy(input_data, context=None)` | privacy-specific mapping; may contain payload, purpose, identifiers, retention/policy inputs |
-| Evaluation | `execute_validation_cycle(params)` | mapping/dict parameters |
-| Other selected agents | `perform_task(task_data)` | agent-specific task semantics remain owned by SLAI agent implementation |
-
-BIMAP therefore does **not** create a universal fake wrapper such as `{"operation": "bimap_audit"}` and assume every agent understands it.
-
-Instead `SLAIOrchestrator.orchestrate()` resolves each invocation task from one of two explicit sources:
-
-1. `task_overrides` supplied by the caller, or
-2. an injected phase-aware `task_builder`.
-
-Task keys may be:
-
-```text
-agent
-```
-
-or the more specific:
-
-```text
-phase:agent
-```
-
-Examples:
-
-```text
-ingress_quality:quality
-ingress_privacy:privacy
-analysis:reasoning
-egress_evaluation:evaluation
-egress_safety:safety
-egress_privacy:privacy
-observability:observability
-```
-
-A phase-specific value takes precedence over the generic agent key.
-
-If neither an explicit task nor a task builder can produce the native payload, orchestration raises `SLAIRuntimeContractError`. This is deliberate. Fabricating a Quality dataset identifier, a Privacy processing purpose, an Evaluation parameter set, or an agent-specific task schema would make the integration appear functional while changing product semantics without evidence.
-
-### 10.1 Recommended next contract step
-
-When BIMAP's simple first implementation stabilizes, a dedicated application-level task-plan contract may be introduced above `bimap/slai/` if recurring task shapes become stable. That future contract should be derived from actual audit-engine outputs and SLAI call requirements. It should not be invented inside `orchestration.py` merely for convenience.
-
----
-
-## 11. Shared-memory ownership
-
-The orchestrator uses a correlation-scoped namespace for BIMAP-owned handoff values:
-
-```text
-bimap.<correlation_id>.envelope
-bimap.<correlation_id>.grounded_context
-bimap.<correlation_id>.output.<phase>.<agent>
-```
-
-This prevents unrelated BIMAP jobs from deliberately sharing the same BIMAP integration keys.
-
-By default, the orchestrator deletes the BIMAP-owned keys it created when a job completes or fails. `retain_shared_memory=True` may be used only when an enclosing runtime explicitly owns retention/cleanup.
-
-Important boundary:
-
-> The orchestrator can only clean keys that **BIMAP itself created and recorded**. Individual SLAI agents may publish their own internal shared-memory records according to their SLAI configuration. Their TTL/retention behavior remains an SLAI-agent/runtime responsibility and must be included in deployment-level privacy/retention validation.
-
----
-
-## 12. Governance translation
-
-`governance.py` acts as an anti-corruption layer between SLAI-native terminology and BIMAP governance semantics.
-
-```mermaid
-flowchart LR
-    Q[QualityAgent] --> G[SLAIGovernance]
-    P[PrivacyAgent] --> G
-    S[SafetyAgent] --> G
-    E[EvaluationAgent] --> G
-
-    G --> PASS[pass]
-    G --> MODIFY[modify]
-    G --> WARN[warn]
-    G --> REVIEW[review]
-    G --> BLOCK[block]
-    G --> UNKNOWN[unknown]
-```
-
-The native vocabularies remain agent-specific. The mapper does not force all SLAI agents to emit one undocumented common schema.
-
-The normalized dispositions have distinct release meanings:
-
-- `pass`: gate cleared;
-- `modify`: Privacy permits continuation only with its sanitized payload;
-- `warn`: warning information exists but does not itself force review/block;
-- `review`: human or higher-level review is required;
-- `block`: release/workflow must stop;
-- `unknown`: required evidence/decision could not be established and must not become implicit approval.
-
-`governance.py` also composes normalized gate results with the existing domain `GovernanceDecision`/`Review` model when a canonical domain `Finding` is available.
-
-Product-specific confidence thresholds remain caller supplied. The integration layer does not invent a universal value.
-
----
-
-## 13. Result mapping and finding authority
-
-`SLAIResultMapper` preserves the distinction between **authoritative audit findings** and **supplemental SLAI outputs**.
-
-### 13.1 Authoritative findings
-
-The current complete customer-facing finding representation is `contracts/finding.py::FindingContract`. It includes fields that the smaller canonical domain `Finding` does not currently contain, including:
-
-- `rule_id`;
-- `scope`;
-- `automation_type`;
-- `status`;
-- `observed_value`;
-- `expected_value`;
-- `evidence_refs`;
-- `remediation`;
-- `verification_method`.
-
-For that reason, `result_mapper.py` does not attempt a lossy `FindingContract -> domain Finding -> FindingContract` round trip and does not create a second finding schema.
-
-The supplied `FindingContract` objects are preserved unchanged.
-
-### 13.2 Supplemental agent outputs
-
-Every orchestration invocation becomes a `MappedAgentOutput` containing:
-
-- agent name;
-- phase;
-- success state;
-- source output type;
-- whether the payload was safely JSON-projectable;
-- the JSON-safe payload when possible;
-- structured integration error metadata when present;
-- an explicit note when an output is opaque/non-JSON.
-
-Non-JSON supplemental outputs are never serialized using `repr()` as if that were canonical data. In permissive mode they become an explicit opaque record; in strict mode mapping fails.
-
-### 13.3 No inferred-finding fabrication
-
-The mapper deliberately does not inspect arbitrary `ReasoningAgent` or `LanguageAgent` text and synthesize a `FindingContract` from it. A future inferred-finding workflow would need, at minimum, a defined schema, evidence linkage policy, automation type, confidence semantics, validation rules, and governance path.
-
----
-
-## 14. Application adapter
-
-`SLAIAdapter` is the façade higher BIMAP layers should call.
-
-```mermaid
-flowchart LR
-    APP[Application service / worker] --> AD[SLAIAdapter]
-    AD --> BUILD[build_job_envelope]
-    BUILD --> ORCH[orchestrate_job]
-    ORCH --> MAP[result mapper]
-    MAP --> RES[SLAIMappedResult]
-```
-
-Primary operations are:
-
-```text
-build_job_envelope(...)
-orchestrate_job(...)
-process_job(...)
 process_audit_job(...)
 check_liveness()
 check_readiness(...)
-close()/shutdown()
+close()
+shutdown()
 ```
 
-`process_audit_job()` is the convenience path when the caller already owns:
+This prevents the application layer from depending on:
 
-- a validated `AuditJob`;
-- grounded JSON-safe context;
-- authoritative `FindingContract` records, if any;
-- the requested agent set, if different from policy defaults;
-- agent-native task payloads or an orchestrator configured with a task builder.
+- `AgentFactory`;
+- `SharedMemory`;
+- orchestration phases;
+- raw SLAI exceptions;
+- individual agent methods;
+- SLAI-native result classes.
 
-### 14.1 Current application-port status
-
-`bimap/app/ports/slai.py` is currently an empty scaffold. `SLAIAdapter` therefore implements the intended integration boundary structurally; it does not import or invent a Protocol/ABC that the application layer has not yet defined.
-
-Once `app/ports/slai.py` is formalized, it should describe this narrow façade rather than moving orchestration logic into the port interface.
+`invoke_slai()` also validates the mapped result before the application accepts it.
 
 ---
 
-## 15. Error model
+## 6. `adapter.py` — narrow runtime façade
 
-All integration failures derive from `SLAIIntegrationError` and use stable machine-readable codes.
+`SLAIAdapter` is the application-facing façade over this package.
 
-```mermaid
-flowchart TD
-    E[SLAIIntegrationError]
-    E --> CONFIG[Configuration / policy]
-    E --> ENV[Envelope validation/integrity]
-    E --> HEALTH[Runtime health/readiness]
-    E --> CONTRACT[Runtime contract mismatch]
-    E --> GOV[Governance conversion]
-    E --> MAP[Result mapping]
-    E --> ORCH[Orchestration]
-    ORCH --> INV[Agent invocation]
-```
+Its intended responsibilities are:
 
-Errors contain bounded diagnostic context and expose a structured `to_dict()` representation. Exception construction itself does not automatically spam logs; handled failures should be logged once at the architectural boundary that can act on them.
+1. accept a validated `AuditJob` plus grounded deterministic audit context;
+2. preserve the authoritative finding sequence supplied by the application;
+3. construct/validate the SLAI job envelope;
+4. delegate controlled execution to `SLAIOrchestrator`;
+5. map the orchestration result through `result_mapper.py`;
+6. expose liveness/readiness; and
+7. own shutdown/cleanup of resources it was constructed to own.
 
-Raw customer evidence, credentials, authorization tokens, and similar sensitive values must not be added to error context.
+`adapter.py` should not duplicate orchestration logic or construct business-domain findings.
 
-### 15.1 Retry semantics
+### Current documentation correction
 
-An exception's `retryable` flag is advisory metadata for the **application/worker layer**. The SLAI integration package does not implement distributed retry or exactly-once job submission.
+The current module header in `adapter.py` contains stale wording claiming that `app/ports/slai.py` does not yet define a concrete Protocol/ABC. That is no longer true: `SLAIPort`, `SLAIRequest`, `SlaiResult`, `SlaiHealth`, and the safe invocation helpers now exist in the application layer. The implementation should be treated as satisfying that formal structural port.
 
-In particular:
+---
+
+## 7. `job_envelope.py` — bounded grounded input
+
+`SLAIJobEnvelope` is the validated runtime envelope passed into SLAI orchestration.
+
+Its role is to carry stable BIMAP execution identity and grounded context without passing arbitrary application objects or unbounded customer state into agents.
+
+The envelope is expected to preserve concepts such as:
+
+- job identity;
+- order identity;
+- product identity/version context;
+- correlation identity;
+- grounded deterministic payload;
+- authoritative finding linkage;
+- requested/allowed agent scope;
+- bounded context size and task overrides where configured.
+
+The envelope must be integrity-checkable before agent execution.
+
+---
+
+## 8. `agent_policy.py` — which agents may participate
+
+`SLAIAgentPolicy` owns BIMAP's allow/deny policy for SLAI agent participation.
+
+The policy is a safety and architecture mechanism, not a frontend preference list. Requested agents must still be compatible with:
+
+- the BIMAP integration profile;
+- runtime availability/readiness;
+- the task builder's verified translation support; and
+- the allowed orchestration phase.
+
+The orchestrator creates only agents authorized by the effective policy for the validated envelope.
+
+A client must never be able to bypass this policy by supplying an arbitrary agent name in HTTP data.
+
+---
+
+## 9. `task_builder.py` — semantic translation boundary
+
+`BIMAPSLAITaskBuilder` is one of the most important current additions to the integration.
+
+It translates already-grounded BIMAP audit context into the heterogeneous task shapes expected by verified SLAI public agent APIs.
+
+It explicitly does **not**:
+
+- create findings;
+- create requirements;
+- create evidence;
+- execute deterministic rules;
+- instantiate agents;
+- call `AgentFactory`;
+- use `SharedMemory` directly;
+- persist customer data;
+- route agents;
+- bypass `SLAIAgentPolicy`;
+- fabricate incompatible task inputs.
+
+### 9.1 Resolution precedence
+
+Task resolution follows this order:
 
 ```text
-queue retry / dead-letter policy      -> worker/application infrastructure
-payment webhook idempotency           -> service/application layer
-SLAI agent invocation error metadata  -> bimap/slai
+phase-specific task_overrides
+        ↓
+agent-specific task_overrides
+        ↓
+BIMAPSLAITaskBuilder automatic translation
+        ↓
+explicit failure
 ```
 
-Keeping those responsibilities separate prevents an internal agent retry from accidentally duplicating a commercial order/job.
+This is intentional. Legitimate SLAI-native inputs that cannot be derived safely from a normal BIMAP post-audit result can still be supplied explicitly by a trusted caller, while automatic translation remains conservative.
 
 ---
 
-## 16. Logging and PrettyPrinter convention
+## 10. Automatically supported agents
 
-Every integration module uses the SLAI logging stack:
+The current task builder automatically supports only agents whose public task contracts can consume normal grounded BIMAP audit context without semantic fabrication:
 
-```python
-from logs.logger import PrettyPrinter, get_logger
+| Agent | Allowed automatic phase(s) | Role in BIMAP integration |
+|---|---|---|
+| `quality` | ingress quality, egress quality | Quality checks around grounded payload/output |
+| `privacy` | ingress privacy, egress privacy | Privacy gate/sanitization path |
+| `collaborative` | analysis | Structured collaborative assessment |
+| `knowledge` | analysis | Knowledge/retrieval/prediction path compatible with grounded context |
+| `reasoning` | analysis | Supplemental reasoning over grounded audit context |
+| `language` | analysis | Language-level processing over grounded context |
+| `safety` | egress safety | Safety gate over supplemental output |
+| `observability` | observability | Runtime/telemetry-oriented observation |
 
-logger = get_logger("...")
-printer = PrettyPrinter()
-```
-
-Public operations and important internal boundaries begin with a `PrettyPrinter.status(...)` diagnostic through the shared `announce_method_start(...)` helper. Structured Python logging is then used for lifecycle, completion, warnings, and failures.
-
-Correct logger usage is:
-
-```text
-logger.debug(...)
-logger.info(...)
-logger.warning(...)
-logger.error(...)
-```
-
-`get_logger()` returns a standard `logging.Logger`; the logger object itself is not callable.
-
-Method-start diagnostics should contain operation names and stable IDs only. They must not echo raw customer evidence.
+Automatic support is intentionally narrower than “agents available in SLAI.”
 
 ---
 
-## 17. Lifecycle and ownership
+## 11. Explicit-input-only agents
 
-`SLAIOrchestrator` and `SLAIAdapter` support explicit `close()` / `shutdown()` and context-manager usage.
+The current builder refuses to fabricate normal BIMAP tasks for these agents:
 
-```python
-with SLAIAdapter(...) as slai:
-    result = slai.process_audit_job(...)
-```
-
-Ownership rules:
-
-- if the orchestrator constructs its own `AgentFactory`, it owns factory shutdown;
-- if it constructs its own `SharedMemory`, it owns that memory object's shutdown;
-- injected factory/memory objects remain owned by the injector;
-- an adapter created without an orchestrator owns and closes its orchestrator;
-- an injected orchestrator is not closed by default unless `close_orchestrator=True` is explicitly supplied.
-
-These rules prevent double shutdown and make test/application dependency injection predictable.
-
----
-
-## 18. Failure semantics
-
-The integration layer fails explicitly at ambiguous boundaries.
-
-| Condition | Required behavior |
+| Agent | Why automatic BIMAP task construction is rejected |
 |---|---|
-| Unknown/disallowed agent requested | reject before AgentFactory invocation |
-| Job context digest mismatch | reject before agent execution |
-| Required SLAI runtime/agent unavailable | readiness failure; do not start audit analysis |
-| No agent-native task payload/task builder | runtime-contract failure; do not invent task semantics |
-| Quality/Privacy ingress review/block/unknown | terminate normal analysis path explicitly |
-| Governance agent returns non-mapping output | runtime-contract failure |
-| Privacy `modify` without usable sanitized payload | governance/runtime-contract failure |
-| Supplemental output cannot be made JSON-safe | explicit opaque mapping, or fail in strict mode |
-| Required governance gate absent | map to `UNKNOWN`, never implicit pass |
-| SLAI free-form output resembles a finding | do not create a `FindingContract` automatically |
+| `reader` | Requires reader-native file/document inputs not present in the normal post-audit context |
+| `perception` | Requires valid perception/image/tensor-style inputs |
+| `planning` | Current public execution surface does not expose a verified domain-remediation planning contract |
+| `execution` | Executable work must be explicitly constructed and separately authorized; findings must never imply automatic action |
+| `evaluation` | Current `execute_validation_cycle()` evaluates SLAI/system dimensions and is not a domain-neutral BIM audit-result evaluator |
+| `learning` | Live customer audits must not implicitly become training/learning events |
+| `adaptive` | Live audit execution must not implicitly adapt policy |
+| `qnn` | No verified implicit BIMAP audit task contract exists |
+
+This restriction is an architectural safety feature, not missing functionality to be “worked around.”
+
+If one of these agents becomes appropriate later, its task contract should first be verified and documented explicitly rather than fed a fabricated generic mapping.
 
 ---
 
-## 19. Minimal integration pattern
+## 12. `orchestration.py` — the only agent-construction/invocation module
 
-The following shows the intended dependency direction. The actual task payloads are deliberately represented as placeholders because they must follow the native SLAI agent contracts and BIMAP's grounded audit data.
+`SLAIOrchestrator` is the only module in `applications.bimap.slai` that should construct and invoke SLAI agents.
 
-```python
-from bimap.slai import SLAIAdapter
+It consumes:
 
-adapter = SLAIAdapter()
+- a validated `SLAIJobEnvelope`;
+- `SLAIAgentPolicy`;
+- runtime factory/shared-memory dependencies;
+- task-builder behavior; and
+- governance/health boundaries.
 
-envelope = adapter.build_job_envelope(
-    audit_job,
-    grounded_context=grounded_context,
-)
+It creates only authorized agents, performs readiness checks, coordinates shared-memory handoff, executes ordered phases, records invocation telemetry, and returns `SLAIOrchestrationResult`.
 
-result = adapter.process_job(
-    envelope,
-    authoritative_findings=findings,
-    task_overrides={
-        "ingress_quality:quality": quality_ingress_task,
-        "ingress_privacy:privacy": privacy_ingress_task,
-        "analysis:collaborative": collaborative_task,
-        "analysis:reader": reader_task,
-        "analysis:knowledge": knowledge_task,
-        "analysis:reasoning": reasoning_task,
-        "analysis:planning": planning_task,
-        "analysis:language": language_task,
-        "egress_quality:quality": quality_egress_task,
-        "egress_evaluation:evaluation": evaluation_task,
-        "egress_safety:safety": safety_task,
-        "egress_privacy:privacy": privacy_egress_task,
-        "observability:observability": observability_task,
-    },
-)
+It must not parse raw BIM model files, run deterministic BIM rules, mutate canonical findings, render reports, or own worker retry/exactly-once semantics.
+
+---
+
+## 13. Current orchestration phases
+
+Stable orchestration phase names are:
+
+```text
+ingress_quality
+ingress_privacy
+analysis
+egress_quality
+egress_evaluation
+egress_safety
+egress_privacy
+observability
 ```
 
-If the task construction becomes repetitive, inject one phase-aware `task_builder` into `SLAIOrchestrator` instead of duplicating task-shape logic in API routes or workers.
+These phase names provide deterministic telemetry/governance structure around heterogeneous agents.
+
+Not every phase must invoke an agent for every job. Effective execution is constrained by policy, requested/default agent scope, readiness, task availability, gate decisions, and early termination.
 
 ---
 
-## 20. Testing and validation expectations
+## 14. Invocation records and orchestration results
 
-A production release of this package should cover at least the following test classes.
+`AgentInvocationRecord` captures auditable metadata for one SLAI agent invocation, including:
 
-### 20.1 Policy and envelope
+- agent;
+- phase;
+- start/completion time;
+- duration;
+- success flag;
+- output type/output where explicitly included;
+- structured error metadata.
 
-- default/required agent resolution;
-- conditional/supporting/deferred/disabled policy behavior;
-- hard-disabled QNN behavior;
-- context size bounds;
-- envelope serialization round trip;
-- context digest tamper detection;
-- policy revalidation at execution time.
+Raw output is excluded by default from the normal serialized invocation metadata.
 
-### 20.2 Health
+`SLAIOrchestrationResult` captures the complete runtime result prior to BIMAP result mapping, including:
 
-- import liveness;
-- healthy/degraded/unavailable factory state;
-- shared-memory health failure;
-- missing required agent;
-- degraded-agent policy;
-- `assert_ready()` behavior.
+- job/order/correlation identity;
+- requested agent sequence;
+- invocation records;
+- agent outputs;
+- phase outputs;
+- gate outputs;
+- health report;
+- early-termination state/reason;
+- privacy-sanitized payload where applicable.
 
-### 20.3 Orchestration
-
-- exact requested-agent creation through `AgentFactory`;
-- no manual duplicate agent initialization;
-- native method-surface validation;
-- task resolution precedence (`phase:agent` before `agent`);
-- explicit failure when no task is defined;
-- ingress Quality early termination;
-- ingress Privacy modify/block/review behavior;
-- deterministic analysis order;
-- egress gate order;
-- correlation-scoped shared-memory cleanup;
-- invocation failure translation;
-- owned versus injected resource shutdown.
-
-### 20.4 Governance and mapping
-
-- Quality pass/warn/block normalization;
-- Privacy allow/modify/block/escalate normalization;
-- Safety allow/review/block normalization;
-- Evaluation approval/decision normalization;
-- missing required gate -> `UNKNOWN`;
-- authoritative finding identity/value preservation;
-- duplicate finding rejection;
-- JSON-safe supplemental output projection;
-- explicit opaque-output handling;
-- strict mapping mode;
-- no inferred finding fabrication.
-
-### 20.5 Adapter
-
-- envelope-only path;
-- orchestration-only path;
-- end-to-end map path with injected fakes;
-- liveness/readiness delegation;
-- closed-adapter behavior;
-- context-manager shutdown semantics.
+The result validates timestamp/identity/gate shape and early-termination consistency.
 
 ---
 
-## 21. Security and privacy boundaries
+## 15. `governance.py` — runtime gates, not domain decisions
 
-The `slai/` package operates after infrastructure upload controls but still handles customer-derived project context. The integration must therefore retain the following constraints:
+This module governs whether SLAI processing/output is acceptable to proceed through the integration runtime.
 
-- do not place raw file bytes in the SLAI job envelope;
-- do not place secrets or credentials in grounded context;
-- use stable internal references rather than customer filenames as authority;
-- keep diagnostic logs content-minimized;
-- let Privacy `modify` replace the active runtime payload before downstream analysis;
-- do not preserve BIMAP-owned shared-memory state beyond the configured lifecycle without an explicit owner;
-- treat missing/unknown governance data as non-clearance;
-- never expose internal chain-of-thought or unrestricted agent traces as customer report content;
-- maintain tenant/order authorization outside SLAI in the service/application layer.
+It should be understood separately from `domain/governance/`:
+
+```text
+slai/governance.py
+    -> runtime safety/privacy/quality acceptance of supplemental agent processing
+
+domain/governance/
+    -> canonical BIMAP review/decision business semantics
+```
+
+SLAI runtime governance must not emit authoritative compliance decisions merely because an agent produced persuasive text.
 
 ---
 
-## 22. Relationship to reporting
+## 16. `health.py` — SLAI liveness/readiness
 
-The SLAI integration package does not directly call the reporting package.
+The health layer reports whether the integration is alive and whether the required agent/runtime dependencies are ready for use.
+
+The app-facing `SLAIPort` exposes both:
+
+```text
+check_liveness()
+check_readiness(required_agents=..., prepare=...)
+```
+
+Readiness should account for the explicit/default agent set relevant to the deployment rather than equating “Python process exists” with “all required SLAI capability is usable.”
+
+Health data is projected through the API health route; the API does not inspect `AgentFactory` directly.
+
+---
+
+## 17. `result_mapper.py` — stable BIMAP-facing result
+
+The result mapper converts internal `SLAIOrchestrationResult` into the stable result surface expected by the application port.
+
+Its most important responsibility is preserving the separation between:
+
+- **authoritative deterministic findings**; and
+- **supplemental SLAI outputs/metadata**.
+
+The mapper should normalize runtime-specific values into JSON-safe BIMAP-owned structures and expose mapping warnings when information cannot be projected safely.
+
+It must not synthesize deterministic findings from free-form agent text.
+
+---
+
+## 18. Authoritative finding invariant
+
+The full protection chain is:
 
 ```mermaid
 flowchart LR
-    RULES[Deterministic findings] --> APP[Application governance/release service]
-    SLAI[SLAIMappedResult] --> APP
-    APP --> APPROVED[Approved FindingContract / RequirementContract / evidence]
-    APPROVED --> REPORTING[bimap/reporting]
+    DET[AuditResult.findings]
+    REQ[SLAIRequest.authoritative_findings]
+    ENV[SLAIJobEnvelope]
+    ORCH[SLAI supplemental processing]
+    MAP[Mapped SLAI result]
+    INV[invoke_slai validation]
+    COMBO[AuditExecutionResult]
+
+    DET --> REQ --> ENV --> ORCH --> MAP --> INV --> COMBO
+    DET -. must equal .-> MAP
+    DET -. must equal .-> COMBO
 ```
 
-This preserves the reporting-layer rule that report generation consumes already-authorized audit state and does not become a second governance engine.
+`app/ports/slai.py:invoke_slai()` rejects a mapped result if its authoritative finding tuple differs from the input request.
+
+`AuditExecutionResult` validates the invariant again against the deterministic `AuditResult`.
+
+This redundancy is deliberate because it protects BIMAP's authority boundary at both the SLAI port and complete audit-result levels.
 
 ---
 
-## 23. Relationship to future Revit/APS integration
+## 19. Grounded-context rule
 
-Revit extraction and Autodesk Platform Services processing belong upstream of this package. Whether evidence came from:
+SLAI receives the deterministic audit context produced by BIMAP, not an independently re-parsed interpretation of the customer's model.
 
-- controlled CSV/XLSX/PDF exports;
-- the future R3D Revit Exporter;
-- IFC/openBIM processing;
-- later APS Revit Automation;
+Current application behavior uses:
 
-the SLAI boundary should consume the same stable BIMAP evidence/contracts wherever possible.
+```text
+AuditResult.to_dict()
+    ↓
+SLAIRequest.grounded_context
+```
 
-This keeps SLAI orchestration independent from the mechanism used to obtain source evidence.
+This prevents the supplemental layer from silently using a different source-of-truth representation than the deterministic audit path.
 
----
-
-## 24. Current deliberate constraints
-
-The current repository still has two intentionally unresolved higher-level contracts:
-
-1. `bimap/app/ports/slai.py` does not yet define a formal application Protocol/ABC.
-2. `bimap/audit_engine/result.py` does not yet define a canonical phase-aware SLAI task-plan representation.
-
-The integration layer handles those gaps conservatively:
-
-- `SLAIAdapter` exposes a narrow structural façade without inventing an application interface;
-- `SLAIOrchestrator` requires explicit agent-native tasks or an injected task builder rather than guessing a universal task schema.
-
-These are not placeholders inside the implemented runtime logic. They are explicit architecture boundaries waiting for the corresponding application/audit-engine contracts to become defined by actual use.
+If privacy ingress modifies the runtime payload, the task builder receives the sanitized current payload supplied by the orchestrator rather than reaching around the privacy gate to reconstruct the original data.
 
 ---
 
-## 25. Extension rules
+## 20. Shared memory and AgentFactory
 
-When extending `bimap/slai/`:
+`AgentFactory` and `SharedMemory` belong inside the SLAI runtime integration and deployment composition.
 
-1. Reuse `slai_errors.py` and `slai_helpers.py`; do not create module-local duplicate error/helper systems.
-2. Add agent permissions to `agent_policy.py`, not directly to `orchestration.py`.
-3. Keep `AuditJob` as the external job contract; extend `SLAIJobEnvelope` only for SLAI-bound runtime metadata that cannot live in the external work contract.
-4. Do not import higher BIMAP layers into lower SLAI modules to gain convenience access to services.
-5. Do not instantiate SLAI agents outside `orchestration.py` unless a separate, explicitly justified integration boundary is introduced.
-6. Do not call `initialize()` merely because an agent exposes it; respect `AgentFactory` lifecycle ownership.
-7. Add new native agent invocation surfaces only after verifying them against the targeted SLAI version.
-8. Keep governance vocabularies explicit; do not silently coerce an unknown native token to pass.
-9. Do not convert arbitrary agent prose into deterministic findings.
-10. Keep report rendering and storage publication outside this package.
-11. Preserve stable identifiers and evidence references across every mapping boundary.
-12. Update this README and regression tests whenever the agent set, gate order, task contract, or ownership model changes.
+They must not leak into:
+
+- API route constructors;
+- application services;
+- domain models;
+- persisted Audit Workspace schema as opaque Python objects.
+
+Only `orchestration.py` should construct/invoke agents inside this package.
 
 ---
 
-## 26. Summary
+## 21. Task overrides
 
-`bimap/slai/` is a narrow, governed integration layer rather than a second application core. It:
+Task overrides exist for trusted cases where an agent requires legitimate SLAI-native input that cannot be derived automatically from normal grounded audit output.
 
-- constrains BIMAP to an explicit SLAI agent policy;
-- wraps the existing `AuditJob` in an integrity-checked runtime envelope;
-- verifies runtime readiness;
-- constructs agents through SLAI's own `AgentFactory`;
-- coordinates ingress, analysis, egress and observability phases;
-- requires explicit native agent task semantics instead of fabricating them;
-- translates SLAI governance outputs into stable BIMAP dispositions;
-- preserves deterministic findings as authoritative;
-- maps supplemental outputs safely;
-- exposes one application-facing adapter;
-- owns only the runtime resources it constructs;
-- keeps errors and logs structured, bounded and content-minimized.
+They are not a way to bypass:
 
-The resulting dependency direction keeps BIMAP's evidence, findings, governance meaning, external contracts, and reporting reproducible even while SLAI provides the higher-order reasoning and governance capabilities around them.
+- agent policy;
+- allowed phases;
+- envelope integrity;
+- privacy/safety gates;
+- application finding invariants.
+
+Overrides must remain bounded, explicit, and validated.
+
+---
+
+## 22. Error model
+
+`slai/utils/slai_errors.py` defines the SLAI-integration-specific error vocabulary.
+
+Errors should capture integration/runtime contract failures without exposing raw agent internals to the API.
+
+The expected translation direction is:
+
+```text
+SLAI/native agent/runtime exception
+        ↓
+slai integration error
+        ↓
+app/ports/slai.py invocation wrapper
+        ↓
+AppPortOperationError / AppPortUnavailableError / AppPortTimeoutError etc.
+        ↓
+API safe mapping
+```
+
+Application code should not need to know specific SLAI internal exception classes.
+
+---
+
+## 23. Helpers
+
+`slai/utils/slai_helpers.py` centralizes normalization required by the integration, including concepts such as:
+
+- agent name/sequence normalization;
+- JSON-safe mapping projection;
+- bounded text/context handling;
+- UTC datetime formatting/validation;
+- reusable logging/action helpers.
+
+Helpers should not become hidden orchestration logic.
+
+---
+
+## 24. Data privacy and customer-data constraints
+
+The SLAI integration is especially sensitive because it handles derived customer audit context.
+
+Required principles:
+
+1. do not pass raw customer files to agents unless an explicitly verified reader/perception workflow is designed;
+2. do not use live audit data for implicit learning/adaptation;
+3. do not persist agent-private runtime objects in the Audit Workspace;
+4. sanitize through the privacy phase where configured;
+5. include only JSON-safe projections of prior outputs in automatically generated downstream tasks;
+6. do not log full grounded payloads by default;
+7. maintain explicit correlation/job/order identity for traceability.
+
+---
+
+## 25. Early termination
+
+The orchestrator may terminate supplemental processing early when governance/readiness/runtime conditions require it.
+
+Early termination must be explicit:
+
+```text
+terminated_early = True
+termination_reason = non-empty reason
+```
+
+A terminated SLAI pass does not invalidate or erase the already-produced deterministic audit result. The application can still distinguish deterministic audit truth from incomplete supplemental intelligence.
+
+---
+
+## 26. Dependency direction and circular-import boundary
+
+The internal dependency direction should remain one-way:
+
+```text
+utils
+  ↓
+agent_policy / job_envelope / health / governance / task_builder
+  ↓
+orchestration
+  ↓
+result_mapper
+  ↓
+adapter
+```
+
+`orchestration.py` must not import `result_mapper.py` or `adapter.py`. This is an intentional circular-import boundary.
+
+`task_builder.py` may depend on integration primitives and orchestration phase vocabulary, but it must not instantiate agents or perform routing.
+
+---
+
+## 27. Deployment composition
+
+The current development deployment imports and injects `BIMAPSLAITaskBuilder` explicitly from this package.
+
+The deployment/bootstrap layer is responsible for selecting:
+
+- SLAI profile/configuration;
+- required/default agents;
+- `AgentFactory`/`SharedMemory` dependencies;
+- task builder;
+- policy/governance settings;
+- adapter ownership/lifecycle.
+
+`slai/` should not read frontend state or silently choose deployment policy from environment variables that belong to the composition root.
+
+---
+
+## 28. Testing expectations
+
+### Unit tests
+
+Cover:
+
+- envelope identity/context-size validation;
+- agent policy allow/deny behavior;
+- task builder automatic agent mappings;
+- rejection of explicit-input-only agents without trusted overrides;
+- phase restrictions;
+- JSON-safe prior-output projection;
+- governance gate behavior;
+- health result validation;
+- orchestration invocation ordering;
+- early termination invariants;
+- result mapper serialization/warnings;
+- exact authoritative finding preservation;
+- adapter lifecycle/health behavior.
+
+### Integration tests
+
+Use controlled fake agents/factories where possible to verify:
+
+- only authorized agents are instantiated;
+- readiness is checked before execution;
+- privacy-modified payload is used downstream;
+- no raw agent object leaks into mapped results;
+- a changed authoritative finding sequence is rejected by `invoke_slai()`;
+- completed mapped results can be persisted inside the application Audit Workspace.
+
+---
+
+## 29. Current implementation/documentation corrections
+
+The current repository requires these corrections to older `slai/README.md` content:
+
+1. `task_builder.py` now exists and is a central semantic translation boundary.
+2. `app/ports/slai.py` now formally defines the application-facing port and validation helpers.
+3. `adapter.py` should be described as the structural implementation of that port, not as a temporary façade waiting for a port to exist.
+4. `utils/` contains `__init__.py`, `slai_errors.py`, and `slai_helpers.py`; documentation should not list a non-existent `utils/__all__.py` module.
+5. Automatic task translation is deliberately limited to quality, privacy, collaborative, knowledge, reasoning, language, safety, and observability.
+6. Reader, perception, planning, execution, evaluation, learning, adaptive, and QNN remain explicit-input-only under the current verified contracts.
+7. Evaluation is specifically not auto-used because the current SLAI `execute_validation_cycle()` is system/SLAI-oriented rather than a domain-neutral BIM audit-result evaluator.
+
+---
+
+## 30. Extension checklist
+
+Before increasing SLAI involvement in BIMAP:
+
+1. Confirm the deterministic Audit Engine remains authoritative for the target decision.
+2. Identify the exact public SLAI agent API being used.
+3. Verify that normal grounded BIMAP data can satisfy that API without fabrication.
+4. Add automatic task translation only when semantics are safe and testable.
+5. Otherwise require an explicit trusted task override.
+6. Define the allowed orchestration phase.
+7. Update `SLAIAgentPolicy`/profile configuration deliberately.
+8. Add readiness checks for the required agent.
+9. Normalize result data through the mapper; do not persist raw runtime objects.
+10. Preserve the exact authoritative finding tuple.
+11. Add tests for gate/early-termination/error behavior.
+12. Update this README.
+
+---
+
+## 31. Summary
+
+`slai/` is the controlled intelligence boundary that lets BIMAP benefit from SLAI without making the integration intrusive or authoritative over deterministic audit truth.
+
+The intended flow is:
+
+```text
+Deterministic BIMAP AuditResult
+    ↓
+SLAIRequest + authoritative findings
+    ↓
+validated envelope + policy
+    ↓
+verified task translation
+    ↓
+governed SLAI orchestration
+    ↓
+BIMAP result mapping
+    ↓
+application invariant validation
+    ↓
+persisted Audit Workspace
+```
+
+The safest way to increase SLAI's involvement is therefore **not** to call more agents indiscriminately. It is to extend verified, phase-specific task mappings and result projections while preserving the application port, governance gates, and deterministic finding authority.
