@@ -71,6 +71,21 @@ def _translate_domain_error(message: str, *, field: str | None = None, cause: Ba
     ) from cause
 
 
+def _parse_contract_datetime(value: str | datetime, *, field: str) -> datetime:
+    if isinstance(value, datetime):
+        return value
+
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be a string or datetime.")
+
+    raw = value.strip()
+
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
+
+    return datetime.fromisoformat(raw)
+
+
 @dataclass(frozen=True, slots=True)
 class OrderEventContract:
     """Stable nested representation of one append-only order lifecycle event."""
@@ -88,10 +103,9 @@ class OrderEventContract:
     def __post_init__(self) -> None:
         _announce("Validating order-event contract")
         try:
-            occurred_at: datetime = (
-                self.occurred_at
-                if isinstance(self.occurred_at, datetime)
-                else datetime.fromisoformat(self.occurred_at)
+            occurred_at = _parse_contract_datetime(
+                self.occurred_at,
+                field="occurred_at",
             )
             from_state: OrderState | None = (
                 self.from_state
@@ -157,10 +171,9 @@ class OrderEventContract:
         """Convert the nested contract to the canonical domain OrderEvent."""
         _announce("Converting order-event contract to domain")
         try:
-            occurred_at = (
-                self.occurred_at
-                if isinstance(self.occurred_at, datetime)
-                else datetime.fromisoformat(self.occurred_at)
+            occurred_at = _parse_contract_datetime(
+                self.occurred_at,
+                field="occurred_at",
             )
             from_state = (
                 None
@@ -179,7 +192,7 @@ class OrderEventContract:
                 actor=self.actor,
                 metadata=self.metadata,
             )
-        except DomainError as exc:
+        except (DomainError, TypeError, ValueError) as exc:
             _translate_domain_error(
                 "Order-event contract cannot be converted to domain form.",
                 field="event",
@@ -317,23 +330,22 @@ class OrderContract:
             normalized_events.append(normalized)
 
         try:
-            created_at: datetime = (
-                self.created_at
-                if isinstance(self.created_at, datetime)
-                else datetime.fromisoformat(self.created_at)
+            created_at = _parse_contract_datetime(
+                self.created_at,
+                field="created_at",
             )
-            updated_at: datetime = (
-                self.updated_at
-                if isinstance(self.updated_at, datetime)
-                else datetime.fromisoformat(self.updated_at)
+
+            updated_at = _parse_contract_datetime(
+                self.updated_at,
+                field="updated_at",
             )
-            retention_expires_at: datetime | None = (
+
+            retention_expires_at = (
                 None
                 if self.retention_expires_at is None
-                else (
-                    self.retention_expires_at
-                    if isinstance(self.retention_expires_at, datetime)
-                    else datetime.fromisoformat(self.retention_expires_at)
+                else _parse_contract_datetime(
+                    self.retention_expires_at,
+                    field="retention_expires_at",
                 )
             )
             domain_order = Order(
@@ -351,7 +363,7 @@ class OrderContract:
                 metadata=self.metadata,
                 events=tuple(event.to_domain() for event in normalized_events),
             )
-        except DomainError as exc:
+        except (DomainError, TypeError, ValueError) as exc:
             _translate_domain_error(
                 "Order contract violates canonical order aggregate invariants.",
                 cause=exc,
@@ -399,7 +411,7 @@ class OrderContract:
         # Handle UTC marker 'Z' by converting to ISO offset format
         if isinstance(value, str) and value.endswith('Z'):
             value = value[:-1] + '+00:00'
-        return datetime.fromisoformat(value)
+        return _parse_contract_datetime(value, field="datetime")
 
     @staticmethod
     def _event_to_dict(
