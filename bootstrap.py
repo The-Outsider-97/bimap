@@ -1034,6 +1034,8 @@ class Bootstrap:
                     audit_engine,
                     cast(Any, slai_adapter),
                     self.infrastructure.repository,
+                    audit_results=self.infrastructure.audit_results,
+                    clock=self.infrastructure.clock,
                     queue=self.infrastructure.queue,
                 )
 
