@@ -77,8 +77,6 @@ from applications.bimap.domain.products.models import ( # type: ignore
     ProductCode,
     ProductDefinition,
 )
-from applications.bimap.utils.plan_loader import load_account_plan_catalog # type: ignore
-from applications.bimap.utils.config_loader import load_bimap_config  # type: ignore
 from applications.bimap.infra.local import ( # type: ignore
     CalendarUTCRenewalWindowResolver,
     DevelopmentMalware,
@@ -106,6 +104,9 @@ from applications.bimap.infra.extraction import ( # type: ignore
     TrimeshDataExtractor,
 )
 from applications.bimap.infra.reportlab_data_extraction_renderer import ReportLabDataExtractionPDFRenderer # type: ignore
+from applications.bimap.slai.task_builder import BIMAPSLAITaskBuilder # type: ignore
+from applications.bimap.utils.plan_loader import load_account_plan_catalog # type: ignore
+from applications.bimap.utils.config_loader import load_bimap_config, load_slai_profile  # type: ignore
 from src.functions.auth import AuthService as SLAIAuthService  # type: ignore
 from src.functions.phone_verification import PhoneVerificationService, TwilioBackend  # type: ignore
 from src.agents.collaborative.shared_memory import SharedMemory  # type: ignore
@@ -675,6 +676,7 @@ def _create_local_bootstrap() -> Bootstrap:
         data_extractor=data_extractor,
         data_extraction_pdf_renderer=data_extraction_pdf_renderer,
         audit_results=InMemoryAuditResultStore(),
+        slai_task_builder = BIMAPSLAITaskBuilder()
     )
 
     # ---------------------------------------------------------
@@ -686,7 +688,7 @@ def _create_local_bootstrap() -> Bootstrap:
         api_settings=_build_api_settings(),
         account_plans=plan_catalog,
         product_limits=(),
-        slai_profile=None,
+        slai_profile=load_slai_profile(),
         slai_required_agents=None,
         allow_degraded_slai_readiness=False,
         retain_slai_shared_memory=False,
