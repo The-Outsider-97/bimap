@@ -36,7 +36,7 @@ import {
   type AuditWorkspaceDto,
   type ReportListDto,
 } from "@/lib/audit-api";
-
+import { SLAIInsights } from "./SLAIInsights";
 import { BIMModelViewer } from "./BIMModelViewer";
 import styles from "./AuditWorkspace.module.css";
 
@@ -1501,6 +1501,12 @@ export function AuditWorkspace({ productCode }: Props) {
           </div>
         </aside>
       </div>
+
+      {workspace ? (
+        <SLAIInsights
+          result={workspace.payload.slai}
+        />
+      ) : null}
 
       {activeTarget?.path ? (
         <div className={styles.traceBar}>
