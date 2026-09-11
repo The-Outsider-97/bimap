@@ -201,6 +201,136 @@ class WorkerAudit:
             context={"job_id": job.job_id, "order_id": job.order_id},
             error_type=WorkerAuditError,
         )
+        if (
+            order.state
+            is not OrderState.ANALYZING
+        ):
+            raise WorkerValidationError(
+                "Audit worker requires an analyzing order.",
+                component=_COMPONENT,
+                operation="execute",
+                field="order.state",
+                job_type="audit",
+                job_id=job.job_id,
+                context={
+                    "order_id":
+                        order.order_id,
+                    "state":
+                        order.state.value,
+                },
+            )
+
+        # ---------------------------------------------------------
+        # Resolve canonical prepared audit input
+        # ---------------------------------------------------------
+
+        if (
+            family_payload is None
+            and project_payload is None
+        ):
+            if job.evidence_manifest_ref is None:
+                raise WorkerValidationError(
+                    "AuditJob does not reference a "
+                    "prepared audit-input manifest.",
+                    component=_COMPONENT,
+                    operation="execute",
+                    field=(
+                        "job.evidence_manifest_ref"
+                    ),
+                    job_type="audit",
+                    job_id=job.job_id,
+                )
+
+            resolved = (
+                self._audit_inputs.resolve(
+                    job.evidence_manifest_ref,
+                    expected_order_id=(
+                        job.order_id
+                    ),
+                    expected_product_code=(
+                        job.product_code
+                    ),
+                )
+            )
+
+            family_payload = resolved.family_payload
+            project_payload = resolved.project_payload
+
+        # ---------------------------------------------------------
+        # Execute deterministic + SLAI audit
+        # ---------------------------------------------------------
+
+        result = run_worker_dependency(
+            lambda: self._service.run_audit(
+                job,
+                family_payload=family_payload,
+                project_payload=project_payload,
+                requirements=requirements,
+                family_rule_ids=family_rule_ids,
+                family_versions=family_versions,
+                project_rule_ids=project_rule_ids,
+                project_versions=project_versions,
+                metadata=metadata,
+                requested_agents=requested_agents,
+                correlation_id=correlation_id,
+                max_context_bytes=max_context_bytes,
+                task_overrides=task_overrides,
+            ),
+            component=_COMPONENT,
+            operation="execute",
+            message=(
+                "AuditService failed while "
+                "executing an audit job."
+            ),
+            context={
+                "job_id": job.job_id,
+                "order_id": job.order_id,
+            },
+            error_type=WorkerAuditError,
+        )
+
+        validated = require_worker_result(
+            result,
+            AuditExecutionResult,
+            component=_COMPONENT,
+            operation="execute",
+            message=(
+                "AuditService returned an unsupported "
+                "audit execution result."
+            ),
+        )
+
+        if (
+            validated.job.job_id
+            != job.job_id
+            or validated.job.order_id
+            != job.order_id
+        ):
+            raise WorkerIntegrityError(
+                "Audit worker result is bound "
+                "to a different job/order.",
+                component=_COMPONENT,
+                operation="execute",
+                field="result.job",
+                job_type="audit",
+                job_id=job.job_id,
+                context={
+                    "requested_order_id": job.order_id,
+                    "returned_job_id": validated.job.job_id,
+                    "returned_order_id": validated.job.order_id,
+                },
+            )
+
+        # Result is validated and persisted by AuditService
+        # before the observable lifecycle advances.
+        self._order_service.transition(
+            job.order_id,
+            OrderState.GOVERNANCE_REVIEW,
+            idempotency_key=(
+                f"{job.job_id}:governance-review"
+            ),
+            actor="bimap-worker",
+        )
         validated = require_worker_result(
             result,
             AuditExecutionResult,
@@ -230,29 +360,6 @@ class WorkerAudit:
                     "returned_order_id": validated.job.order_id,
                 },
             )
-
-        if (
-            family_payload is None
-            and project_payload is None
-        ):
-            if job.evidence_manifest_ref is None:
-                raise WorkerValidationError(
-                    "AuditJob does not reference a prepared audit-input manifest.",
-                    component=_COMPONENT,
-                    operation="execute",
-                    field="job.evidence_manifest_ref",
-                    job_type="audit",
-                    job_id=job.job_id,
-                )
-
-            resolved = self._audit_inputs.resolve(
-                job.evidence_manifest_ref,
-                expected_order_id=job.order_id,
-                expected_product_code=job.product_code,
-            )
-
-            family_payload = resolved.family_payload
-            project_payload = resolved.project_payload
 
         logger.info(
             {
