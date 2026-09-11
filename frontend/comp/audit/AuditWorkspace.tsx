@@ -358,9 +358,9 @@ export function AuditWorkspace({ productCode }: Props) {
   const [orderId, setOrderId] = useState("");
   const [familySourceFiles, setFamilySourceFiles] = useState<readonly File[]>([]);
   const [projectSourceFile, setProjectSourceFile] = useState<File | null>(null);
-  const [stagedAuditSources, setStagedAuditSources] = useState<readonly BimapStagedUploadDto[]>([]);
   const [uploadingAuditSource, setUploadingAuditSource] = useState(false);
   const [auditUploadMessage, setAuditUploadMessage] = useState<string | null>(null);
+
   const [status, setStatus] = useState<AuditStatusDto | null>(null);
   const [workspace, setWorkspace] = useState<AuditWorkspaceDto | null>(null);
   const [reports, setReports] = useState<ReportListDto | null>(null);
@@ -372,7 +372,6 @@ export function AuditWorkspace({ productCode }: Props) {
   const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(null);
   const [modelUrl, setModelUrl] = useState<string | null>(null);
   const [modelName, setModelName] = useState<string | null>(null);
-  const [auditSourceFiles, setAuditSourceFiles] = useState<readonly File[]>([]);
   const pollRef = useRef<number | null>(null);
   const modelUrlRef = useRef<string | null>(null);
 
@@ -545,184 +544,6 @@ export function AuditWorkspace({ productCode }: Props) {
     }, 2500);
   }, [refreshStatus, stopPolling]);
 
-const onAuditSourceFiles = useCallback(
-  (event: ChangeEvent<HTMLInputElement>) => {
-    const files =
-      Array.from(
-        event.target.files ?? [],
-      );
-
-    setAuditSourceFiles(files);
-    setAuditUploadMessage(null);
-  },
-  [],
-);
-
-
-const onUploadAuditSources = useCallback(
-  async () => {
-    if (auditSourceFiles.length === 0) {
-      setAuditUploadMessage(
-        "Choose at least one model file.",
-      );
-      return;
-    }
-
-    setUploadingAuditSource(true);
-    setAuditUploadMessage(
-      "Preparing audit model upload…",
-    );
-
-    try {
-      let targetOrderId =
-        orderId.trim();
-
-      let order;
-
-      /*
-       * Normal audit workflow:
-       *
-       * No Order ID exists yet -> BIMAP creates the audit order.
-       *
-       * An explicitly supplied Order ID remains supported for
-       * resuming an existing audit.
-       */
-      if (!targetOrderId) {
-        order =
-          await createOrder({
-            productCode,
-          });
-
-        targetOrderId =
-          order.order_id;
-
-        setOrderId(
-          targetOrderId,
-        );
-      } else {
-        order =
-          await getOrder(
-            targetOrderId,
-          );
-
-        if (
-          order.product_code !==
-          productCode
-        ) {
-          throw new Error(
-            `Order ${targetOrderId} belongs to ` +
-            `${order.product_code}, not ${productCode}.`,
-          );
-        }
-      }
-
-      /*
-       * Enter the canonical upload lifecycle only when required.
-       */
-      if (
-        order.state === "draft"
-      ) {
-        order =
-          await beginOrderUploads(
-            targetOrderId,
-            crypto.randomUUID(),
-          );
-      }
-
-      if (
-        order.state !== "uploading"
-      ) {
-        throw new Error(
-          `Models cannot be uploaded while the audit is in ` +
-          `"${order.state.replaceAll("_", " ")}" state.`,
-        );
-      }
-
-      const uploaded:
-        BimapStagedUploadDto[] = [];
-
-      for (
-        const file of
-        auditSourceFiles
-      ) {
-        setAuditUploadMessage(
-          `Uploading ${file.name}…`,
-        );
-
-        const staged =
-          await stageOrderModelUpload(
-            targetOrderId,
-            file,
-          );
-
-        uploaded.push(
-          staged,
-        );
-      }
-
-      setStagedAuditSources(
-        (current) => {
-          const merged =
-            new Map<
-              string,
-              BimapStagedUploadDto
-            >();
-
-          for (
-            const item of
-            current
-          ) {
-            merged.set(
-              item.source_ref,
-              item,
-            );
-          }
-
-          for (
-            const item of
-            uploaded
-          ) {
-            merged.set(
-              item.source_ref,
-              item,
-            );
-          }
-
-          return Array.from(
-            merged.values(),
-          );
-        },
-      );
-
-      setAuditSourceFiles(
-        [],
-      );
-
-      setAuditUploadMessage(
-        `${uploaded.length} model${
-          uploaded.length === 1
-            ? ""
-            : "s"
-        } uploaded successfully.`,
-      );
-    } catch (error) {
-      setAuditUploadMessage(
-        getApiErrorMessage(
-          error,
-        ),
-      );
-    } finally {
-      setUploadingAuditSource(
-        false,
-      );
-    }
-  },
-  [
-    auditSourceFiles,
-    orderId,
-    productCode,
-  ],
-);
 
 const onStart = useCallback(
   async () => {
@@ -828,10 +649,6 @@ const onStart = useCallback(
           ),
         );
       }
-
-      setStagedAuditSources(
-        uploaded,
-      );
 
       setAuditUploadMessage(
         "Models validated. Preparing audit evidence…",
