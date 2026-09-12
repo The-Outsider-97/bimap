@@ -38,6 +38,7 @@ type AttemptIdentity = {
   fingerprint: string;
   extractionId: string;
   idempotencyKey: string;
+  utcOffsetMinutes: number;
 };
 
 
@@ -177,6 +178,8 @@ function fileFingerprint(
   datasets:
     readonly ExtractionDataset[],
   emailResult: boolean,
+  projectName: string,
+  utcOffsetMinutes: number,
 ): string {
   return [
     file.name,
@@ -189,6 +192,8 @@ function fileFingerprint(
     emailResult
       ? "email"
       : "download",
+    projectName.trim(),
+    utcOffsetMinutes,
   ].join(":");
 }
 
@@ -244,6 +249,13 @@ export function DataExtractionClient() {
     useState<File | null>(
       null,
     );
+
+
+  const [
+    projectName,
+    setProjectName,
+  ] =
+    useState("");
 
 
   const [
@@ -598,6 +610,24 @@ export function DataExtractionClient() {
     }, []);
 
 
+  const onProjectChange =
+    useCallback(
+      (
+        event:
+          ChangeEvent<HTMLInputElement>,
+      ) => {
+        setProjectName(
+          event.currentTarget.value,
+        );
+
+        resetAttempt();
+      },
+      [
+        resetAttempt,
+      ],
+    );
+
+
   const onFileChange =
     useCallback(
       (
@@ -752,11 +782,17 @@ export function DataExtractionClient() {
       (
         source: File,
       ): AttemptIdentity => {
+        const utcOffsetMinutes =
+          -new Date()
+            .getTimezoneOffset();
+
         const fingerprint =
           fileFingerprint(
             source,
             datasets,
             emailResult,
+            projectName,
+            utcOffsetMinutes,
           );
 
         const existing =
@@ -777,6 +813,7 @@ export function DataExtractionClient() {
               crypto.randomUUID(),
             idempotencyKey:
               crypto.randomUUID(),
+            utcOffsetMinutes,
           };
 
         attemptRef.current =
@@ -787,6 +824,7 @@ export function DataExtractionClient() {
       [
         datasets,
         emailResult,
+        projectName,
       ],
     );
 
@@ -868,6 +906,12 @@ export function DataExtractionClient() {
                   attempt
                     .idempotencyKey,
                 emailResult,
+                project:
+                  projectName.trim() ||
+                  undefined,
+                utcOffsetMinutes:
+                  attempt
+                    .utcOffsetMinutes,
                 signal:
                   controller.signal,
               },
@@ -959,6 +1003,7 @@ export function DataExtractionClient() {
         emailResult,
         file,
         getAttempt,
+        projectName,
         refreshUsage,
         sourceCapability,
       ],
@@ -1172,6 +1217,43 @@ export function DataExtractionClient() {
                             )
                   }
                 </span>
+              </label>
+
+
+              <label
+                className={
+                  styles.projectField
+                }
+              >
+                <span>
+                  Project
+                  <small>
+                    Optional
+                  </small>
+                </span>
+
+                <input
+                  type="text"
+                  value={
+                    projectName
+                  }
+                  onChange={
+                    onProjectChange
+                  }
+                  maxLength={
+                    512
+                  }
+                  disabled={
+                    workState ===
+                    "working"
+                  }
+                  placeholder={
+                    "Project name"
+                  }
+                  autoComplete={
+                    "off"
+                  }
+                />
               </label>
 
 
