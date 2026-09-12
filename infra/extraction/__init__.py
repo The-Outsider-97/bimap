@@ -173,6 +173,10 @@ class MultiFormatDataExtractor(DataExtractor):
         source, extractor = self._resolve(source_format, operation="extract")
         return extractor.extract(stream, source_format=source, datasets=datasets)
 
+    def render_preview(self,stream: BinaryIO, *, source_format: ExtractionSourceFormat) -> bytes | None:
+        source, extractor = self._resolve(source_format, operation="render_preview")
+        return extractor.render_preview(stream, source_format=source)
+
 
 from .ifc_extractor import IfcOpenShellDataExtractor
 from .revit_extractor import RevitDataExtractor, RevitExtractionBackend
