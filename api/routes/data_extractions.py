@@ -56,6 +56,38 @@ def _parse_email_result(value: str) -> bool:
     )
 
 
+def _parse_utc_offset_minutes(value: str) -> int:
+    normalized = value.strip()
+
+    try:
+        offset = int(normalized)
+    except ValueError as exc:
+        raise APIValidationError(
+            "utc_offset_minutes must be an integer.",
+            public_message="The browser time offset is invalid.",
+            component=_COMPONENT,
+            operation="extract",
+            field="utc_offset_minutes",
+            cause=exc,
+        ) from exc
+
+    if not -840 <= offset <= 840:
+        raise APIValidationError(
+            "utc_offset_minutes is outside the supported range.",
+            public_message="The browser time offset is invalid.",
+            component=_COMPONENT,
+            operation="extract",
+            field="utc_offset_minutes",
+            context={
+                "minimum": -840,
+                "maximum": 840,
+                "received": offset,
+            },
+        )
+
+    return offset
+
+
 def _parse_datasets(value: str) -> tuple[str, ...]:
     datasets: list[str] = []
     for raw in value.split(","):
@@ -80,11 +112,7 @@ def _parse_datasets(value: str) -> tuple[str, ...]:
 class RouteDataExtractions:
     __slots__ = ("router", "_extract_model_data", "_authentication")
 
-    def __init__(
-        self,
-        extract_model_data: ExtractModelData,
-        authentication: AuthenticationService,
-    ) -> None:
+    def __init__(self, extract_model_data: ExtractModelData, authentication: AuthenticationService) -> None:
         announce_api_action(
             printer,
             logger,
@@ -113,10 +141,7 @@ class RouteDataExtractions:
         self._extract_model_data = extract_model_data
         self._authentication = authentication
 
-        router = APIRouter(
-            prefix="/data-extractions",
-            tags=["data-extraction"],
-        )
+        router = APIRouter(prefix="/data-extractions", tags=["data-extraction"])
         router.add_api_route(
             "/capabilities",
             self.capabilities,
@@ -232,7 +257,7 @@ class RouteDataExtractions:
         try:
             form = await request.form(
                 max_files=1,
-                max_fields=3,
+                max_fields=5,
             )
         except Exception as exc:
             raise APIValidationError(
@@ -249,6 +274,8 @@ class RouteDataExtractions:
             "extraction_id",
             "datasets",
             "email_result",
+            "project",
+            "utc_offset_minutes",
         }
         unexpected = tuple(
             sorted(set(form.keys()) - allowed_fields)
@@ -256,35 +283,67 @@ class RouteDataExtractions:
         if unexpected:
             raise APIValidationError(
                 "Data-extraction request contains unsupported form fields.",
-                public_message=(
-                    "The data-extraction request contains unsupported fields."
-                ),
+                public_message="The data-extraction request contains unsupported fields.",
                 component=_COMPONENT,
                 operation="extract",
                 field="body",
                 context={"unexpected_fields": unexpected},
             )
 
-        for field_name in allowed_fields:
+        required_fields = (
+            "source",
+            "extraction_id",
+            "datasets",
+            "email_result",
+            "utc_offset_minutes",
+        )
+
+        for field_name in required_fields:
             if len(form.getlist(field_name)) != 1:
                 raise APIValidationError(
-                    "Data-extraction form field must occur exactly once.",
-                    public_message=(
-                        "The data-extraction request is missing or duplicates "
-                        "a required field."
-                    ),
+                    "Required data-extraction form field must occur exactly once.",
+                    public_message="The data-extraction request is missing or duplicates a required field.",
                     component=_COMPONENT,
                     operation="extract",
                     field=field_name,
                 )
 
+        if len(form.getlist("project")) > 1:
+            raise APIValidationError(
+                "Optional project field may occur at most once.",
+                public_message="The project field is duplicated.",
+                component=_COMPONENT,
+                operation="extract",
+                field="project",
+            )
+
+        project_name: str | None = None
+        raw_project = form.get("project")
+        if raw_project is not None:
+            project_name = require_api_text(
+                raw_project,
+                field="project",
+                component=_COMPONENT,
+                operation="extract",
+                max_length=512,
+            )
+
+        utc_offset_minutes = (
+            _parse_utc_offset_minutes(require_api_text(
+                    form.get("utc_offset_minutes"),
+                    field="utc_offset_minutes",
+                    component=_COMPONENT,
+                    operation="extract",
+                    max_length=8,
+                    )
+                )
+            )
+
         source = form.get("source")
         if not isinstance(source, UploadFile):
             raise APIValidationError(
                 "source must be a multipart file upload.",
-                public_message=(
-                    "Choose an IFC source file before starting extraction."
-                ),
+                public_message="Choose an IFC source file before starting extraction.",
                 component=_COMPONENT,
                 operation="extract",
                 field="source",
@@ -340,6 +399,8 @@ class RouteDataExtractions:
                     content_type=source.content_type,
                     datasets=datasets,
                     email_result=email_result,
+                    project_name=project_name,
+                    utc_offset_minutes=utc_offset_minutes,
                 )
             except (UnsupportedAppInputError, AppValidationError) as exc:
                 raise self._map_validation_error(exc) from exc
