@@ -193,6 +193,55 @@
   line-height: 1.5;
 }
 
+.projectField {
+  margin-top: 20px;
+  display: grid;
+  gap: 8px;
+}
+
+.projectField > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font:
+    9px var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.projectField small {
+  color: var(--muted);
+  font:
+    9px var(--font-mono);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.projectField input {
+  min-height: 48px;
+  width: 100%;
+  padding: 0 14px;
+  border:
+    1px solid var(--line);
+  background:
+    var(--bg);
+  color:
+    var(--text);
+  font: inherit;
+}
+
+.projectField input:focus {
+  outline: none;
+  border-color:
+    var(--bimap-yellow);
+}
+
+.projectField input:disabled {
+  opacity: 0.6;
+}
+
 .emailOption {
   margin-top: 20px;
   display: flex;
