@@ -1,20 +1,24 @@
-"""ReportLab PDF renderer for BIMAP data-extraction summaries."""
+"""ReportLab PDF renderer for BIMAP data-extraction reports."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from html import escape
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from reportlab.lib import colors  # type: ignore
 from reportlab.lib.enums import TA_LEFT  # type: ignore
 from reportlab.lib.pagesizes import A4  # type: ignore
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet  # type: ignore
+from reportlab.lib.styles import (  # type: ignore
+    ParagraphStyle,
+    getSampleStyleSheet,
+)
 from reportlab.lib.units import mm  # type: ignore
 from reportlab.platypus import (  # type: ignore
     Flowable,
     Image as ReportLabImage,
-    PageBreak,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -22,520 +26,1458 @@ from reportlab.platypus import (  # type: ignore
     TableStyle,
 )
 
-from ..app.ports.data_extraction import DataExtractionPDFRenderer
+from ..app.ports.data_extraction import (
+    DataExtractionPDFRenderer,
+)
 from ..app.utils.app_errors import *
 from ..app.utils.app_helpers import *
-from logs.logger import PrettyPrinter, get_logger  # type: ignore
+from logs.logger import (  # type: ignore
+    PrettyPrinter,
+    get_logger,
+)
 
 
-logger = get_logger("BIMAP Data Extraction PDF Renderer")
+logger = get_logger(
+    "BIMAP Data Extraction PDF Renderer"
+)
 printer = PrettyPrinter()
 
-_COMPONENT = "reportlab_data_extraction_renderer"
+_COMPONENT = (
+    "reportlab_data_extraction_renderer"
+)
+
+_TITLE_FONT_SIZE = 22.0
+
+_LOGO_PATH = (
+    Path(__file__)
+    .resolve()
+    .parents[1]
+    / "reporting"
+    / "templates"
+    / "bimap-logo.png"
+)
 
 
-def _text(value: Any) -> str:
+def _text(
+    value: Any,
+) -> str:
     if value is None:
         return "—"
-    if isinstance(value, bool):
-        return "Yes" if value else "No"
+
+    if isinstance(
+        value,
+        bool,
+    ):
+        return (
+            "Yes"
+            if value
+            else "No"
+        )
+
     return str(value)
 
 
-def _short_hash(value: Any) -> str:
-    text = _text(value)
-    if len(text) <= 40:
-        return text
-    return f"{text[:20]}…{text[-16:]}"
+def _safe_text(
+    value: Any,
+) -> str:
+    return escape(
+        _text(value)
+    ).replace(
+        "\n",
+        "<br/>",
+    )
 
 
-class ReportLabDataExtractionPDFRenderer(DataExtractionPDFRenderer):
-    """Render a compact summary; the JSON file remains the complete dataset."""
+def _format_source_size(
+    value: Any,
+) -> str:
+    if (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value >= 0
+    ):
+        return (
+            f"{value:,} bytes"
+        )
+
+    return "—"
+
+
+def _schema_or_format(
+    source: Mapping[
+        str,
+        Any,
+    ],
+) -> str:
+    schema = (
+        source.get("schema")
+        or source.get(
+            "ifc_schema"
+        )
+    )
+
+    if schema:
+        return str(schema)
+
+    source_format = (
+        source.get(
+            "source_format"
+        )
+    )
+
+    if source_format:
+        return str(
+            source_format
+        ).upper()
+
+    return "—"
+
+
+def _footer(
+    canvas: Any,
+    doc: Any,
+) -> None:
+    page_width, _ = A4
+
+    canvas.saveState()
+
+    try:
+        canvas.setFont(
+            "Helvetica",
+            7.5,
+        )
+
+        canvas.setFillColor(
+            colors.HexColor(
+                "#666666"
+            )
+        )
+
+        footer_y = (
+            8 * mm
+        )
+
+        canvas.drawString(
+            doc.leftMargin,
+            footer_y,
+            "BIMAP",
+        )
+
+        canvas.drawCentredString(
+            page_width / 2,
+            footer_y,
+            str(
+                canvas
+                .getPageNumber()
+            ),
+        )
+
+        canvas.drawRightString(
+            page_width
+            - doc.rightMargin,
+            footer_y,
+            "Powered by SLAI",
+        )
+
+    finally:
+        canvas.restoreState()
+
+
+class ReportLabDataExtractionPDFRenderer(
+    DataExtractionPDFRenderer
+):
+    """Render the BIMAP extraction PDF."""
 
     def render(
         self,
         *,
-        document: Mapping[str, Any],
-        preview_png: bytes | None = None,
+        document: Mapping[
+            str,
+            Any,
+        ],
+        preview_png:
+            bytes | None = None,
     ) -> bytes:
-        printer.status("EXTRACT", "Rendering data-extraction PDF", "info")
+        printer.status(
+            "EXTRACT",
+            (
+                "Rendering "
+                "data-extraction PDF"
+            ),
+            "info",
+        )
 
-        if not isinstance(document, Mapping):
+        if not isinstance(
+            document,
+            Mapping,
+        ):
             raise UnsupportedAppInputError(
-                "Data-extraction PDF document must be a mapping.",
+                (
+                    "Data-extraction PDF "
+                    "document must be a mapping."
+                ),
                 component=_COMPONENT,
                 operation="render",
                 field="document",
-                context={"received_type": type(document).__name__},
+                context={
+                    "received_type":
+                        type(
+                            document
+                        ).__name__,
+                },
             )
 
+        extraction = dict(
+            document.get(
+                "extraction"
+            )
+            or {}
+        )
+
+        requested_by = dict(
+            extraction.get(
+                "requested_by"
+            )
+            or {}
+        )
+
+        source = dict(
+            document.get(
+                "source"
+            )
+            or {}
+        )
+
+        model = dict(
+            document.get(
+                "model"
+            )
+            or {}
+        )
+
+        counts = dict(
+            model.get(
+                "counts"
+            )
+            or {}
+        )
+
+        class_counts = dict(
+            model.get(
+                "ifc_class_counts"
+            )
+            or {}
+        )
+
+        geometry = dict(
+            model.get(
+                "geometry_summary"
+            )
+            or {}
+        )
+
+        datasets = extraction.get(
+            "datasets"
+        )
+        selected: tuple[Any, ...] = (
+            tuple(datasets)
+            if isinstance(
+                datasets,
+                Sequence,
+            )
+            and not isinstance(
+                datasets,
+                (str, bytes),
+            )
+            else ()
+        )
+
         buffer = BytesIO()
+
         doc = SimpleDocTemplate(
             buffer,
             pagesize=A4,
             rightMargin=18 * mm,
             leftMargin=18 * mm,
-            topMargin=18 * mm,
+            topMargin=16 * mm,
             bottomMargin=18 * mm,
-            title="R3D BIMAP Data Extraction Report",
-            author="R3D BIM Audit Platform",
+            title=(
+                "R3D BIMAP "
+                "Data Extraction Report"
+            ),
+            author=(
+                "R3D BIM Audit Platform"
+            ),
         )
 
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            "BIMAPTitle",
-            parent=styles["Title"],
-            fontName="Helvetica-Bold",
-            fontSize=22,
-            leading=26,
-            alignment=TA_LEFT,
-            spaceAfter=10,
+        styles = (
+            getSampleStyleSheet()
         )
+
+        title_style = (
+            ParagraphStyle(
+                "BIMAPTitle",
+                parent=
+                    styles["Title"],
+                fontName=
+                    "Helvetica-Bold",
+                fontSize=
+                    _TITLE_FONT_SIZE,
+                leading=26,
+                alignment=TA_LEFT,
+                spaceAfter=0,
+            )
+        )
+
         h1 = ParagraphStyle(
             "BIMAPH1",
-            parent=styles["Heading1"],
-            fontName="Helvetica-Bold",
+            parent=
+                styles["Heading1"],
+            fontName=
+                "Helvetica-Bold",
             fontSize=14,
             leading=18,
             spaceBefore=10,
             spaceAfter=8,
         )
-        body = ParagraphStyle(
-            "BIMAPBody",
-            parent=styles["BodyText"],
-            fontName="Helvetica",
-            fontSize=9,
-            leading=13,
-            spaceAfter=5,
-        )
-        mono = ParagraphStyle(
-            "BIMAPMono",
-            parent=body,
-            fontName="Courier",
-            fontSize=7.5,
-            leading=10,
+
+        label_style = (
+            ParagraphStyle(
+                "BIMAPLabel",
+                parent=
+                    styles["BodyText"],
+                fontName=
+                    "Helvetica-Bold",
+                fontSize=8.5,
+                leading=11,
+            )
         )
 
-        extraction = dict(document.get("extraction") or {})
-        requested_by = dict(extraction.get("requested_by") or {})
-        source = dict(document.get("source") or {})
-        model = dict(document.get("model") or {})
-        geometry = dict(model.get("geometry_summary") or {})
-        counts = dict(document.get("counts") or {})
-        project = dict(document.get("project") or {})
-        selected = tuple(document.get("selected") or ())
-        if preview_png is None:
-            preview_png = document.get("preview_png")
-        class_counts = dict(model.get("class_counts") or {})
-        story: list[Flowable] = [
-            Paragraph(
-                "R3D BIMAP Data Extraction Report",
-                title_style,
-            ),
-        ]
+        cell_style = (
+            ParagraphStyle(
+                "BIMAPCell",
+                parent=
+                    styles["BodyText"],
+                fontName=
+                    "Helvetica",
+                fontSize=8.5,
+                leading=11,
+            )
+        )
 
-        if preview_png:
-            try:
-                preview = ReportLabImage(BytesIO(preview_png))
-                max_width = 160 * mm
-                max_height = 80 * mm
+        mono_style = (
+            ParagraphStyle(
+                "BIMAPMono",
+                parent=cell_style,
+                fontName="Courier",
+                fontSize=7.3,
+                leading=9.5,
+            )
+        )
 
-                width_ratio = (
-                    max_width
-                    / preview.imageWidth
-                )
-                height_ratio = (
-                    max_height
-                    / preview.imageHeight
-                )
+        body_style = (
+            ParagraphStyle(
+                "BIMAPBody",
+                parent=
+                    styles["BodyText"],
+                fontName=
+                    "Helvetica",
+                fontSize=8.5,
+                leading=12,
+            )
+        )
 
-                scale = min(width_ratio, height_ratio, 1.0)
+        def label(
+            value: Any,
+        ) -> Paragraph:
+            return Paragraph(
+                _safe_text(value),
+                label_style,
+            )
 
-                preview.drawWidth = (preview.imageWidth * scale)
-                preview.drawHeight = (preview.imageHeight * scale)
-                story.extend(
+        def cell(
+            value: Any,
+        ) -> Paragraph:
+            return Paragraph(
+                _safe_text(value),
+                cell_style,
+            )
+
+        def mono(
+            value: Any,
+        ) -> Paragraph:
+            return Paragraph(
+                _safe_text(value),
+                mono_style,
+            )
+
+        def two_column_table(
+            rows: Sequence[
+                list[
+                    Flowable
+                ]
+                | tuple[
+                    Flowable,
+                    ...,
+                ]
+            ],
+        ) -> Table:
+            table = Table(
+                rows,
+                colWidths=[
+                    48 * mm,
+                    doc.width
+                    - 48 * mm,
+                ],
+            )
+
+            table.setStyle(
+                TableStyle(
                     [
-                        preview,
-                        Spacer(
-                            1,
-                            3 * mm,
+                        (
+                            "VALIGN",
+                            (0, 0),
+                            (-1, -1),
+                            "TOP",
+                        ),
+                        (
+                            "GRID",
+                            (0, 0),
+                            (-1, -1),
+                            0.25,
+                            colors.HexColor(
+                                "#D9D9D9"
+                            ),
+                        ),
+                        (
+                            "BACKGROUND",
+                            (0, 0),
+                            (0, -1),
+                            colors.HexColor(
+                                "#F4F4F4"
+                            ),
+                        ),
+                        (
+                            "LEFTPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            5,
+                        ),
+                        (
+                            "RIGHTPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            5,
+                        ),
+                        (
+                            "TOPPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            4,
+                        ),
+                        (
+                            "BOTTOMPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            4,
                         ),
                     ]
                 )
+            )
+
+            return table
+
+        story: list[
+            Flowable
+        ] = []
+
+        #
+        # Title + packaged BIMAP logo.
+        #
+        logo: ReportLabImage | None = None
+
+        if _LOGO_PATH.is_file():
+            try:
+                logo = ReportLabImage(
+                    str(
+                        _LOGO_PATH
+                    )
+                )
+
+                scale = (
+                    _TITLE_FONT_SIZE
+                    / float(
+                        logo.imageHeight
+                    )
+                )
+
+                logo.drawHeight = (
+                    _TITLE_FONT_SIZE
+                )
+
+                logo.drawWidth = (
+                    float(
+                        logo.imageWidth
+                    )
+                    * scale
+                )
+
             except Exception as exc:
-                # Preview rendering may never invalidate
-                # the actual extraction artifact.
                 logger.warning(
                     {
-                        "event": "data_extraction_preview_omitted",
-                        "error": lower_error_context(exc),
+                        "event":
+                            "data_extraction_logo_unavailable",
+                        "error":
+                            lower_error_context(
+                                exc
+                            ),
                     }
                 )
 
-        story.extend(
-            [
-                Paragraph(
-                    "Summary of the structured model-data extraction."
-                    "The JSON file in the same package "
-                    "is the authoritative complete "
-                    "machine-readable result.",
-                    body,
+                logo = None
+
+        title_paragraph = (
+            Paragraph(
+                (
+                    "R3D BIMAP "
+                    "Data Extraction Report"
                 ),
+                title_style,
+            )
+        )
+
+        if logo is not None:
+            logo_column = (
+                logo.drawWidth
+                + 3 * mm
+            )
+
+            title_table = Table(
+                [
+                    [
+                        logo,
+                        title_paragraph,
+                    ]
+                ],
+                colWidths=[
+                    logo_column,
+                    doc.width
+                    - logo_column,
+                ],
+            )
+
+            title_table.setStyle(
+                TableStyle(
+                    [
+                        (
+                            "VALIGN",
+                            (0, 0),
+                            (-1, -1),
+                            "MIDDLE",
+                        ),
+                        (
+                            "LEFTPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            0,
+                        ),
+                        (
+                            "RIGHTPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            0,
+                        ),
+                        (
+                            "TOPPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            0,
+                        ),
+                        (
+                            "BOTTOMPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            0,
+                        ),
+                    ]
+                )
+            )
+
+            story.append(
+                title_table
+            )
+        else:
+            story.append(
+                title_paragraph
+            )
+
+        story.append(
+            Spacer(
+                1,
+                4 * mm,
+            )
+        )
+
+        #
+        # Model PNG immediately beneath title.
+        #
+        if preview_png:
+            try:
+                preview = (
+                    ReportLabImage(
+                        BytesIO(
+                            bytes(
+                                preview_png
+                            )
+                        )
+                    )
+                )
+
+                max_width = (
+                    doc.width
+                )
+
+                max_height = (
+                    80 * mm
+                )
+
+                scale = min(
+                    max_width
+                    / float(
+                        preview
+                        .imageWidth
+                    ),
+                    max_height
+                    / float(
+                        preview
+                        .imageHeight
+                    ),
+                )
+
+                preview.drawWidth = (
+                    float(
+                        preview
+                        .imageWidth
+                    )
+                    * scale
+                )
+
+                preview.drawHeight = (
+                    float(
+                        preview
+                        .imageHeight
+                    )
+                    * scale
+                )
+
+                preview.hAlign = (
+                    "CENTER"
+                )
+
+                story.append(
+                    preview
+                )
+
+                story.append(
+                    Spacer(
+                        1,
+                        4 * mm,
+                    )
+                )
+
+            except Exception as exc:
+                logger.warning(
+                    {
+                        "event":
+                            "data_extraction_preview_omitted",
+                        "error":
+                            lower_error_context(
+                                exc
+                            ),
+                    }
+                )
+
+        else:
+            story.append(
+                Paragraph(
+                    (
+                        "Model preview unavailable "
+                        "from the configured "
+                        "source adapter."
+                    ),
+                    body_style,
+                )
+            )
+
+            story.append(
                 Spacer(
                     1,
-                    4 * mm,
-                ),
-                Paragraph(
-                    "Extraction identity",
-                    h1,
-                ),
-            ]
+                    2 * mm,
+                )
+            )
+
+        #
+        # Extraction identity.
+        #
+        story.append(
+            Paragraph(
+                "Extraction identity",
+                h1,
+            )
+        )
+
+        generated_local = (
+            extraction.get(
+                "generated_at_local"
+            )
+            or extraction.get(
+                "generated_at"
+            )
+        )
+
+        datasets_text = (
+            ", ".join(
+                str(item)
+                for item
+                in selected
+            )
+            if selected
+            else "—"
         )
 
         identity_rows = [
             [
-                "Extraction ID",
-                _text(
-                    extraction.get(
-                        "extraction_id"
-                    )
+                label(
+                    "Extracted by"
                 ),
-            ],
-            [
-                "Extracted by",
-                _text(
+                cell(
                     requested_by.get(
                         "display_name"
                     )
                 ),
             ],
             [
-                "Extracted at (UTC)",
-                _text(
+                label(
+                    (
+                        "Generated "
+                        "(local time)"
+                    )
+                ),
+                cell(
+                    generated_local
+                ),
+            ],
+            [
+                label(
+                    "Extraction ID"
+                ),
+                cell(
                     extraction.get(
-                        "generated_at"
+                        "extraction_id"
                     )
                 ),
             ],
             [
-                "Source format",
-                _text(
-                    source.get(
-                        "source_format"
-                    )
-                ).upper(),
-            ],
-            [
-                "Schema / format identifier",
-                _text(
-                    source.get(
-                        "schema"
-                    )
-                    or source.get(
-                        "ifc_schema"
+                label(
+                    "Project"
+                ),
+                cell(
+                    extraction.get(
+                        "project_name"
                     )
                 ),
             ],
             [
-                "Project",
-                _text(
-                    project.get(
-                        "name"
+                label(
+                    (
+                        "IFC schema / "
+                        "source format"
+                    )
+                ),
+                cell(
+                    _schema_or_format(
+                        source
                     )
                 ),
             ],
             [
-                "Source file",
-                _text(
+                label(
+                    "Source file"
+                ),
+                cell(
                     source.get(
                         "filename"
                     )
                 ),
             ],
             [
-                "Source size",
-                (
-                    _text(
+                label(
+                    "Source size"
+                ),
+                cell(
+                    _format_source_size(
                         source.get(
                             "size_bytes"
                         )
                     )
-                    + " bytes"
                 ),
             ],
             [
-                "Products / geometries",
-                _text(
+                label(
+                    "Products"
+                ),
+                cell(
                     source.get(
                         "product_count"
                     )
                 ),
             ],
             [
-                "Datasets",
-                (
-                    ", ".join(
-                        map(
-                            str,
-                            selected,
-                        )
-                    )
-                    if selected
-                    else "—"
+                label(
+                    "Datasets"
+                ),
+                cell(
+                    datasets_text
                 ),
             ],
         ]
 
-        identity = Table(identity_rows, colWidths=[42 * mm, 118 * mm])
-        identity.setStyle(
-            TableStyle(
-                [
-                    ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-                    ("FONTNAME", (1, 0), (1, -1), "Helvetica"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9D9D9")),
-                    ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F4F4F4")),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                    ("TOPPADDING", (0, 0), (-1, -1), 4),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                ]
+        story.append(
+            two_column_table(
+                identity_rows # type: ignore
             )
         )
-        story.append(identity)
 
-        story.extend(
+        #
+        # Integrity.
+        #
+        story.append(
+            Paragraph(
+                "Integrity",
+                h1,
+            )
+        )
+
+        integrity_rows = [
             [
-                Paragraph("Integrity", h1),
-                Paragraph(
-                    f"Source SHA-256: {_short_hash(source.get('sha256'))}",
-                    mono,
+                label(
+                    "Source SHA-256"
                 ),
-                Paragraph("Dataset counts", h1),
+                mono(
+                    source.get(
+                        "sha256"
+                    )
+                ),
             ]
+        ]
+
+        story.append(
+            two_column_table(
+                integrity_rows # type: ignore
+            )
         )
 
-        count_rows = [["Dataset", "Rows"]]
-        for name in ("elements", "properties", "quantities", "materials"):
-            if name in counts:
-                count_rows.append(
-                    [name.replace("_", " ").title(), _text(counts[name])]
+        #
+        # IFC/source class distribution.
+        #
+        story.append(
+            Paragraph(
+                (
+                    "IFC class "
+                    "distribution"
+                ),
+                h1,
+            )
+        )
+
+        class_rows: list[
+            list[Flowable]
+        ] = [
+            [
+                label(
+                    "IFC class"
+                ),
+                label(
+                    "Products"
+                ),
+            ]
+        ]
+
+        def class_sort_key(
+            item: tuple[
+                Any,
+                Any,
+            ],
+        ) -> tuple[
+            int,
+            str,
+        ]:
+            try:
+                count_value = int(
+                    item[1]
                 )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                count_value = 0
 
-        count_table = Table(
-            count_rows,
-            colWidths=[100 * mm, 40 * mm],
-            repeatRows=1,
-        )
-        count_table.setStyle(
-            TableStyle(
+            return (
+                -count_value,
+                str(
+                    item[0]
+                ),
+            )
+
+        for (
+            source_class,
+            count,
+        ) in sorted(
+            class_counts.items(),
+            key=class_sort_key,
+        ):
+            class_rows.append(
                 [
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEEEEE")),
-                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9D9D9")),
-                    ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-                    ("ALIGN", (1, 1), (1, -1), "RIGHT"),
-                    ("TOPPADDING", (0, 0), (-1, -1), 4),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    cell(
+                        source_class
+                    ),
+                    cell(
+                        count
+                    ),
                 ]
             )
-        )
-        story.append(count_table)
-        story.append(Paragraph("Geometry summary", h1))
 
-        if geometry:
-            volume = geometry.get("volume")
-            volume_complete = bool(geometry.get("volume_complete", False))
-            volume_unit = geometry.get("volume_unit")
-
-            if (
-                volume_complete
-                and isinstance(volume, (int, float))
-            ):
-                volume_text = (f"{float(volume):.8g}")
-
-                if volume_unit:
-                    volume_text += (f" {volume_unit}")
-                else:
-                    volume_text += (
-                        " source-units³ "
-                        "(source unit unspecified)"
-                    )
-            else:
-                volume_text = (
-                    "Not available — model is not "
-                    "fully watertight"
-                )
-
-            geometry_rows = [
-                ["Metric", "Value"],
-                ["Total polygons", _text(geometry.get("total_polygons"))],
-                ["Total vertices", _text(geometry.get("total_vertices"))],
-                ["Total unique edges", _text(geometry.get("total_edges"))],
-                ["Volume", volume_text],
+        if len(
+            class_rows
+        ) == 1:
+            class_rows.append(
                 [
-                    "Watertight geometries",
-                    (
-                        f"{_text(geometry.get('watertight_geometry_count'))}"
-                        f" / "
-                        f"{_text(geometry.get('geometry_count'))}"
+                    cell(
+                        (
+                            "Not available "
+                            "from source adapter"
+                        )
                     ),
-                ],
-            ]
-
-            geometry_table = Table(
-                geometry_rows,
-                colWidths=[
-                    72 * mm,
-                    88 * mm,
-                ],
-                repeatRows=1,
+                    cell(
+                        "—"
+                    ),
+                ]
             )
-
-            geometry_table.setStyle(
-                TableStyle(
-                    [
-                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEEEEE")),
-                        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9D9D9")),
-                        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ]
-                )
-            )
-
-            story.append(
-                geometry_table
-            )
-
-            story.append(
-                Paragraph(
-                    "Polygon count represents "
-                    "triangulated mesh faces. "
-                    "Edge count represents unique "
-                    "topological edges per geometry.",
-                    body,
-                )
-            )
-        else:
-            story.append(
-                Paragraph(
-                    "Reliable tessellated geometry "
-                    "statistics are not available "
-                    "from the configured source adapter.",
-                    body,
-                )
-            )
-
-        story.append(Paragraph("Source class distribution", h1))
-        class_rows = [["IFC class", "Products"]]
-        for ifc_class, count in sorted(
-            class_counts.items(),
-            key=lambda item: (-int(item[1]), str(item[0])),
-        ):
-            class_rows.append([_text(ifc_class), _text(count)])
 
         class_table = Table(
             class_rows,
-            colWidths=[100 * mm, 40 * mm],
+            colWidths=[
+                doc.width
+                - 42 * mm,
+                42 * mm,
+            ],
             repeatRows=1,
         )
+
         class_table.setStyle(
             TableStyle(
                 [
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEEEEE")),
-                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9D9D9")),
-                    ("FONTSIZE", (0, 0), (-1, -1), 8),
-                    ("ALIGN", (1, 1), (1, -1), "RIGHT"),
-                    ("TOPPADDING", (0, 0), (-1, -1), 3),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                    (
+                        "BACKGROUND",
+                        (0, 0),
+                        (-1, 0),
+                        colors.HexColor(
+                            "#EEEEEE"
+                        ),
+                    ),
+                    (
+                        "GRID",
+                        (0, 0),
+                        (-1, -1),
+                        0.25,
+                        colors.HexColor(
+                            "#D9D9D9"
+                        ),
+                    ),
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "TOP",
+                    ),
+                    (
+                        "LEFTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5,
+                    ),
+                    (
+                        "RIGHTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5,
+                    ),
+                    (
+                        "TOPPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        4,
+                    ),
+                    (
+                        "BOTTOMPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        4,
+                    ),
                 ]
             )
         )
-        story.append(class_table)
 
-        raw_units = model.get("units")
-        units = (
-            tuple(raw_units)
-            if isinstance(raw_units, (list, tuple))
-            else ()
+        story.append(
+            class_table
         )
-        if units:
-            story.extend([PageBreak(), Paragraph("Project units", h1)])
-            unit_rows = [["Type", "Name", "Prefix", "IFC class"]]
-            for unit in units:
-                if not isinstance(unit, Mapping):
-                    continue
-                unit_rows.append(
-                    [
-                        _text(unit.get("unit_type")),
-                        _text(unit.get("name")),
-                        _text(unit.get("prefix")),
-                        _text(unit.get("ifc_class")),
-                    ]
+
+        #
+        # Dataset counts.
+        #
+        story.append(
+            Paragraph(
+                "Dataset counts",
+                h1,
+            )
+        )
+
+        selected_names = {
+            str(item)
+            for item
+            in selected
+        }
+
+        def dataset_count(
+            name: str,
+        ) -> Any:
+            if name in counts:
+                return counts[
+                    name
+                ]
+
+            if name in (
+                selected_names
+            ):
+                return (
+                    "Not available"
                 )
 
-            unit_table = Table(
-                unit_rows,
-                colWidths=[42 * mm, 42 * mm, 30 * mm, 48 * mm],
-                repeatRows=1,
+            return (
+                "Not extracted"
             )
-            unit_table.setStyle(
-                TableStyle(
-                    [
-                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEEEEE")),
-                        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9D9D9")),
-                        ("FONTSIZE", (0, 0), (-1, -1), 7.5),
-                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ]
-                )
-            )
-            story.append(unit_table)
 
-        story.extend(
+        count_rows: list[
+            list[Flowable]
+        ] = [
             [
-                Spacer(1, 5 * mm),
-                Paragraph("Scope note", h1),
-                Paragraph(
-                    "This PDF intentionally summarizes the extraction instead of "
-                    "reproducing every property, quantity, and material row. "
-                    "Refer to the JSON artifact in this package for the complete "
-                    "normalized dataset and stable extraction metadata.",
-                    body,
+                label(
+                    "Dataset"
                 ),
-            ]
+                label(
+                    "Rows"
+                ),
+            ],
+            [
+                cell(
+                    "Elements"
+                ),
+                cell(
+                    dataset_count(
+                        "elements"
+                    )
+                ),
+            ],
+            [
+                cell(
+                    "Properties"
+                ),
+                cell(
+                    dataset_count(
+                        "properties"
+                    )
+                ),
+            ],
+            [
+                cell(
+                    "Quantities"
+                ),
+                cell(
+                    dataset_count(
+                        "quantities"
+                    )
+                ),
+            ],
+            [
+                cell(
+                    "Materials"
+                ),
+                cell(
+                    dataset_count(
+                        "materials"
+                    )
+                ),
+            ],
+        ]
+
+        count_table = Table(
+            count_rows,
+            colWidths=[
+                doc.width
+                - 42 * mm,
+                42 * mm,
+            ],
+            repeatRows=1,
+        )
+
+        count_table.setStyle(
+            TableStyle(
+                [
+                    (
+                        "BACKGROUND",
+                        (0, 0),
+                        (-1, 0),
+                        colors.HexColor(
+                            "#EEEEEE"
+                        ),
+                    ),
+                    (
+                        "GRID",
+                        (0, 0),
+                        (-1, -1),
+                        0.25,
+                        colors.HexColor(
+                            "#D9D9D9"
+                        ),
+                    ),
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "TOP",
+                    ),
+                    (
+                        "LEFTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5,
+                    ),
+                    (
+                        "RIGHTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5,
+                    ),
+                    (
+                        "TOPPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        4,
+                    ),
+                    (
+                        "BOTTOMPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        4,
+                    ),
+                ]
+            )
+        )
+
+        story.append(
+            count_table
+        )
+
+        #
+        # Geometry summary.
+        #
+        story.append(
+            Paragraph(
+                "Geometry summary",
+                h1,
+            )
+        )
+
+        def geometry_value(
+            key: str,
+        ) -> Any:
+            value = geometry.get(
+                key
+            )
+
+            if value is None:
+                return (
+                    "Not available "
+                    "from source adapter"
+                )
+
+            return value
+
+        geometry_count = (
+            geometry.get(
+                "geometry_count"
+            )
+        )
+
+        watertight_count = (
+            geometry.get(
+                "watertight_geometry_count"
+            )
+        )
+
+        volume = (
+            geometry.get(
+                "volume"
+            )
+        )
+
+        volume_complete = bool(
+            geometry.get(
+                "volume_complete",
+                False,
+            )
+        )
+
+        volume_unit = (
+            geometry.get(
+                "volume_unit"
+            )
+        )
+
+        if (
+            volume_complete
+            and isinstance(
+                volume,
+                (
+                    int,
+                    float,
+                ),
+            )
+            and not isinstance(
+                volume,
+                bool,
+            )
+        ):
+            volume_text = (
+                f"{float(volume):.8g}"
+            )
+
+            if volume_unit:
+                volume_text += (
+                    f" {volume_unit}"
+                )
+
+        elif geometry_count is None:
+            volume_text = (
+                "Not available "
+                "from source adapter"
+            )
+
+        elif geometry_count == 0:
+            volume_text = (
+                "Not available — "
+                "no tessellated geometry"
+            )
+
+        else:
+            volume_text = (
+                "Not available — "
+                "model is not fully "
+                "watertight"
+            )
+
+        if (
+            geometry_count
+            is not None
+            and watertight_count
+            is not None
+        ):
+            watertight_text = (
+                f"{watertight_count}"
+                f" / "
+                f"{geometry_count}"
+            )
+        else:
+            watertight_text = (
+                "Not available "
+                "from source adapter"
+            )
+
+        geometry_rows = [
+            [
+                label(
+                    "Metric"
+                ),
+                label(
+                    "Value"
+                ),
+            ],
+            [
+                cell(
+                    "Total polygons"
+                ),
+                cell(
+                    geometry_value(
+                        "total_polygons"
+                    )
+                ),
+            ],
+            [
+                cell(
+                    "Total vertices"
+                ),
+                cell(
+                    geometry_value(
+                        "total_vertices"
+                    )
+                ),
+            ],
+            [
+                cell(
+                    (
+                        "Total Unique "
+                        "edges"
+                    )
+                ),
+                cell(
+                    geometry_value(
+                        "total_edges"
+                    )
+                ),
+            ],
+            [
+                cell(
+                    "Volume"
+                ),
+                cell(
+                    volume_text
+                ),
+            ],
+            [
+                cell(
+                    (
+                        "Watertight "
+                        "geometries"
+                    )
+                ),
+                cell(
+                    watertight_text
+                ),
+            ],
+        ]
+
+        geometry_table = Table(
+            geometry_rows,
+            colWidths=[
+                72 * mm,
+                doc.width
+                - 72 * mm,
+            ],
+            repeatRows=1,
+        )
+
+        geometry_table.setStyle(
+            TableStyle(
+                [
+                    (
+                        "BACKGROUND",
+                        (0, 0),
+                        (-1, 0),
+                        colors.HexColor(
+                            "#EEEEEE"
+                        ),
+                    ),
+                    (
+                        "GRID",
+                        (0, 0),
+                        (-1, -1),
+                        0.25,
+                        colors.HexColor(
+                            "#D9D9D9"
+                        ),
+                    ),
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "TOP",
+                    ),
+                    (
+                        "LEFTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5,
+                    ),
+                    (
+                        "RIGHTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5,
+                    ),
+                    (
+                        "TOPPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        4,
+                    ),
+                    (
+                        "BOTTOMPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        4,
+                    ),
+                ]
+            )
+        )
+
+        story.append(
+            geometry_table
         )
 
         try:
-            doc.build(story)
+            doc.build(
+                story,
+                onFirstPage=
+                    _footer,
+                onLaterPages=
+                    _footer,
+            )
+
         except Exception as exc:
             raise AppIntegrityError(
-                "ReportLab could not render the data-extraction PDF.",
+                (
+                    "ReportLab could not "
+                    "render the "
+                    "data-extraction PDF."
+                ),
                 component=_COMPONENT,
                 operation="render",
-                context=lower_error_context(exc),
+                context=
+                    lower_error_context(
+                        exc
+                    ),
                 cause=exc,
             ) from exc
 
-        payload = buffer.getvalue()
-        if not payload.startswith(b"%PDF-"):
+        payload = (
+            buffer.getvalue()
+        )
+
+        if not payload:
             raise AppIntegrityError(
-                "Rendered data-extraction artifact is not a valid PDF byte stream.",
+                (
+                    "Rendered "
+                    "data-extraction PDF "
+                    "is empty."
+                ),
                 component=_COMPONENT,
                 operation="render",
                 field="pdf",
             )
 
-        logger.info(
-            {
-                "event": "data_extraction_pdf_rendered",
-                "size_bytes": len(payload),
-            }
-        )
         return payload
 
 
-__all__ = ["ReportLabDataExtractionPDFRenderer"]
+__all__ = [
+    "ReportLabDataExtractionPDFRenderer",
+]
