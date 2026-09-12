@@ -145,10 +145,13 @@ export function getDataExtractionCapabilities(
 export async function extractModelData(
   input: {
     file: File;
-    datasets: readonly ExtractionDataset[];
+    datasets:
+      readonly ExtractionDataset[];
     extractionId: string;
     idempotencyKey: string;
     emailResult: boolean;
+    project?: string;
+    utcOffsetMinutes: number;
     signal?: AbortSignal;
   },
 ): Promise<DataExtractionDownload> {
@@ -180,6 +183,18 @@ export async function extractModelData(
     );
   }
 
+  if (
+    !Number.isSafeInteger(
+      input.utcOffsetMinutes,
+    ) ||
+    input.utcOffsetMinutes < -840 ||
+    input.utcOffsetMinutes > 840
+  ) {
+    throw new TypeError(
+      "UTC offset is invalid.",
+    );
+  }
+
   const body = new FormData();
   body.set(
     "source",
@@ -199,6 +214,22 @@ export async function extractModelData(
     input.emailResult
       ? "true"
       : "false",
+  );
+
+  const project = input.project?.trim() ?? "";
+
+  if (project) {
+    body.set(
+      "project",
+      project,
+    );
+  }
+
+  body.set(
+    "utc_offset_minutes",
+    String(
+      input.utcOffsetMinutes,
+    ),
   );
 
   const response = await apiResponse(
