@@ -59,6 +59,8 @@ class ExtractModelData:
         content_type: str | None,
         datasets: tuple[ExtractionDataset | str, ...],
         email_result: bool,
+        project_name: str | None,
+        utc_offset_minutes: int,
     ) -> DataExtractionResult:
         announce_app_action(
             printer,
@@ -78,6 +80,8 @@ class ExtractModelData:
             content_type=content_type,
             datasets=datasets,
             email_result=email_result,
+            project_name=project_name,
+            utc_offset_minutes=utc_offset_minutes,
         )
 
 
