@@ -101,7 +101,7 @@ from applications.bimap.infra.sqlite_audit_results import SQLiteAuditResultStore
 from applications.bimap.slai.task_builder import BIMAPSLAITaskBuilder # type: ignore
 from applications.bimap.utils.plan_loader import load_account_plan_catalog # type: ignore
 from applications.bimap.utils.config_loader import load_bimap_config, load_slai_profile  # type: ignore
-from .revit_backend import RevitBackend
+from .revit_backend import RevitBackend, REVIT_EXTRACTOR_EXECUTABLE_ENV
 from src.functions.auth import AuthService as SLAIAuthService  # type: ignore
 from src.functions.phone_verification import PhoneVerificationService, TwilioBackend  # type: ignore
 from src.agents.collaborative.shared_memory import SharedMemory  # type: ignore
@@ -634,21 +634,34 @@ def _create_local_bootstrap() -> Bootstrap:
     )
 
     mesh_extractor = TrimeshDataExtractor()
-    revit_backend = RevitBackend.from_env()
-    revit_extractor = RevitDataExtractor(
-        revit_backend
-    )
-
-    conversion_adapters = [IfcOpenShellModelConverter(), TrimeshModelConverter(),]
-
+    conversion_adapters = [IfcOpenShellModelConverter(), TrimeshModelConverter()]
     extraction_adapters = [
         IfcOpenShellDataExtractor(),
-        revit_extractor,
         mesh_extractor,
-        # With no DWG backend this adapter
-        # advertises DXF, not DWG.
+        # With no DWG backend this adapter advertises DXF, not DWG.
         DwgDxfDataExtractor(),
     ]
+
+    revit_executable = os.getenv(REVIT_EXTRACTOR_EXECUTABLE_ENV)
+    if revit_executable is not None and revit_executable.strip():
+        revit_backend = RevitBackend.from_env()
+
+        extraction_adapters.append(RevitDataExtractor(revit_backend))
+
+        logger.info(
+            {
+                "event": "bimap_revit_extraction_enabled",
+                "formats": ("rfa", "rvt"),
+            }
+        )
+    else:
+        logger.warning(
+            {
+                "event": "bimap_revit_extraction_disabled",
+                "reason": "native_revit_extractor_not_configured",
+                "environment": REVIT_EXTRACTOR_EXECUTABLE_ENV,
+            }
+        )
 
     blender = shutil.which("blender")
 
