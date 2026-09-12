@@ -6,11 +6,14 @@ import hashlib
 import re
 import tempfile
 import zipfile
+
+from datetime import timedelta, timezone
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import PurePath
 from typing import BinaryIO, cast
 
+from ...domain.accounts.plans import UsageKind
 from ..ports.accounts import *
 from ..ports.artifact_mailer import *
 from ..ports.clock import Clock
@@ -19,7 +22,6 @@ from ..ports.malware import *
 from ..utils.app_errors import *
 from ..utils.app_helpers import *
 from .entitlement_service import *
-from ...domain.accounts.plans import UsageKind
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
 
 
@@ -239,6 +241,7 @@ class DataExtractionService:
         self._malware = malware
         self._entitlement = entitlement
         self._clock = clock
+        self._artifact_mailer = artifact_mailer
         self._max_source_bytes = max_source_bytes
 
         logger.info(
@@ -455,7 +458,8 @@ class DataExtractionService:
         info.external_attr = 0o600 << 16
         return info
 
-    def _build_package(self, *, output_stem: str, document: dict[str, object]) -> DataExtractionPackage:
+    def _build_package(self, *, output_stem: str,
+        document: dict[str, object], preview_png: bytes | None = None) -> DataExtractionPackage:
         json_filename = f"{output_stem}-extraction.json"
         pdf_filename = f"{output_stem}-extraction.pdf"
         package_filename = f"{output_stem}-extraction.zip"
@@ -470,7 +474,7 @@ class DataExtractionService:
             )
 
         try:
-            pdf_bytes = self._pdf_renderer.render(document=document)
+            pdf_bytes = self._pdf_renderer.render(document=document, preview_png=preview_png)
         except AppError:
             raise
         except Exception as exc:
@@ -546,6 +550,8 @@ class DataExtractionService:
         content_type: str | None,
         datasets: tuple[ExtractionDataset | str, ...],
         email_result: bool,
+        project_name: str | None,
+        utc_offset_minutes: int,
     ) -> DataExtractionResult:
         announce_app_action(
             printer,
@@ -561,11 +567,9 @@ class DataExtractionService:
             error_type=AppValidationError,
             component=_COMPONENT,
             operation="extract",
-            max_length=512,
+            max_length=1024,
         )
-        account = self._accounts.get_account(
-            normalized_account_id
-        )
+        account = self._accounts.get_account(normalized_account_id)
 
         if account is None:
             raise AppValidationError(
@@ -573,15 +577,10 @@ class DataExtractionService:
                 component=_COMPONENT,
                 operation="extract",
                 field="account_id",
-                context={
-                    "account_id": normalized_account_id,
-                },
-            )
+                context={"account_id": normalized_account_id},
+                )
 
-        requester_name = (
-            f"{account.name} {account.surname}"
-        ).strip()
-
+        requester_name = (f"{account.name} {account.surname}").strip()
         recipient_email = account.email
         normalized_extraction_id = require_app_text(
             extraction_id,
@@ -636,6 +635,39 @@ class DataExtractionService:
         source_format = self._source_format_from_filename(normalized_filename)
         selected = self._select_datasets(source_format, datasets)
 
+        normalized_project_name = optional_app_text(
+            project_name,
+            field="project_name",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation="extract",
+            max_length=512,
+        )
+
+        if (
+            isinstance(utc_offset_minutes, bool)
+            or not isinstance(utc_offset_minutes, int)
+        ):
+            raise AppValidationError(
+                "utc_offset_minutes must be an integer.",
+                component=_COMPONENT,
+                operation="extract",
+                field="utc_offset_minutes",
+            )
+
+        if not -840 <= utc_offset_minutes <= 840:
+            raise AppValidationError(
+                "utc_offset_minutes is outside the supported UTC offset range.",
+                component=_COMPONENT,
+                operation="extract",
+                field="utc_offset_minutes",
+                context={
+                    "minimum": -840,
+                    "maximum": 840,
+                    "received": utc_offset_minutes,
+                },
+            )
+
         staged, source_size, source_hash = self._stage(source)
         try:
             self._scan(
@@ -648,10 +680,7 @@ class DataExtractionService:
             )
 
             self._rewind(staged, operation="inspect_source")
-            inspection = self._extractor.inspect(
-                staged,
-                source_format=source_format,
-            )
+            inspection = self._extractor.inspect(staged, source_format=source_format)
             if inspection.source_format is not source_format:
                 raise AppIntegrityError(
                     "Extractor inspection returned a mismatched source format.",
@@ -660,11 +689,7 @@ class DataExtractionService:
                     field="inspection.source_format",
                     context={
                         "expected": source_format.value,
-                        "received": getattr(
-                            inspection.source_format,
-                            "value",
-                            inspection.source_format,
-                        ),
+                        "received": getattr(inspection.source_format, "value", inspection.source_format),
                     },
                 )
 
@@ -675,10 +700,7 @@ class DataExtractionService:
             entitlement = self._entitlement.consume(
                 account_id=normalized_account_id,
                 kind=UsageKind.DATA_EXTRACTION,
-                source_id=(
-                    "data-extraction:"
-                    + hashlib.sha256(binding_material).hexdigest()
-                ),
+                source_id=("data-extraction:" + hashlib.sha256(binding_material).hexdigest()),
                 idempotency_key=normalized_key,
             )
 
@@ -688,6 +710,50 @@ class DataExtractionService:
                 source_format=source_format,
                 datasets=selected,
             )
+            preview_png: bytes | None = None
+
+            try:
+                self._rewind(staged, operation="render_preview")
+                preview_candidate = (self._extractor.render_preview(staged, source_format=source_format))
+
+                if isinstance(preview_candidate, (bytes, bytearray, memoryview)):
+                    payload = bytes(preview_candidate)
+
+                    if payload.startswith(b"\x89PNG\r\n\x1a\n"):
+                        preview_png = payload
+                    else:
+                        logger.warning(
+                            {
+                                "event": "data_extraction_preview_invalid",
+                                "extraction_id": normalized_extraction_id,
+                                "source_format": source_format.value,
+                                "reason": "preview is not PNG",
+                            }
+                        )
+
+                elif preview_candidate is not None:
+                    logger.warning(
+                        {
+                            "event": "data_extraction_preview_invalid",
+                            "extraction_id": normalized_extraction_id,
+                            "source_format": source_format.value,
+                            "received_type": type(preview_candidate).__name__,
+                        }
+                    )
+
+            except Exception as exc:
+                # Preview enrichment must never invalidate
+                # otherwise valid extracted model data.
+                logger.warning(
+                    {
+                        "event": "data_extraction_preview_unavailable",
+                        "extraction_id": normalized_extraction_id,
+                        "source_format": source_format.value,
+                        "error": lower_error_context(exc),
+                    }
+                )
+
+                preview_png = None
         finally:
             staged.close()
 
@@ -707,16 +773,37 @@ class DataExtractionService:
                 field="result.inspection.source_format",
             )
 
+        generated_at_utc = self._clock.now()
+
         generated_at = format_app_utc_datetime(
-            self._clock.now(),
+            generated_at_utc,
             field="generated_at",
             component=_COMPONENT,
             operation="build_document",
         )
+
+        local_timezone = timezone(
+            timedelta(
+                minutes=utc_offset_minutes,
+            )
+        )
+
+        generated_at_local = (
+            generated_at_utc
+            .astimezone(local_timezone)
+            .isoformat(timespec="seconds")
+        )
+
         document: dict[str, object] = {
             "extraction": {
                 "extraction_id": normalized_extraction_id,
+                # Preserve canonical UTC for the
+                # machine-readable artifact.
                 "generated_at": generated_at,
+                # Human-facing report timestamp.
+                "generated_at_local": generated_at_local,
+                "utc_offset_minutes": utc_offset_minutes,
+                "project_name": normalized_project_name,
                 "datasets": tuple(
                     item.value
                     for item in selected
@@ -727,12 +814,23 @@ class DataExtractionService:
                 },
             },
             "source": {
-                # existing source fields
+                "filename": normalized_filename,
+                "content_type": normalized_content_type,
+                "source_format": source_format.value,
+                "schema": inspection.schema,
+                "size_bytes": source_size,
+                "sha256": source_hash,
+                "product_count": inspection.product_count,
             },
             "model": extracted.to_dict(),
         }
-        package = self._build_package(output_stem=self._output_stem(normalized_filename), document=document )
-
+        package = self._build_package(
+            output_stem=self._output_stem(
+                normalized_filename
+            ),
+            document=document,
+            preview_png=preview_png,
+        )
         logger.info(
             {
                 "event": "data_extraction_service_extract_completed",
