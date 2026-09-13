@@ -86,6 +86,7 @@ from applications.bimap.infra.conversion import ( # type: ignore
     BlenderFbxModelConverter,
     IfcOpenShellModelConverter,
     MultiFormatModelConverter,
+    RevitModelConverter,
     TrimeshModelConverter,
 )
 from applications.bimap.infra.extraction import ( # type: ignore
@@ -94,6 +95,7 @@ from applications.bimap.infra.extraction import ( # type: ignore
     IfcOpenShellDataExtractor,
     MultiFormatDataExtractor,
     RevitDataExtractor,
+    PartAtomRfaDataExtractor,
     TrimeshDataExtractor,
 )
 from applications.bimap.infra.reportlab_data_extraction_renderer import ReportLabDataExtractionPDFRenderer # type: ignore
@@ -101,7 +103,7 @@ from applications.bimap.infra.sqlite_audit_results import SQLiteAuditResultStore
 from applications.bimap.slai.task_builder import BIMAPSLAITaskBuilder # type: ignore
 from applications.bimap.utils.plan_loader import load_account_plan_catalog # type: ignore
 from applications.bimap.utils.config_loader import load_bimap_config, load_slai_profile  # type: ignore
-from .revit_backend import RevitBackend, REVIT_EXTRACTOR_EXECUTABLE_ENV
+from .revit_backend import RevitBackend, REVIT_EXTRACTOR_EXECUTABLE_ENV, create_revit_backends_from_env
 from src.functions.auth import AuthService as SLAIAuthService  # type: ignore
 from src.functions.phone_verification import PhoneVerificationService, TwilioBackend  # type: ignore
 from src.agents.collaborative.shared_memory import SharedMemory  # type: ignore
@@ -644,24 +646,37 @@ def _create_local_bootstrap() -> Bootstrap:
 
     revit_executable = os.getenv(REVIT_EXTRACTOR_EXECUTABLE_ENV)
     if revit_executable is not None and revit_executable.strip():
-        revit_backend = RevitBackend.from_env()
+        (
+            revit_extraction_backend,
+            revit_conversion_backend,
+        ) = create_revit_backends_from_env()
 
-        extraction_adapters.append(RevitDataExtractor(revit_backend))
+        extraction_adapters.append(RevitDataExtractor(revit_extraction_backend))
+        conversion_adapters.append(RevitModelConverter(revit_conversion_backend))
 
         logger.info(
             {
-                "event": "bimap_revit_extraction_enabled",
+                "event": "bimap_revit_processing_enabled",
                 "formats": ("rfa", "rvt"),
+                "viewer_target": "glb",
             }
         )
     else:
         logger.warning(
             {
-                "event": "bimap_revit_extraction_disabled",
-                "reason": "native_revit_extractor_not_configured",
-                "environment": REVIT_EXTRACTOR_EXECUTABLE_ENV,
-            }
-        )
+                "event": "bimap_revit_partatom_fallback_enabled",
+                "reason": "native_revit_worker_not_configured",
+                 "environment": REVIT_EXTRACTOR_EXECUTABLE_ENV,
+                "limitations": (
+                    "no_formulas",
+                    "no_connectors",
+                    "no_nested_topology",
+                    "no_native_geometry",
+                    "no_glb_conversion",
+                ),
+             }
+         )
+
 
     blender = shutil.which("blender")
 

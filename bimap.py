@@ -51,25 +51,18 @@ import argparse
 import importlib
 import importlib.util
 import os
-import sys
-import uvicorn
-import shutil
-import signal
-import subprocess
-import time
-import urllib.error
-import urllib.request
-import webbrowser
+import uvicorn # type: ignore
 
 from collections.abc import Callable
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Any, cast
-from fastapi import FastAPI
+from fastapi import FastAPI # type: ignore
 
-from logs.logger import PrettyPrinter, configure_logging, get_logger
 from applications.bimap.bootstrap import Bootstrap, BootstrapError
 from applications.bimap.version import __version__
+from applications.bimap.workers.local_host import LocalAuditWorkerHost
+from logs.logger import PrettyPrinter, configure_logging, get_logger # pyright: ignore[reportMissingImports]
 
 
 logger = get_logger("SLAI BIMAP Launcher")
@@ -332,6 +325,19 @@ def create_application() -> FastAPI:
 
         logger.info({"event": "bimap_asgi_lifespan_started", "version": __version__})
 
+        local_worker_host = None
+
+        # The process-local Queue port acknowledges/retains AuditJobs but does
+        # not own worker execution. In local development, start the missing
+        # process owner only when the configured queue exposes snapshot().
+        queue = bootstrap.infrastructure.queue
+        if callable(getattr(queue, "snapshot", None)):
+            local_worker_host = LocalAuditWorkerHost(
+                queue,
+                runtime.runner,
+            )
+            await local_worker_host.start()
+
         try:
             yield
 
@@ -339,6 +345,8 @@ def create_application() -> FastAPI:
             _announce("Shutting down BIMAP runtime")
 
             try:
+                if local_worker_host is not None:
+                    await local_worker_host.close()
                 bootstrap.close()
 
             finally:
