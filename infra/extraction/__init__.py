@@ -183,6 +183,7 @@ from .revit_extractor import RevitDataExtractor, RevitExtractionBackend
 from .dwg_extractor import DwgDxfDataExtractor, DwgToDxfBackend
 from .fbx_extractor import BlenderFbxDataExtractor
 from .mesh_extractor import TrimeshDataExtractor
+from .rfa_partatom_extractor import PartAtomRfaDataExtractor
 
 
 __all__ = [
@@ -194,6 +195,7 @@ __all__ = [
     "DwgToDxfBackend",
     "BlenderFbxDataExtractor",
     "TrimeshDataExtractor",
+    "PartAtomRfaDataExtractor",
 ]
 
 
