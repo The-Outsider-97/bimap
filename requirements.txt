@@ -16,6 +16,10 @@ ezdxf~=1.4.4
 trimesh~=4.11.1
 pyglet<2
 
+
+# Model-preview rasterization
+Pillow>=9.0.0
+
 # HTTP multipart uploads
 python-multipart~=0.0.32
 
