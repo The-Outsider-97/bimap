@@ -1,24 +1,4 @@
-"""
-Canonical baseline deterministic rules for BIMAP Revit Family Audit.
-
-Location
---------
-applications/bimap/audit_engine/rfa/rules/baseline.py
-
-Scope
------
-These rules validate only facts already supported by BIMAP's current contracts
-and extraction pipeline:
-
-- Family Audit is backed by one RFA source;
-- family-identity evidence is internally consistent;
-- populated canonical extraction sections contain structured evidence at the
-  canonical logical paths produced by AuditInputService.
-
-They intentionally do not invent organization-specific Revit standards such as
-naming conventions, mandatory shared parameters, geometry thresholds,
-classification systems, connector policy, or material standards.
-"""
+"""Canonical baseline deterministic rules for BIMAP Revit Family Audit."""
 
 from __future__ import annotations
 
@@ -33,7 +13,8 @@ from ....domain.products.models import ProductCode
 
 
 _PRODUCT = ProductCode.FAMILY_AUDIT
-_VERSION = "1.0.0"
+_VERSION = "1.1.0"
+_POLICY_GROUPS = frozenset({"organization_rules"})
 
 
 def _refs(items: tuple[EvidenceItem, ...]) -> tuple[str, ...]:
@@ -48,8 +29,22 @@ def _primitive_mapping(item: EvidenceItem) -> dict[str, object] | None:
     return primitive if isinstance(primitive, dict) else None
 
 
+def _family_source_items(context: AuditContext) -> tuple[EvidenceItem, ...]:
+    """Return source-model evidence while excluding external policy evidence."""
+    source_ids: set[str] = set()
+    for group_name, evidence_ids in context.evidence_groups.items():
+        if group_name in _POLICY_GROUPS:
+            continue
+        source_ids.update(evidence_ids)
+    return tuple(
+        item
+        for item in context.evidence_items
+        if item.evidence_id in source_ids
+    )
+
+
 class RFASourceIntegrityRule(BaseRules):
-    """Require a Family Audit context to represent exactly one RFA source."""
+    """Require all family-source evidence to resolve to exactly one RFA source."""
 
     DEFINITION = RuleDefinition(
         rule_id="R3D.RFA.SOURCE.001",
@@ -58,21 +53,15 @@ class RFASourceIntegrityRule(BaseRules):
         required_evidence_groups=("family_identity",),
         severity_policy="rfa_source_integrity",
         known_limitations=(
-            "Validates normalized source identity only; "
-            "it does not validate Revit authoring quality.",
+            "External organization-rule evidence is intentionally excluded from source-model identity checks.",
         ),
     )
 
     def _evaluate(self, context: AuditContext) -> RuleResult:
         identity = context.group("family_identity")
-
-        source_ids = tuple(
-            sorted({item.source_file_id for item in context.evidence_items})
-        )
-        source_types = tuple(
-            sorted({item.source_type.casefold() for item in context.evidence_items})
-        )
-
+        source_items = _family_source_items(context)
+        source_ids = tuple(sorted({item.source_file_id for item in source_items}))
+        source_types = tuple(sorted({item.source_type.casefold() for item in source_items}))
         valid = len(source_ids) == 1 and source_types == ("rfa",)
 
         return self.result(
@@ -82,22 +71,18 @@ class RFASourceIntegrityRule(BaseRules):
                 "source_count": len(source_ids),
                 "source_types": list(source_types),
             },
-            expected_value={
-                "source_count": 1,
-                "source_types": ["rfa"],
-            },
+            expected_value={"source_count": 1, "source_types": ["rfa"]},
             metrics={
-                "context_evidence_count": context.evidence_count,
+                "family_source_evidence_count": len(source_items),
+                "policy_evidence_count": (
+                    context.evidence_count - len(source_items)
+                ),
             },
         )
 
 
 class RFAFamilyIdentityIntegrityRule(BaseRules):
-    """
-    Validate the canonical identity payload emitted by AuditInputService.
-
-    Only DataSourceInspection fields already owned by BIMAP are checked.
-    """
+    """Validate the canonical identity payload emitted by AuditInputService."""
 
     DEFINITION = RuleDefinition(
         rule_id="R3D.RFA.IDENTITY.001",
@@ -106,36 +91,28 @@ class RFAFamilyIdentityIntegrityRule(BaseRules):
         required_evidence_groups=("family_identity",),
         severity_policy="rfa_identity_integrity",
         known_limitations=(
-            "Does not impose organization-specific family naming "
-            "or classification policy.",
+            "Does not impose organization-specific family naming or classification policy.",
         ),
     )
 
     def _evaluate(self, context: AuditContext) -> RuleResult:
         items = context.group("family_identity")
-
         invalid_ids: list[str] = []
         product_counts: list[int] = []
 
         for item in items:
             payload = _primitive_mapping(item)
-
             if payload is None:
                 invalid_ids.append(item.evidence_id)
                 continue
-
             inspection = payload.get("inspection")
-
             if not isinstance(inspection, Mapping):
                 invalid_ids.append(item.evidence_id)
                 continue
 
-            source_format = str(
-                inspection.get("source_format", "")
-            ).casefold()
+            source_format = str(inspection.get("source_format", "")).casefold()
             schema = inspection.get("schema")
             product_count = inspection.get("product_count")
-
             if (
                 source_format != "rfa"
                 or not isinstance(schema, str)
@@ -146,13 +123,10 @@ class RFAFamilyIdentityIntegrityRule(BaseRules):
             ):
                 invalid_ids.append(item.evidence_id)
                 continue
-
             product_counts.append(product_count)
 
-        valid = not invalid_ids
-
         return self.result(
-            RuleStatus.PASS if valid else RuleStatus.FAIL,
+            RuleStatus.PASS if not invalid_ids else RuleStatus.FAIL,
             evidence_refs=tuple(invalid_ids) if invalid_ids else _refs(items),
             observed_value={
                 "identity_record_count": len(items),
@@ -164,27 +138,17 @@ class RFAFamilyIdentityIntegrityRule(BaseRules):
                 "minimum_product_count": 1,
                 "source_format": "rfa",
             },
-            metrics={
-                "invalid_evidence_ids": invalid_ids,
-            },
+            metrics={"invalid_evidence_ids": invalid_ids},
         )
 
 
 class _StructuredSectionRule(BaseRules):
-    """
-    Shared structural validation for canonical extracted FamilyEvidence groups.
-
-    Subclasses provide only the canonical group/path and rule definition.
-    """
-
     GROUP: ClassVar[str]
     PATH_PREFIX: ClassVar[str]
 
     def _evaluate(self, context: AuditContext) -> RuleResult:
         items = context.group(self.GROUP)
-
         invalid_ids: list[str] = []
-
         for item in items:
             payload = _primitive_mapping(item)
             logical_path = (
@@ -192,7 +156,6 @@ class _StructuredSectionRule(BaseRules):
                 if item.logical_location is not None
                 else None
             )
-
             if (
                 payload is None
                 or logical_path is None
@@ -200,10 +163,8 @@ class _StructuredSectionRule(BaseRules):
             ):
                 invalid_ids.append(item.evidence_id)
 
-        valid = not invalid_ids
-
         return self.result(
-            RuleStatus.PASS if valid else RuleStatus.FAIL,
+            RuleStatus.PASS if not invalid_ids else RuleStatus.FAIL,
             evidence_refs=tuple(invalid_ids) if invalid_ids else _refs(items),
             observed_value={
                 "section": self.GROUP,
@@ -215,9 +176,7 @@ class _StructuredSectionRule(BaseRules):
                 "invalid_record_count": 0,
                 "logical_path_prefix": self.PATH_PREFIX,
             },
-            metrics={
-                "invalid_evidence_ids": invalid_ids,
-            },
+            metrics={"invalid_evidence_ids": invalid_ids},
         )
 
 
@@ -229,11 +188,9 @@ class RFATypeCatalogIntegrityRule(_StructuredSectionRule):
         required_evidence_groups=("type_catalog",),
         severity_policy="rfa_type_catalog_integrity",
         known_limitations=(
-            "Checks canonical type-catalog evidence structure only; "
-            "it does not impose type naming conventions.",
+            "Checks canonical type-catalog evidence structure only; it does not impose type naming conventions.",
         ),
     )
-
     GROUP = "type_catalog"
     PATH_PREFIX = "datasets.elements["
 
@@ -246,11 +203,9 @@ class RFAParameterEvidenceIntegrityRule(_StructuredSectionRule):
         required_evidence_groups=("parameters",),
         severity_policy="rfa_parameter_evidence_integrity",
         known_limitations=(
-            "Checks parameter evidence structure only; it does not "
-            "invent mandatory parameter names or values.",
+            "Checks parameter evidence structure only; it does not invent mandatory parameter names or values.",
         ),
     )
-
     GROUP = "parameters"
     PATH_PREFIX = "datasets.properties["
 
@@ -263,11 +218,9 @@ class RFAMaterialEvidenceIntegrityRule(_StructuredSectionRule):
         required_evidence_groups=("materials",),
         severity_policy="rfa_material_evidence_integrity",
         known_limitations=(
-            "Checks material evidence structure only; it does not "
-            "impose an organization material standard.",
+            "Checks material evidence structure only; it does not impose an organization material standard.",
         ),
     )
-
     GROUP = "materials"
     PATH_PREFIX = "datasets.materials["
 
@@ -280,11 +233,9 @@ class RFAGeometryEvidenceIntegrityRule(_StructuredSectionRule):
         required_evidence_groups=("geometry_metrics",),
         severity_policy="rfa_geometry_evidence_integrity",
         known_limitations=(
-            "Checks geometry-metric evidence structure only; it does "
-            "not impose geometric thresholds or modeling conventions.",
+            "Checks geometry-metric evidence structure only; it does not impose geometric thresholds or modeling conventions.",
         ),
     )
-
     GROUP = "geometry_metrics"
     PATH_PREFIX = "datasets.quantities["
 
