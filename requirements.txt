@@ -14,6 +14,7 @@ PyYAML>=6.0,<7
 ifcopenshell~=0.8.5
 ezdxf~=1.4.4
 trimesh~=4.11.1
+pyglet<2
 
 # HTTP multipart uploads
 python-multipart~=0.0.32
