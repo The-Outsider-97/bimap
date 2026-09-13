@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import math
 import tempfile
+import numpy as np  # type: ignore
+import trimesh  # type: ignore
+
 from collections import Counter
+from io import BytesIO
 from pathlib import Path
 from typing import Any, BinaryIO
-
-import trimesh  # type: ignore
+from PIL import Image, ImageDraw  # type: ignore
 
 from ...app.ports.data_extraction import *
 from ...app.utils.app_errors import *
@@ -27,6 +30,37 @@ printer = PrettyPrinter()
 
 _COMPONENT = "mesh_data_extractor"
 _COPY_CHUNK_BYTES = 1024 * 1024
+_PREVIEW_RESOLUTION = (
+    1200,
+    700,
+)
+
+_PREVIEW_BACKGROUND = (
+    250,
+    250,
+    248,
+)
+
+_PREVIEW_FALLBACK_RGB = (
+    150,
+    156,
+    163,
+)
+
+# Stable isometric-style viewing direction.
+_PREVIEW_VIEW_VECTOR = (
+    1.35,
+    -1.65,
+    1.15,
+)
+
+# Directional light used only to make
+# the actual mesh topology readable.
+_PREVIEW_LIGHT_VECTOR = (
+    0.35,
+    -0.45,
+    0.82,
+)
 _SUPPORTED_DATASETS = (
     ExtractionDataset.ELEMENTS,
     ExtractionDataset.PROPERTIES,
@@ -125,6 +159,526 @@ def _mesh_material(geometry: Any) -> dict[str, Any] | None:
         if value is not None
     }
 
+def _unit_vector(
+    values: tuple[
+        float,
+        float,
+        float,
+    ],
+) -> np.ndarray:
+    vector = np.asarray(
+        values,
+        dtype=np.float64,
+    )
+
+    length = float(
+        np.linalg.norm(
+            vector
+        )
+    )
+
+    if (
+        not math.isfinite(length)
+        or length <= 0.0
+    ):
+        raise ValueError(
+            "Preview vector must have "
+            "a finite non-zero length."
+        )
+
+    return vector / length
+
+
+def _preview_face_colors(
+    mesh: trimesh.Trimesh,
+    face_count: int,
+) -> np.ndarray:
+    """
+    Return RGB colors for preview faces.
+
+    Existing model face colors are used where
+    Trimesh exposes them. Otherwise BIMAP uses
+    one neutral presentation color.
+
+    This function never invents model materials.
+    """
+
+    fallback = np.tile(
+        np.asarray(
+            _PREVIEW_FALLBACK_RGB,
+            dtype=np.float64,
+        ),
+        (
+            face_count,
+            1,
+        ),
+    )
+
+    visual = getattr(
+        mesh,
+        "visual",
+        None,
+    )
+
+    if visual is None:
+        return fallback
+
+    try:
+        raw = np.asarray(
+            visual.face_colors
+        )
+    except Exception:
+        return fallback
+
+    if (
+        raw.ndim != 2
+        or raw.shape[0]
+        != face_count
+        or raw.shape[1] < 3
+    ):
+        return fallback
+
+    rgb = raw[
+        :,
+        :3,
+    ].astype(
+        np.float64,
+        copy=False,
+    )
+
+    if not np.isfinite(
+        rgb
+    ).all():
+        return fallback
+
+    return np.clip(
+        rgb,
+        0.0,
+        255.0,
+    )
+
+
+def _render_scene_preview_png(
+    scene: trimesh.Scene,
+) -> bytes | None:
+    """
+    Render a deterministic software preview.
+
+    No OpenGL window, GPU, pyglet, display
+    server or browser is required.
+
+    Scene transforms are applied through
+    Scene.to_geometry() before projection.
+    """
+
+    geometry = (
+        scene.to_geometry()
+    )
+
+    if not isinstance(
+        geometry,
+        trimesh.Trimesh,
+    ):
+        return None
+
+    vertices = np.asarray(
+        geometry.vertices,
+        dtype=np.float64,
+    )
+
+    faces = np.asarray(
+        geometry.faces,
+        dtype=np.int64,
+    )
+
+    if (
+        vertices.ndim != 2
+        or vertices.shape[1] != 3
+        or len(vertices) == 0
+        or faces.ndim != 2
+        or faces.shape[1] != 3
+        or len(faces) == 0
+    ):
+        return None
+
+    #
+    # Do not attempt to hide invalid model
+    # geometry by silently cleaning it here.
+    #
+    if not np.isfinite(
+        vertices
+    ).all():
+        return None
+
+    if (
+        faces.min() < 0
+        or faces.max()
+        >= len(vertices)
+    ):
+        return None
+
+    bounds_min = (
+        vertices.min(
+            axis=0
+        )
+    )
+
+    bounds_max = (
+        vertices.max(
+            axis=0
+        )
+    )
+
+    center = (
+        bounds_min
+        + bounds_max
+    ) * 0.5
+
+    centered = (
+        vertices
+        - center
+    )
+
+    #
+    # Camera basis.
+    #
+    view = _unit_vector(
+        _PREVIEW_VIEW_VECTOR
+    )
+
+    world_up = np.asarray(
+        (
+            0.0,
+            0.0,
+            1.0,
+        ),
+        dtype=np.float64,
+    )
+
+    if abs(
+        float(
+            np.dot(
+                view,
+                world_up,
+            )
+        )
+    ) > 0.95:
+        world_up = np.asarray(
+            (
+                0.0,
+                1.0,
+                0.0,
+            ),
+            dtype=np.float64,
+        )
+
+    right = np.cross(
+        view,
+        world_up,
+    )
+
+    right_length = float(
+        np.linalg.norm(
+            right
+        )
+    )
+
+    if (
+        not math.isfinite(
+            right_length
+        )
+        or right_length <= 0.0
+    ):
+        return None
+
+    right /= right_length
+
+    up = np.cross(
+        right,
+        view,
+    )
+
+    up_length = float(
+        np.linalg.norm(
+            up
+        )
+    )
+
+    if (
+        not math.isfinite(
+            up_length
+        )
+        or up_length <= 0.0
+    ):
+        return None
+
+    up /= up_length
+
+    #
+    # Orthographic projection.
+    #
+    projected_x = (
+        centered
+        @ right
+    )
+
+    projected_y = (
+        centered
+        @ up
+    )
+
+    depth = (
+        centered
+        @ view
+    )
+
+    width, height = (
+        _PREVIEW_RESOLUTION
+    )
+
+    margin = max(
+        24,
+        int(
+            min(
+                width,
+                height,
+            )
+            * 0.06
+        ),
+    )
+
+    span_x = float(
+        projected_x.max()
+        - projected_x.min()
+    )
+
+    span_y = float(
+        projected_y.max()
+        - projected_y.min()
+    )
+
+    if (
+        not math.isfinite(
+            span_x
+        )
+        or not math.isfinite(
+            span_y
+        )
+    ):
+        return None
+
+    span_x = max(
+        span_x,
+        1e-12,
+    )
+
+    span_y = max(
+        span_y,
+        1e-12,
+    )
+
+    scale = min(
+        (
+            width
+            - (2 * margin)
+        )
+        / span_x,
+        (
+            height
+            - (2 * margin)
+        )
+        / span_y,
+    )
+
+    mid_x = float(
+        projected_x.min()
+        + projected_x.max()
+    ) * 0.5
+
+    mid_y = float(
+        projected_y.min()
+        + projected_y.max()
+    ) * 0.5
+
+    pixel_x = (
+        (
+            projected_x
+            - mid_x
+        )
+        * scale
+        + (width * 0.5)
+    )
+
+    pixel_y = (
+        (height * 0.5)
+        - (
+            projected_y
+            - mid_y
+        )
+        * scale
+    )
+
+    screen = np.column_stack(
+        (
+            pixel_x,
+            pixel_y,
+        )
+    )
+
+    #
+    # Calculate face normals directly from the
+    # uploaded geometry.
+    #
+    triangle_vertices = (
+        centered[
+            faces
+        ]
+    )
+
+    normals = np.cross(
+        (
+            triangle_vertices[
+                :,
+                1,
+            ]
+            - triangle_vertices[
+                :,
+                0,
+            ]
+        ),
+        (
+            triangle_vertices[
+                :,
+                2,
+            ]
+            - triangle_vertices[
+                :,
+                0,
+            ]
+        ),
+    )
+
+    normal_lengths = (
+        np.linalg.norm(
+            normals,
+            axis=1,
+        )
+    )
+
+    valid_normals = (
+        normal_lengths
+        > 1e-15
+    )
+
+    normals[
+        valid_normals
+    ] /= normal_lengths[
+        valid_normals,
+        None,
+    ]
+
+    normals[
+        ~valid_normals
+    ] = 0.0
+
+    #
+    # Flat directional shading.
+    #
+    # abs() is intentional because imported STL
+    # files can contain inconsistent winding.
+    # Winding is not repaired or changed.
+    #
+    light = _unit_vector(
+        _PREVIEW_LIGHT_VECTOR
+    )
+
+    intensity = (
+        0.38
+        + (
+            0.62
+            * np.abs(
+                normals
+                @ light
+            )
+        )
+    )
+
+    intensity = np.clip(
+        intensity,
+        0.25,
+        1.0,
+    )
+
+    base_colors = (
+        _preview_face_colors(
+            geometry,
+            len(faces),
+        )
+    )
+
+    shaded = np.clip(
+        (
+            base_colors
+            * intensity[
+                :,
+                None,
+            ]
+        ),
+        0.0,
+        255.0,
+    ).astype(
+        np.uint8
+    )
+
+    #
+    # Painter ordering:
+    # distant triangles first,
+    # nearer triangles last.
+    #
+    face_depth = (
+        depth[
+            faces
+        ].mean(
+            axis=1
+        )
+    )
+
+    render_order = (
+        np.argsort(
+            face_depth,
+            kind="stable",
+        )
+    )
+
+    image = Image.new(
+        "RGB",
+        _PREVIEW_RESOLUTION,
+        _PREVIEW_BACKGROUND,
+    )
+
+    draw = ImageDraw.Draw(image)
+
+    for face_index in (render_order):
+        points = [(float(screen[vertex_index, 0,]), float(screen[vertex_index, 1]))
+            for vertex_index
+            in faces[face_index]
+        ]
+
+        color = tuple(int(value)
+            for value
+            in shaded[face_index]
+        )
+
+        draw.polygon(points, fill=color)
+
+    output = BytesIO()
+    image.save(output, format="PNG")
+    payload = (output.getvalue())
+
+    if not payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+
+    return payload
 
 def _geometry_summary(scene: trimesh.Scene, geometry_records: tuple[tuple[str, Any], ...]) -> dict[str, Any]:
     total_vertices = 0
@@ -147,12 +701,7 @@ def _geometry_summary(scene: trimesh.Scene, geometry_records: tuple[tuple[str, A
             continue
 
         watertight_geometry_count += 1
-
-        raw_volume = getattr(
-            geometry,
-            "volume",
-            None,
-        )
+        raw_volume = getattr(geometry, "volume", None)
 
         if raw_volume is None:
             volume_complete = False
@@ -282,9 +831,13 @@ class TrimeshDataExtractor(DataExtractor):
         self,
         stream: BinaryIO,
         *,
-        source_format: ExtractionSourceFormat,
+        source_format:
+            ExtractionSourceFormat,
     ) -> bytes | None:
-        source = self._require_source(source_format, operation="render_preview")
+        source = self._require_source(
+            source_format,
+            operation="render_preview",
+        )
 
         with tempfile.TemporaryDirectory(
             prefix="bimap-mesh-preview-"
@@ -294,14 +847,21 @@ class TrimeshDataExtractor(DataExtractor):
                 / f"source.{source.value}"
             )
 
-            self._materialize(stream, path)
+            self._materialize(
+                stream,
+                path,
+            )
 
-            scene = self._open_scene(path, source=source)
+            scene = self._open_scene(
+                path,
+                source=source,
+            )
 
             try:
-                payload = scene.save_image(
-                    resolution=(1200, 700),
-                    visible=False,
+                payload = (
+                    _render_scene_preview_png(
+                        scene
+                    )
                 )
             except Exception as exc:
                 logger.warning(
@@ -310,30 +870,60 @@ class TrimeshDataExtractor(DataExtractor):
                             "mesh_preview_unavailable",
                         "source_format":
                             source.value,
+                        "renderer":
+                            "software",
                         "error":
-                            lower_error_context(exc),
+                            lower_error_context(
+                                exc
+                            ),
                     }
                 )
+
                 return None
 
-            if not isinstance(
-                payload,
-                (
-                    bytes,
-                    bytearray,
-                    memoryview,
-                ),
-            ):
+            if payload is None:
+                logger.warning(
+                    {
+                        "event":
+                            "mesh_preview_unavailable",
+                        "source_format":
+                            source.value,
+                        "renderer":
+                            "software",
+                        "reason":
+                            (
+                                "source geometry "
+                                "cannot be projected "
+                                "into a triangular "
+                                "mesh preview"
+                            ),
+                    }
+                )
+
                 return None
 
-            image = bytes(payload)
+            logger.info(
+                {
+                    "event":
+                        "mesh_preview_rendered",
+                    "source_format":
+                        source.value,
+                    "renderer":
+                        "software",
+                    "width":
+                        _PREVIEW_RESOLUTION[
+                            0
+                        ],
+                    "height":
+                        _PREVIEW_RESOLUTION[
+                            1
+                        ],
+                    "size_bytes":
+                        len(payload),
+                }
+            )
 
-            if not image.startswith(
-                b"\x89PNG\r\n\x1a\n"
-            ):
-                return None
-
-            return image
+            return payload
 
     def _require_source(
         self,
