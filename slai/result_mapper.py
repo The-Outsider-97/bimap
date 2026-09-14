@@ -31,6 +31,8 @@ not import this module, preventing a reverse dependency.
 
 from __future__ import annotations
 
+import math
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -60,6 +62,183 @@ _GOVERNANCE_OUTPUT_AGENTS = (
         }
     )
 )
+_MAX_DIAGNOSTIC_ITEMS = 32
+_MAX_DIAGNOSTIC_TEXT = 256
+
+
+def _bounded_text(
+    value: Any,
+) -> str | None:
+    if not isinstance(
+        value,
+        str,
+    ):
+        return None
+
+    normalized = value.strip()
+
+    if not normalized:
+        return None
+
+    return normalized[
+        :_MAX_DIAGNOSTIC_TEXT
+    ]
+
+
+def _bounded_text_sequence(
+    value: Any,
+) -> list[str]:
+    if (
+        not isinstance(
+            value,
+            Sequence,
+        )
+        or isinstance(
+            value,
+            (
+                str,
+                bytes,
+                bytearray,
+                Mapping,
+            ),
+        )
+    ):
+        return []
+
+    result: list[str] = []
+
+    for item in value:
+        text = _bounded_text(item)
+
+        if text is None:
+            continue
+
+        result.append(text)
+
+        if (
+            len(result)
+            >= _MAX_DIAGNOSTIC_ITEMS
+        ):
+            break
+
+    return result
+
+
+def _bounded_scalar_mapping(
+    value: Any,
+) -> dict[str, Any]:
+    if not isinstance(
+        value,
+        Mapping,
+    ):
+        return {}
+
+    result: dict[str, Any] = {}
+
+    for raw_key, raw_value in value.items():
+        key = _bounded_text(
+            str(raw_key)
+        )
+
+        if key is None:
+            continue
+
+        if isinstance(
+            raw_value,
+            bool,
+        ):
+            result[key] = raw_value
+
+        elif isinstance(
+            raw_value,
+            int,
+        ):
+            result[key] = raw_value
+
+        elif isinstance(
+            raw_value,
+            float,
+        ):
+            if math.isfinite(
+                raw_value
+            ):
+                result[key] = raw_value
+
+        elif isinstance(
+            raw_value,
+            str,
+        ):
+            text = _bounded_text(
+                raw_value
+            )
+
+            if text is not None:
+                result[key] = text
+
+        if (
+            len(result)
+            >= _MAX_DIAGNOSTIC_ITEMS
+        ):
+            break
+
+    return result
+
+
+def _quality_diagnostic_projection(value: Any) -> dict[str, Any] | None:
+    """
+    Retain operational Quality diagnostics only.
+
+    Raw records, routed records, quarantine payloads, SharedMemory
+    values and customer evidence are intentionally excluded.
+    """
+
+    if not isinstance(value, Mapping):
+        return None
+
+    result: dict[str, Any] = {}
+
+    verdict = _bounded_text(value.get("verdict"))
+
+    if verdict is not None:
+        result["verdict"] = verdict
+
+    score = value.get("batch_score")
+
+    if (
+        isinstance(score, (int, float))
+        and not isinstance(score, bool) and math.isfinite(float(score))):
+        result["batch_score"] = float(score)
+
+    quarantine_count = value.get("quarantine_count")
+
+    if (
+        isinstance(quarantine_count, int)
+        and not isinstance(quarantine_count, bool)
+        and quarantine_count >= 0
+    ):
+        result["quarantine_count"] = quarantine_count
+
+    subsystem_scores = (_bounded_scalar_mapping(value.get("subsystem_scores")))
+
+    if subsystem_scores:
+        result["subsystem_scores"] = subsystem_scores
+
+    subsystem_verdicts = (_bounded_scalar_mapping(value.get("subsystem_verdicts")))
+
+    if subsystem_verdicts:
+        result["subsystem_verdicts"] = subsystem_verdicts
+
+    flags = _bounded_text_sequence(value.get("flags"))
+
+    if flags:
+        result["flags"] = flags
+
+    remediation_actions = (_bounded_text_sequence(value.get("remediation_actions")))
+
+    if remediation_actions:
+        result["remediation_actions"] = remediation_actions
+
+    return result or None
 
 @dataclass(frozen=True, slots=True)
 class MappedAgentOutput:
@@ -570,16 +749,35 @@ class SLAIResultMapper:
                 agent_name
                 in _GOVERNANCE_OUTPUT_AGENTS
             ):
+                diagnostic_payload = (_quality_diagnostic_projection(invocation.output)
+                    if agent_name == "quality"
+                    else None
+                )
+
                 mapped, warning = (
                     self._map_invocation(
                         invocation,
-                        payload_override=None,
+                        payload_override=(
+                            diagnostic_payload
+                        ),
                         note_override=(
+                            "governance_output_"
+                            "bounded_diagnostics"
+                            if diagnostic_payload
+                            is not None
+                            else
                             "governance_output_"
                             "normalized_only"
                         ),
                     )
                 )
+
+                mapped_outputs.append(mapped)
+
+                if warning is not None:
+                    warnings.append(warning)
+
+                continue
 
             # When egress Privacy requested MODIFY, analysis output must be
             # sourced from Privacy's sanitized supplemental-output projection.
