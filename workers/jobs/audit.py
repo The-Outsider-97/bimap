@@ -250,6 +250,7 @@ class WorkerAudit:
                 )
 
             raise
+
         validated = require_worker_result(
             result,
             AuditExecutionResult,
