@@ -605,7 +605,25 @@ def _create_local_bootstrap() -> Bootstrap:
 
     entitlement_store = InMemoryEntitlementStore()
     renewal_window_resolver = CalendarUTCRenewalWindowResolver()
-    auth_memory_path = os.path.join(tempfile.gettempdir(), f"bimap-auth-{os.getpid()}-{uuid4().hex}.json")
+    def _auth_memory_path() -> Path:
+        configured = os.getenv("BIMAP_AUTH_MEMORY_PATH")
+
+        if (
+            configured is not None
+            and configured.strip()
+        ):
+            path = (Path(configured.strip()).expanduser().resolve(strict=False))
+        else:
+            path = (
+                Path.cwd()
+                / "data"
+                / "bimap"
+                / "auth.json"
+            ).resolve(strict=False)
+
+        path.parent.mkdir(parents=True, exist_ok=True,)
+
+        return path
     email_notifications = _build_email_service()
     require_sms_verification = _environment_bool(_REQUIRE_SMS_VERIFICATION_ENV, default=False)
 
@@ -616,6 +634,7 @@ def _create_local_bootstrap() -> Bootstrap:
     )
 
     session_ttl_minutes = _environment_positive_int(_SESSION_TTL_MINUTES_ENV, default=480,)
+    auth_memory_path = str(_auth_memory_path())
     authentication = LocalSLAIAuthentication(
         SLAIAuthService(
             memory_path=auth_memory_path,
@@ -645,7 +664,11 @@ def _create_local_bootstrap() -> Bootstrap:
     ]
 
     revit_executable = os.getenv(REVIT_EXTRACTOR_EXECUTABLE_ENV)
-    if revit_executable is not None and revit_executable.strip():
+
+    if (
+        revit_executable is not None
+        and revit_executable.strip()
+    ):
         (
             revit_extraction_backend,
             revit_conversion_backend,
@@ -656,17 +679,25 @@ def _create_local_bootstrap() -> Bootstrap:
 
         logger.info(
             {
-                "event": "bimap_revit_processing_enabled",
+                "event":
+                    "bimap_revit_processing_enabled",
                 "formats": ("rfa", "rvt"),
-                "viewer_target": "glb",
+                "conversion_targets": ("glb",),
             }
         )
+
     else:
+        # THIS LINE IS CURRENTLY EFFECTIVELY MISSING
+        # FROM THE DEPLOYMENT THAT PRODUCED YOUR LOG.
+        extraction_adapters.append(
+            PartAtomRfaDataExtractor()
+        )
+
         logger.warning(
             {
                 "event": "bimap_revit_partatom_fallback_enabled",
                 "reason": "native_revit_worker_not_configured",
-                 "environment": REVIT_EXTRACTOR_EXECUTABLE_ENV,
+                "environment": REVIT_EXTRACTOR_EXECUTABLE_ENV,
                 "limitations": (
                     "no_formulas",
                     "no_connectors",
@@ -674,8 +705,8 @@ def _create_local_bootstrap() -> Bootstrap:
                     "no_native_geometry",
                     "no_glb_conversion",
                 ),
-             }
-         )
+            }
+        )
 
 
     blender = shutil.which("blender")
@@ -686,6 +717,18 @@ def _create_local_bootstrap() -> Bootstrap:
 
     model_converter = MultiFormatModelConverter(*conversion_adapters)
     data_extractor = MultiFormatDataExtractor(*extraction_adapters)
+    supported_extraction_extensions = {
+        extension.casefold()
+        for capability
+        in data_extractor.capabilities
+        for extension
+        in capability.extensions
+    }
+    if ".rfa" not in supported_extraction_extensions:
+        raise RuntimeError(
+            "Family Audit is configured but no "
+            "RFA data extractor is registered."
+        )
     data_extraction_pdf_renderer = ReportLabDataExtractionPDFRenderer()
 
     # ---------------------------------------------------------
