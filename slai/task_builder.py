@@ -485,8 +485,9 @@ class BIMAPSLAITaskBuilder:
 
         No artificial schema or statistical baseline is created.
 
-        Ingress quality prefers authoritative deterministic finding records,
-        followed by evidence records, followed by ingestion-manifest records.
+        Ingress quality assesses a bounded integrity projection of the grounded
+        audit envelope. Deterministic findings are not Quality-ingress records;
+        they remain authoritative analysis inputs for downstream SLAI agents.
 
         Egress quality assesses supplemental SLAI outputs as individual records.
         """
@@ -874,67 +875,104 @@ class BIMAPSLAITaskBuilder:
     # Deterministic projections
     # ------------------------------------------------------------------
 
-    def _quality_ingress_records(
-        self,
-        payload: Mapping[str, Any],
-    ) -> list[dict[str, Any]]:
-        findings = self._extract_findings(
-            payload
-        )
+    def _quality_ingress_records(self, payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """
+        Project one bounded audit-ingress integrity record.
 
-        if findings:
-            return findings
+        Ingress Quality validates whether the grounded BIMAP context is
+        structurally usable by supplemental SLAI processing.
+
+        Deterministic findings are deliberately excluded: a legitimate BIM
+        defect is analysis input, not evidence that the integration payload
+        itself is malformed.
+        """
 
         context = payload.get("context")
+        evidence_rows: tuple[Mapping[str, Any], ...] = ()
+        source_manifest_present = False
 
         if isinstance(context, Mapping):
-            evidence = context.get("evidence")
+            raw_evidence = context.get("evidence")
+            evidence_sequence = raw_evidence if self._is_mapping_sequence(raw_evidence) else ()
 
-            if self._is_mapping_sequence(
-                evidence
-            ):
-                records = [
-                    dict(item)
-                    for item in evidence
+            if evidence_sequence:
+                evidence_rows = tuple(
+                    item
+                    for item in evidence_sequence
                     if isinstance(item, Mapping)
-                ]
+                )
 
-                if records:
-                    return records
+            source_manifest = context.get("source_manifest")
+            source_manifest_present = (isinstance(source_manifest, Mapping) and bool(source_manifest))
 
-        manifests = payload.get(
-            "ingestion_manifests"
-        )
+        evidence_count = len(evidence_rows)
+        source_binding_count = 0
+        hash_binding_count = 0
+        location_count = 0
+        extracted_value_field_count = 0
 
-        if self._is_mapping_sequence(
-            manifests
-        ):
-            records = [
-                dict(item)
-                for item in manifests
+        for evidence in evidence_rows:
+            source_file_id = evidence.get("source_file_id")
+
+            if (
+                isinstance(source_file_id, str)
+                and source_file_id.strip()
+            ):
+                source_binding_count += 1
+
+            source_hash = evidence.get("source_hash")
+            hash_algorithm = evidence.get("hash_algorithm")
+
+            if (
+                isinstance(source_hash, str)
+                and source_hash.strip()
+                and isinstance(hash_algorithm, str)
+                and hash_algorithm.strip()
+            ):
+                hash_binding_count += 1
+
+            logical_location = evidence.get("logical_location")
+
+            if (
+                isinstance(logical_location, Mapping)
+                and bool(logical_location)
+            ):
+                location_count += 1
+
+            # Presence of the field matters here.
+            # A legitimate extracted value may itself be null.
+            if "extracted_value" in evidence:
+                extracted_value_field_count += 1
+
+        manifests = payload.get("ingestion_manifests")
+        manifest_count = 0
+
+        if self._is_mapping_sequence(manifests):
+            manifest_count = sum(
+                1
+                for item in manifests # type: ignore
                 if isinstance(item, Mapping)
-            ]
+            )
 
-            if records:
-                return records
+        coverage = payload.get("coverage")
+        coverage_present = (isinstance(coverage, Mapping) and bool(coverage))
 
-        # QualityAgent requires a non-empty record collection.
-        # This is not fabricated evidence: the one record is simply the
-        # existing complete grounded BIMAP audit mapping.
         return [
             {
-                "audit_result": dict(payload)
+                "record_type": "bimap_audit_ingress_integrity",
+                "evidence_count": evidence_count,
+                "evidence_source_binding_count": source_binding_count,
+                "evidence_hash_binding_count": hash_binding_count,
+                "evidence_location_count": location_count,
+                "evidence_value_field_count": extracted_value_field_count,
+                "ingestion_manifest_count": manifest_count,
+                "source_manifest_present": source_manifest_present,
+                "coverage_present": coverage_present,
             }
         ]
 
-    def _quality_egress_records(
-        self,
-        payload: Mapping[str, Any],
-    ) -> list[dict[str, Any]]:
-        outputs = payload.get(
-            "supplemental_agent_outputs"
-        )
-
+    def _quality_egress_records(self, payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+        outputs = payload.get("supplemental_agent_outputs")
         records: list[dict[str, Any]] = []
 
         if isinstance(outputs, Mapping):
@@ -968,10 +1006,7 @@ class BIMAPSLAITaskBuilder:
             }
         ]
 
-    def _extract_findings(
-        self,
-        payload: Mapping[str, Any],
-    ) -> list[dict[str, Any]]:
+    def _extract_findings(self, payload: Mapping[str, Any]) -> list[dict[str, Any]]:
         """
         Return deterministic finding mappings without changing their contents.
 
@@ -982,9 +1017,7 @@ class BIMAPSLAITaskBuilder:
         collected: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
 
-        def append_candidate(
-            candidate: Any,
-        ) -> None:
+        def append_candidate(candidate: Any) -> None:
             if not isinstance(
                 candidate,
                 Mapping,
@@ -1018,9 +1051,7 @@ class BIMAPSLAITaskBuilder:
                 normalized
             )
 
-        def append_sequence(
-            value: Any,
-        ) -> None:
+        def append_sequence(value: Any) -> None:
             if not self._is_mapping_sequence(
                 value
             ):
@@ -1078,11 +1109,7 @@ class BIMAPSLAITaskBuilder:
 
         return collected
 
-    def _knowledge_query(
-        self,
-        envelope: SLAIJobEnvelope,
-        payload: Mapping[str, Any],
-    ) -> str:
+    def _knowledge_query(self, envelope: SLAIJobEnvelope, payload: Mapping[str, Any]) -> str:
         """
         Build retrieval terms from rule metadata only.
 
@@ -1136,11 +1163,7 @@ class BIMAPSLAITaskBuilder:
             f"BIMAP {product} audit reference knowledge"
         )
 
-    def _audit_summary(
-        self,
-        envelope: SLAIJobEnvelope,
-        payload: Mapping[str, Any],
-    ) -> dict[str, Any]:
+    def _audit_summary(self, envelope: SLAIJobEnvelope, payload: Mapping[str, Any]) -> dict[str, Any]:
         findings = self._extract_findings(
             payload
         )
@@ -1221,13 +1244,7 @@ class BIMAPSLAITaskBuilder:
     # Runtime-safe projections
     # ------------------------------------------------------------------
 
-    def _project_prior_outputs(
-        self,
-        outputs: Mapping[str, Any],
-    ) -> tuple[
-        dict[str, Any],
-        tuple[str, ...],
-    ]:
+    def _project_prior_outputs(self, outputs: Mapping[str, Any]) -> tuple[dict[str, Any], tuple[str, ...]]:
         """
         Project prior runtime outputs into JSON-safe values.
 
