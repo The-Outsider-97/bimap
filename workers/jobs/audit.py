@@ -47,12 +47,7 @@ class WorkerAudit:
         "_audit_inputs",
     )
 
-    def __init__(
-        self,
-        service: AuditService,
-        order_service: OrderService,
-        audit_inputs: AuditInputService,
-    ) -> None:
+    def __init__(self, service: AuditService, order_service: OrderService, audit_inputs: AuditInputService) -> None:
         announce_worker_action(
             printer,
             logger,
@@ -195,40 +190,72 @@ class WorkerAudit:
         # Execute exactly once. The previous implementation invoked
         # AuditService.run_audit() once before resolving the prepared input and
         # then a second time afterwards.
-        result = run_worker_dependency(
-            lambda: self._service.run_audit(
-                job,
-                family_payload=family_payload,
-                project_payload=project_payload,
-                requirements=requirements,
-                family_rule_ids=family_rule_ids,
-                family_versions=family_versions,
-                project_rule_ids=project_rule_ids,
-                project_versions=project_versions,
-                metadata=metadata,
-                requested_agents=requested_agents,
-                correlation_id=correlation_id,
-                max_context_bytes=max_context_bytes,
-                task_overrides=task_overrides,
-            ),
-            component=_COMPONENT,
-            operation="execute",
-            message="AuditService failed while executing an audit job.",
-            context={
-                "job_id": job.job_id,
-                "order_id": job.order_id,
-            },
-            error_type=WorkerAuditError,
-        )
+        try:
+            result = run_worker_dependency(
+                lambda: self._service.run_audit(
+                    job,
+                    family_payload=family_payload,
+                    project_payload=project_payload,
+                    requirements=requirements,
+                    family_rule_ids=family_rule_ids,
+                    family_versions=family_versions,
+                    project_rule_ids=project_rule_ids,
+                    project_versions=project_versions,
+                    metadata=metadata,
+                    requested_agents=requested_agents,
+                    correlation_id=correlation_id,
+                    max_context_bytes=max_context_bytes,
+                    task_overrides=task_overrides,
+                ),
+                component=_COMPONENT,
+                operation="execute",
+                message="AuditService failed while executing an audit job.",
+                context={
+                    "job_id": job.job_id,
+                    "order_id": job.order_id,
+                },
+                error_type=WorkerAuditError,
+            )
 
+        except Exception as exc:
+            # WorkerAudit owns the worker-bound lifecycle. A failed audit execution
+            # must never leave the authoritative order indefinitely in ANALYZING.
+            try:
+                current_order = self._order_service.get_order(job.order_id)
+
+                if current_order.state is OrderState.ANALYZING:
+                    self._order_service.transition(
+                        job.order_id,
+                        OrderState.ANALYSIS_FAILED,
+                        idempotency_key=(f"{job.job_id}:analysis-failed"),
+                        actor="bimap-worker",
+                    )
+
+                    logger.error(
+                        {
+                            "event": "worker_audit_transitioned_to_analysis_failed",
+                            "job_id": job.job_id,
+                            "order_id": job.order_id,
+                            "error_type": type(exc).__name__,
+                            "error_code": getattr(exc, "code", None),
+                        }
+                    )
+
+            except Exception:
+                # Do not replace the original audit exception merely because
+                # lifecycle failure recording also failed.
+                logger.exception(
+                    "Failed to transition failed audit "
+                    "to analysis_failed."
+                )
+
+            raise
         validated = require_worker_result(
             result,
             AuditExecutionResult,
             component=_COMPONENT,
             operation="execute",
-            message=(
-                "AuditService returned an unsupported audit execution result."
-            ),
+            message="AuditService returned an unsupported audit execution result.",
         )
 
         if (
