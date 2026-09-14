@@ -437,7 +437,7 @@
   left: 0.75rem;
   right: 0.75rem;
   display: flex;
-  align-items: start;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
   pointer-events: none;

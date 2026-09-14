@@ -623,10 +623,16 @@ export function AuditWorkspace({ productCode }: Props) {
           targetOrderId,
         );
 
-        setStatus(next);
-        setPhase(phaseForStatus(next));
+        const nextPhase = phaseForStatus(next);
 
-        if (!silent) {
+        setStatus(next);
+        setPhase(nextPhase);
+
+        if (next.is_exception) {
+          setMessage(
+            `Audit failed: ${next.state.replaceAll("_", " ")}.`,
+          );
+        } else if (!silent) {
           setMessage(
             `Audit state: ${next.state.replaceAll("_", " ")}.`,
           );
@@ -831,7 +837,7 @@ export function AuditWorkspace({ productCode }: Props) {
         );
         setAuditUploadMessage(null);
         setMessage(
-          "Audit submitted successfully.",
+          "Audit accepted. Analysis is running.",
         );
 
         startPolling(order.order_id);
