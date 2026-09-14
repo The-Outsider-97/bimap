@@ -30,8 +30,9 @@ inventing a storage-key convention for ``AuditJob.evidence_refs``.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, cast
 
 from ..ports.audit_results import AuditResultRecord, AuditResultStore
@@ -226,6 +227,7 @@ class AuditExecutionResult:
     job: AuditJob
     deterministic: AuditResult
     slai: SlaiResult
+    artifacts: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         announce_app_action(
@@ -261,6 +263,25 @@ class AuditExecutionResult:
                 field="slai",
                 context={"received_type": type(self.slai).__name__},
             )
+        if not isinstance(self.artifacts, Mapping):
+            raise AppValidationError(
+                "Audit artifacts must be a mapping.",
+                component=_COMPONENT,
+                operation="validate_result",
+                field="artifacts",
+            )
+
+        primitive_artifacts = (to_app_primitive(dict(self.artifacts), field="audit_result.artifacts"))
+
+        if not isinstance(primitive_artifacts, dict):
+            raise AppSerializationError(
+                "Audit artifacts must serialize to an object.",
+                component=_COMPONENT,
+                operation="validate_result",
+                field="artifacts",
+            )
+
+        object.__setattr__(self, "artifacts", MappingProxyType(primitive_artifacts))
 
         expected_product = ProductCode.parse(self.job.product_code)
         if self.deterministic.product_code is not expected_product:
@@ -327,6 +348,7 @@ class AuditExecutionResult:
             "job": self.job.to_dict(),
             "deterministic": self.deterministic.to_dict(),
             "slai": self.slai.to_dict(),
+            "artifacts": to_app_primitive(dict(self.artifacts), field="audit_result.artifacts"),
         }
 
 
@@ -746,6 +768,7 @@ class AuditService:
         correlation_id: str | None = None,
         max_context_bytes: int | None = None,
         task_overrides: Mapping[str, Any] | None = None,
+        artifacts: Mapping[str, Any] | None = None,
     ) -> AuditExecutionResult:
         """Run deterministic audit first, then SLAI over grounded output.
 
@@ -834,6 +857,7 @@ class AuditService:
             job=target,
             deterministic=deterministic,
             slai=cast(Any, slai_result),
+            artifacts=dict(artifacts or {}),
         )
 
         self._persist_execution_result(result)
