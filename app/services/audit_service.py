@@ -31,7 +31,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime
+from typing import Any, cast
 
 from ..ports.audit_results import AuditResultRecord, AuditResultStore
 from ..ports.clock import Clock
@@ -44,6 +45,7 @@ from ...audit_engine.engine import *
 from ...audit_engine.result import AuditResult
 from ...audit_engine.utils.engine_errors import EngineError
 from ...contracts.audit_job import AuditJob
+from ...contracts.finding import FindingContract
 from ...domain.orders.models import Order
 from ...domain.orders.states import OrderState
 from ...domain.products.models import ProductCode
@@ -54,6 +56,162 @@ logger = get_logger("BIMAP Audit Service")
 printer = PrettyPrinter()
 
 _COMPONENT = "audit_service"
+
+
+@dataclass(frozen=True, slots=True)
+class _SupplementalSLAIUnavailableResult:
+    """
+    Application-owned degraded SLAI projection.
+
+    Deterministic BIM findings are authoritative. SLAI is supplemental and
+    therefore must never make an otherwise valid deterministic audit
+    unretrievable merely because an SLAI agent/dependency is unavailable.
+
+    This value satisfies the structural ``SlaiResult`` protocol and preserves
+    the existing frontend workspace shape while explicitly preventing automatic
+    release.
+    """
+
+    job_id: str
+    order_id: str
+    correlation_id: str
+    authoritative_findings: tuple[FindingContract, ...]
+    started_at: datetime
+    completed_at: datetime
+    terminated_early: bool = True
+    termination_reason: str | None = "supplemental_slai_unavailable"
+    mapping_warnings: tuple[str, ...] = (
+        "Supplemental SLAI processing was unavailable. "
+        "Deterministic BIM audit findings remain authoritative.",
+    )
+
+    def __post_init__(self) -> None:
+        job_id = require_app_text(
+            self.job_id,
+            field="job_id",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation="validate_degraded_slai_result",
+        )
+        order_id = require_app_text(
+            self.order_id,
+            field="order_id",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation="validate_degraded_slai_result",
+        )
+        correlation_id = require_app_text(
+            self.correlation_id,
+            field="correlation_id",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation="validate_degraded_slai_result",
+        )
+
+        findings = tuple(self.authoritative_findings)
+        if any(
+            not isinstance(item, FindingContract)
+            for item in findings
+        ):
+            raise AppIntegrityError(
+                "Degraded SLAI result contains a non-FindingContract value.",
+                component=_COMPONENT,
+                operation="validate_degraded_slai_result",
+                field="authoritative_findings",
+            )
+
+        finding_ids = tuple(item.finding_id for item in findings)
+        if len(finding_ids) != len(set(finding_ids)):
+            raise AppIntegrityError(
+                "Degraded SLAI result contains duplicate finding identifiers.",
+                component=_COMPONENT,
+                operation="validate_degraded_slai_result",
+                field="authoritative_findings",
+            )
+
+        started_at = ensure_app_utc_datetime(
+            self.started_at,
+            field="started_at",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation="validate_degraded_slai_result",
+        )
+        completed_at = ensure_app_utc_datetime(
+            self.completed_at,
+            field="completed_at",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation="validate_degraded_slai_result",
+        )
+        if completed_at < started_at:
+            raise AppIntegrityError(
+                "Degraded SLAI completion cannot predate its start.",
+                component=_COMPONENT,
+                operation="validate_degraded_slai_result",
+                field="completed_at",
+            )
+
+        object.__setattr__(self, "job_id", job_id)
+        object.__setattr__(self, "order_id", order_id)
+        object.__setattr__(self, "correlation_id", correlation_id)
+        object.__setattr__(self, "authoritative_findings", findings)
+        object.__setattr__(self, "started_at", started_at)
+        object.__setattr__(self, "completed_at", completed_at)
+
+    @property
+    def gate_blocked(self) -> bool:
+        return False
+
+    @property
+    def gate_review_required(self) -> bool:
+        # SLAI governance did not complete, so deterministic results may be
+        # inspected but must not be automatically released.
+        return True
+
+    @property
+    def requires_modified_payload(self) -> bool:
+        return False
+
+    @property
+    def automatic_release_allowed(self) -> bool:
+        return False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "job_id": self.job_id,
+            "order_id": self.order_id,
+            "correlation_id": self.correlation_id,
+            "authoritative_findings": [
+                item.to_dict()
+                for item in self.authoritative_findings
+            ],
+            "governance_gates": [],
+            "agent_outputs": [],
+            "started_at": format_app_utc_datetime(
+                self.started_at,
+                field="started_at",
+                error_type=AppValidationError,
+                component=_COMPONENT,
+                operation="serialize_degraded_slai_result",
+            ),
+            "completed_at": format_app_utc_datetime(
+                self.completed_at,
+                field="completed_at",
+                error_type=AppValidationError,
+                component=_COMPONENT,
+                operation="serialize_degraded_slai_result",
+            ),
+            "terminated_early": True,
+            "termination_reason": self.termination_reason,
+            "privacy_sanitized_payload": None,
+            "mapping_warnings": list(self.mapping_warnings),
+            "gate_blocked": self.gate_blocked,
+            "gate_review_required": self.gate_review_required,
+            "requires_modified_payload": self.requires_modified_payload,
+            "automatic_release_allowed": self.automatic_release_allowed,
+        }
+
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -618,22 +776,64 @@ class AuditService:
             metadata=metadata,
         )
 
-        request = SLAIRequest(
-            audit_job=target,
-            grounded_context=deterministic.to_dict(),
-            authoritative_findings=deterministic.findings,
-            requested_agents=(
-                None if requested_agents is None else tuple(requested_agents)
-            ),
-            correlation_id=correlation_id,
-            max_context_bytes=max_context_bytes,
-            task_overrides=task_overrides,
-        )
-        slai_result = invoke_slai(self.slai, request)
+        # SLAI is explicitly supplemental. Once the deterministic audit has
+        # completed successfully, an SLAI dependency/agent failure must not
+        # discard that authoritative result or prevent workspace persistence.
+        slai_started_at = self.clock.now()
+
+        try:
+            request = SLAIRequest(
+                audit_job=target,
+                grounded_context=deterministic.to_dict(),
+                authoritative_findings=deterministic.findings,
+                requested_agents=(
+                    None
+                    if requested_agents is None
+                    else tuple(requested_agents)
+                ),
+                correlation_id=correlation_id,
+                max_context_bytes=max_context_bytes,
+                task_overrides=task_overrides,
+            )
+            slai_result = invoke_slai(self.slai, request)
+
+        except AppError as exc:
+            # Do not turn a supplemental integration outage into a failed BIM
+            # audit. Keep the deterministic finding set unchanged, persist the
+            # workspace, and force governance review/no automatic release.
+            slai_completed_at = self.clock.now()
+            fallback_correlation_id = (
+                correlation_id
+                if correlation_id is not None
+                else f"slai-unavailable:{target.job_id}"
+            )
+
+            logger.warning(
+                {
+                    "event": "audit_service_slai_degraded",
+                    "job_id": target.job_id,
+                    "order_id": target.order_id,
+                    "source_type": type(exc).__name__,
+                    "source_code": getattr(exc, "code", None),
+                    "deterministic_finding_count":
+                        deterministic.finding_count,
+                    "deterministic_evidence_count":
+                        deterministic.evidence_count,
+                }
+            )
+
+            slai_result = _SupplementalSLAIUnavailableResult(
+                job_id=target.job_id,
+                order_id=target.order_id,
+                correlation_id=fallback_correlation_id,
+                authoritative_findings=deterministic.findings,
+                started_at=slai_started_at,
+                completed_at=slai_completed_at,
+            )
         result = AuditExecutionResult(
             job=target,
             deterministic=deterministic,
-            slai=slai_result,
+            slai=cast(Any, slai_result),
         )
 
         self._persist_execution_result(result)
@@ -643,12 +843,7 @@ class AuditService:
                 "event": "audit_service_run_completed",
                 "job_id": target.job_id,
                 "order_id": target.order_id,
-                "product_code":
-                    getattr(
-                        deterministic.product_code,
-                        "value",
-                        deterministic.product_code,
-                    ),
+                "product_code": getattr(deterministic.product_code, "value", deterministic.product_code),
                 "authoritative_finding_count": deterministic.finding_count,
                 "slai_terminated_early": bool(slai_result.terminated_early),
             }
