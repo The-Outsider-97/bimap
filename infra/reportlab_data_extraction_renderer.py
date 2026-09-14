@@ -11,10 +11,7 @@ from typing import Any
 from reportlab.lib import colors  # type: ignore
 from reportlab.lib.enums import TA_LEFT  # type: ignore
 from reportlab.lib.pagesizes import A4  # type: ignore
-from reportlab.lib.styles import (  # type: ignore
-    ParagraphStyle,
-    getSampleStyleSheet,
-)
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet   # type: ignore
 from reportlab.lib.units import mm  # type: ignore
 from reportlab.platypus import (  # type: ignore
     Flowable,
@@ -26,28 +23,17 @@ from reportlab.platypus import (  # type: ignore
     TableStyle,
 )
 
-from ..app.ports.data_extraction import (
-    DataExtractionPDFRenderer,
-)
+from ..app.ports.data_extraction import DataExtractionPDFRenderer
 from ..app.utils.app_errors import *
 from ..app.utils.app_helpers import *
-from logs.logger import (  # type: ignore
-    PrettyPrinter,
-    get_logger,
-)
+from logs.logger import PrettyPrinter, get_logger # pyright: ignore[reportMissingImports]
 
 
-logger = get_logger(
-    "BIMAP Data Extraction PDF Renderer"
-)
+logger = get_logger("BIMAP Data Extraction PDF Renderer")
 printer = PrettyPrinter()
 
-_COMPONENT = (
-    "reportlab_data_extraction_renderer"
-)
-
+_COMPONENT = "reportlab_data_extraction_renderer"
 _TITLE_FONT_SIZE = 22.0
-
 _LOGO_PATH = (
     Path(__file__)
     .resolve()
@@ -58,16 +44,11 @@ _LOGO_PATH = (
 )
 
 
-def _text(
-    value: Any,
-) -> str:
+def _text(value: Any) -> str:
     if value is None:
         return "—"
 
-    if isinstance(
-        value,
-        bool,
-    ):
+    if isinstance(value, bool):
         return (
             "Yes"
             if value
@@ -77,38 +58,22 @@ def _text(
     return str(value)
 
 
-def _safe_text(
-    value: Any,
-) -> str:
-    return escape(
-        _text(value)
-    ).replace(
-        "\n",
-        "<br/>",
-    )
+def _safe_text(value: Any) -> str:
+    return escape(_text(value)).replace("\n", "<br/>")
 
 
-def _format_source_size(
-    value: Any,
-) -> str:
+def _format_source_size(value: Any) -> str:
     if (
         isinstance(value, int)
         and not isinstance(value, bool)
         and value >= 0
     ):
-        return (
-            f"{value:,} bytes"
-        )
+        return (f"{value:,} bytes")
 
     return "—"
 
 
-def _schema_or_format(
-    source: Mapping[
-        str,
-        Any,
-    ],
-) -> str:
+def _schema_or_format(source: Mapping[str, Any]) -> str:
     schema = (
         source.get("schema")
         or source.get(
@@ -119,50 +84,24 @@ def _schema_or_format(
     if schema:
         return str(schema)
 
-    source_format = (
-        source.get(
-            "source_format"
-        )
-    )
+    source_format = (source.get("source_format"))
 
     if source_format:
-        return str(
-            source_format
-        ).upper()
+        return str(source_format).upper()
 
     return "—"
 
 
-def _footer(
-    canvas: Any,
-    doc: Any,
-) -> None:
+def _footer(canvas: Any, doc: Any) -> None:
     page_width, _ = A4
 
     canvas.saveState()
 
     try:
-        canvas.setFont(
-            "Helvetica",
-            7.5,
-        )
-
-        canvas.setFillColor(
-            colors.HexColor(
-                "#666666"
-            )
-        )
-
-        footer_y = (
-            8 * mm
-        )
-
-        canvas.drawString(
-            doc.leftMargin,
-            footer_y,
-            "BIMAP",
-        )
-
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(colors.HexColor("#666666"))
+        footer_y = (8 * mm)
+        canvas.drawString(doc.leftMargin, footer_y, "BIMAP")
         canvas.drawCentredString(
             page_width / 2,
             footer_y,
@@ -183,34 +122,15 @@ def _footer(
         canvas.restoreState()
 
 
-class ReportLabDataExtractionPDFRenderer(
-    DataExtractionPDFRenderer
-):
+class ReportLabDataExtractionPDFRenderer(DataExtractionPDFRenderer):
     """Render the BIMAP extraction PDF."""
 
-    def render(
-        self,
-        *,
-        document: Mapping[
-            str,
-            Any,
-        ],
-        preview_png:
-            bytes | None = None,
-    ) -> bytes:
-        printer.status(
-            "EXTRACT",
-            (
-                "Rendering "
-                "data-extraction PDF"
-            ),
-            "info",
-        )
+    def render(self, *, document: Mapping[str, Any], preview_png: bytes | None = None) -> bytes:
+        printer.status("EXTRACT", (
+            "Rendering "
+            "data-extraction PDF"), "info")
 
-        if not isinstance(
-            document,
-            Mapping,
-        ):
+        if not isinstance(document, Mapping):
             raise UnsupportedAppInputError(
                 (
                     "Data-extraction PDF "
