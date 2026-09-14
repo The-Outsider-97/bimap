@@ -19,20 +19,14 @@ from contextlib import closing
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import PurePath
-from typing import Any
+from typing import Any, cast
 
 from ..ports.clock import Clock
-from ..ports.data_extraction import (
-    DataExtractionCapability,
-    DataExtractor,
-    ExtractedModelData,
-    ExtractionDataset,
-    ExtractionSourceFormat,
-)
+from ..ports.model_conversion import *
+from ..ports.data_extraction import *
 from ..ports.storage import Storage, StoredObject
 from ..utils.app_errors import *
 from ..utils.app_helpers import *
-
 from ...contracts.evidence import EvidenceContract
 from ...contracts.family_evidence import FamilyEvidence
 from ...contracts.project_evidence import ProjectEvidence
@@ -47,8 +41,141 @@ printer = PrettyPrinter()
 
 _COMPONENT = "audit_input_service"
 _MANIFEST_CONTENT_TYPE = "application/vnd.bimap.audit-input+json"
-_MANIFEST_SCHEMA_VERSION = "1.1.0"
+_MANIFEST_SCHEMA_VERSION = "1.2.0"
 _REVIT_FAMILY_EXTENSION = "revit_family"
+
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class AuditArtifactRef:
+    kind: str
+    object_id: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    sha256: str
+
+    def __post_init__(self,) -> None:
+        kind = require_app_text(
+            self.kind,
+            field="kind",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation="validate_artifact",
+            max_length=64,
+        )
+
+        object_id = require_app_text(
+            self.object_id,
+            field="object_id",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation="validate_artifact",
+        )
+
+        filename = require_app_text(
+            self.filename,
+            field="filename",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation="validate_artifact",
+            max_length=255,
+        )
+
+        if (
+            "/" in filename
+            or "\\" in filename
+            or filename in {".", ".."}
+        ):
+            raise AppValidationError(
+                "Audit artifact filename must be a safe basename.",
+                component=_COMPONENT,
+                operation="validate_artifact",
+                field="filename",
+            )
+
+        content_type = require_app_text(
+            self.content_type,
+            field="content_type",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation="validate_artifact",
+            max_length=128,
+        )
+
+        size_bytes = (
+            require_non_negative_int(
+                self.size_bytes,
+                field="size_bytes",
+                error_type=AppValidationError,
+                component=_COMPONENT,
+                operation="validate_artifact",
+            )
+        )
+
+        if size_bytes <= 0:
+            raise AppValidationError(
+                "Audit artifact cannot be empty.",
+                component=_COMPONENT,
+                operation="validate_artifact",
+                field="size_bytes",
+            )
+
+        sha256 = require_app_text(
+            self.sha256,
+            field="sha256",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation="validate_artifact",
+            max_length=64,
+        ).casefold()
+
+        if (
+            len(sha256) != 64
+            or any(
+                character
+                not in
+                "0123456789abcdef"
+                for character
+                in sha256
+            )
+        ):
+            raise AppValidationError(
+                "Audit artifact SHA-256 is invalid.",
+                component=_COMPONENT,
+                operation="validate_artifact",
+                field="sha256",
+            )
+
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "object_id", object_id)
+        object.__setattr__(self, "filename", filename)
+        object.__setattr__(self, "content_type", content_type)
+        object.__setattr__(self, "size_bytes", size_bytes)
+        object.__setattr__(self, "sha256", sha256)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "object_id": self.object_id,
+            "filename": self.filename,
+            "content_type": self.content_type,
+            "size_bytes": self.size_bytes,
+            "sha256": self.sha256,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "AuditArtifactRef":
+        return cls(
+            kind=cast(str, value.get("kind")),
+            object_id=cast(str, value.get("object_id")),
+            filename=cast(str, value.get("filename")),
+            content_type=cast(str, value.get("content_type")),
+            size_bytes=cast(int, value.get("size_bytes")),
+            sha256=cast(str, value.get("sha256")),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +216,7 @@ class PreparedAuditInput:
     product_code: ProductCode
     manifest_ref: str
     evidence_refs: tuple[str, ...]
+    artifacts: tuple[AuditArtifactRef, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +225,7 @@ class ResolvedAuditInput:
     product_code: ProductCode
     family_payload: FamilyEvidence | None
     project_payload: ProjectEvidence | None
+    artifacts: tuple[AuditArtifactRef, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,14 +239,15 @@ class _ExtractedSource:
 class AuditInputService:
     """Prepare and resolve canonical audit input packages."""
 
-    __slots__ = ("_storage", "_extractor", "_clock")
+    __slots__ = (
+        "_storage",
+        "_extractor",
+        "_model_converter",
+        "_pdf_renderer",
+        "_clock",
+    )
 
-    def __init__(
-        self,
-        storage: Storage,
-        extractor: DataExtractor,
-        clock: Clock,
-    ) -> None:
+    def __init__(self, storage: Storage, extractor: DataExtractor, clock: Clock, model_converter: ModelConverter, pdf_renderer: DataExtractionPDFRenderer) -> None:
         if not isinstance(storage, Storage):
             raise AppConfigurationError(
                 "storage must implement Storage.",
@@ -139,9 +269,26 @@ class AuditInputService:
                 operation="initialize",
                 field="clock",
             )
+        if not isinstance(model_converter, ModelConverter):
+            raise AppConfigurationError(
+                "model_converter must implement ModelConverter.",
+                component=_COMPONENT,
+                operation="initialize",
+                field="model_converter",
+            )
+
+        if not isinstance(pdf_renderer, DataExtractionPDFRenderer):
+            raise AppConfigurationError(
+                "pdf_renderer must implement DataExtractionPDFRenderer.",
+                component=_COMPONENT,
+                operation="initialize",
+                field="pdf_renderer",
+            )        
 
         self._storage = storage
         self._extractor = extractor
+        self._model_converter = model_converter
+        self._pdf_renderer = pdf_renderer
         self._clock = clock
 
     @property
@@ -642,6 +789,628 @@ class AuditInputService:
             field="product_code",
         )
 
+    def _family_data_artifact(
+        self,
+        order_id: str,
+        source: _ExtractedSource,
+    ) -> AuditArtifactRef:
+        """
+        Render and persist the Family Audit data PDF.
+
+        The artifact reuses BIMAP's existing DataExtractionPDFRenderer
+        contract and the canonical extraction-report document shape used by
+        DataExtractionService.
+
+        The method does not:
+        - consume a second entitlement;
+        - run model extraction again;
+        - create a second PDF renderer;
+        - alter deterministic audit evidence;
+        - fabricate user identity or project metadata;
+        - make preview generation mandatory.
+
+        The already-extracted ``_ExtractedSource.data`` is authoritative.
+        """
+
+        operation = "build_family_data_artifact"
+
+        target_order = require_app_text(
+            order_id,
+            field="order_id",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation=operation,
+        )
+
+        if not isinstance(
+            source,
+            _ExtractedSource,
+        ):
+            raise UnsupportedAppInputError(
+                "source must be an _ExtractedSource instance.",
+                component=_COMPONENT,
+                operation=operation,
+                field="source",
+                context={
+                    "received_type":
+                        type(source).__name__,
+                },
+            )
+
+        if (
+            source.source_format
+            is not ExtractionSourceFormat.RFA
+        ):
+            raise UnsupportedAppInputError(
+                "Family data PDF generation requires an RFA source.",
+                component=_COMPONENT,
+                operation=operation,
+                field="source.source_format",
+                context={
+                    "source_format":
+                        source.source_format.value,
+                },
+            )
+
+        if not isinstance(
+            source.data,
+            ExtractedModelData,
+        ):
+            raise AppIntegrityError(
+                "Family data artifact requires canonical ExtractedModelData.",
+                component=_COMPONENT,
+                operation=operation,
+                field="source.data",
+                context={
+                    "received_type":
+                        type(source.data).__name__,
+                },
+            )
+
+        if not isinstance(
+            source.stored,
+            StoredObject,
+        ):
+            raise AppIntegrityError(
+                "Family data artifact requires stored-source metadata.",
+                component=_COMPONENT,
+                operation=operation,
+                field="source.stored",
+                context={
+                    "received_type":
+                        type(source.stored).__name__,
+                },
+            )
+
+        # -------------------------------------------------------------
+        # Resolve authoritative source SHA-256.
+        #
+        # The extraction report labels this specifically as SHA-256.
+        # Normally BIMAP storage already uses SHA-256. If another
+        # algorithm is configured, calculate SHA-256 from the stored
+        # source rather than mislabelling another digest.
+        # -------------------------------------------------------------
+
+        if (
+            source.stored.hash_algorithm.casefold()
+            == "sha256"
+        ):
+            source_sha256 = (
+                source.stored.content_hash.casefold()
+            )
+
+        else:
+            source_digest = hashlib.sha256()
+
+            try:
+                with closing(
+                    self._storage.open(
+                        source.source.source_ref
+                    )
+                ) as source_stream:
+                    while True:
+                        chunk = source_stream.read(
+                            1024 * 1024
+                        )
+
+                        if not chunk:
+                            break
+
+                        if not isinstance(
+                            chunk,
+                            (
+                                bytes,
+                                bytearray,
+                                memoryview,
+                            ),
+                        ):
+                            raise AppIntegrityError(
+                                "Stored audit source yielded non-binary data.",
+                                component=_COMPONENT,
+                                operation=operation,
+                                field="source",
+                            )
+
+                        source_digest.update(
+                            bytes(chunk)
+                        )
+
+            except AppError:
+                raise
+
+            except Exception as exc:
+                raise AppIntegrityError(
+                    "Unable to calculate the Family Audit source SHA-256.",
+                    component=_COMPONENT,
+                    operation=operation,
+                    field="source",
+                    context=lower_error_context(
+                        exc
+                    ),
+                    cause=exc,
+                ) from exc
+
+            source_sha256 = (
+                source_digest.hexdigest()
+            )
+
+        # -------------------------------------------------------------
+        # Generate optional preview.
+        #
+        # Preview enrichment is deliberately non-authoritative. A
+        # missing preview must not invalidate otherwise valid family
+        # extraction/report generation. This matches the standalone
+        # DataExtractionService policy.
+        # -------------------------------------------------------------
+
+        preview_png: bytes | None = None
+
+        try:
+            with closing(
+                self._storage.open(
+                    source.source.source_ref
+                )
+            ) as source_stream:
+                preview_candidate = (
+                    self._extractor.render_preview(
+                        source_stream,
+                        source_format=(
+                            source.source_format
+                        ),
+                    )
+                )
+
+            if isinstance(
+                preview_candidate,
+                (
+                    bytes,
+                    bytearray,
+                    memoryview,
+                ),
+            ):
+                preview_payload = bytes(
+                    preview_candidate
+                )
+
+                if preview_payload.startswith(
+                    b"\x89PNG\r\n\x1a\n"
+                ):
+                    preview_png = (
+                        preview_payload
+                    )
+
+                else:
+                    logger.warning(
+                        {
+                            "event":
+                                "audit_family_data_preview_invalid",
+                            "order_id":
+                                target_order,
+                            "source_ref":
+                                source.source.source_ref,
+                            "source_format":
+                                source.source_format.value,
+                            "reason":
+                                "preview_is_not_png",
+                        }
+                    )
+
+            elif preview_candidate is not None:
+                logger.warning(
+                    {
+                        "event":
+                            "audit_family_data_preview_invalid",
+                        "order_id":
+                            target_order,
+                        "source_ref":
+                            source.source.source_ref,
+                        "source_format":
+                            source.source_format.value,
+                        "received_type":
+                            type(
+                                preview_candidate
+                            ).__name__,
+                    }
+                )
+
+        except Exception as exc:
+            logger.warning(
+                {
+                    "event":
+                        "audit_family_data_preview_unavailable",
+                    "order_id":
+                        target_order,
+                    "source_ref":
+                        source.source.source_ref,
+                    "source_format":
+                        source.source_format.value,
+                    "error":
+                        lower_error_context(
+                            exc
+                        ),
+                }
+            )
+
+            preview_png = None
+
+        # -------------------------------------------------------------
+        # Timestamp.
+        #
+        # AuditInputService currently has no authoritative browser/user
+        # timezone offset. Therefore UTC is retained explicitly instead
+        # of fabricating local time.
+        # -------------------------------------------------------------
+
+        generated_at_utc = (
+            self._clock.now()
+        )
+
+        generated_at = (
+            format_app_utc_datetime(
+                generated_at_utc,
+                field="generated_at",
+                component=_COMPONENT,
+                operation=operation,
+            )
+        )
+
+        # -------------------------------------------------------------
+        # Canonical extraction-report document.
+        #
+        # This intentionally matches the structure already consumed by
+        # ReportLabDataExtractionPDFRenderer:
+        #
+        #     extraction
+        #     source
+        #     model
+        #
+        # The renderer currently reads these exact sections.
+        # -------------------------------------------------------------
+
+        selected_datasets = tuple(
+            sorted(
+                str(name)
+                for name
+                in source.data.datasets.keys()
+            )
+        )
+
+        document: dict[
+            str,
+            object,
+        ] = {
+            "extraction": {
+                "extraction_id": (
+                    "AUDIT-"
+                    + hashlib.sha256(
+                        (
+                            target_order
+                            + "\0"
+                            + source.source.source_ref
+                            + "\0"
+                            + source_sha256
+                        ).encode(
+                            "utf-8"
+                        )
+                    ).hexdigest()[
+                        :24
+                    ].upper()
+                ),
+
+                "generated_at":
+                    generated_at,
+
+                # No user/browser timezone is available at this
+                # application boundary. Keep UTC explicit.
+                "generated_at_local":
+                    generated_at,
+
+                "utc_offset_minutes":
+                    0,
+
+                "project_name": (
+                    source.data
+                    .inspection
+                    .project_name
+                ),
+
+                "datasets":
+                    selected_datasets,
+
+                # AuditInputService currently has no authoritative
+                # account/display-name dependency. Do not fabricate
+                # one. The existing renderer renders None as "—".
+                "requested_by": {
+                    "account_id":
+                        None,
+                    "display_name":
+                        None,
+                },
+            },
+
+            "source": {
+                "filename":
+                    source.source.filename,
+
+                "content_type":
+                    source.stored.content_type,
+
+                "source_format":
+                    source.source_format.value,
+
+                "schema": (
+                    source.data
+                    .inspection
+                    .schema
+                ),
+
+                "size_bytes":
+                    source.stored.size_bytes,
+
+                "sha256":
+                    source_sha256,
+
+                "product_count": (
+                    source.data
+                    .inspection
+                    .product_count
+                ),
+            },
+
+            "model":
+                source.data.to_dict(),
+        }
+
+        # -------------------------------------------------------------
+        # Render PDF through the existing abstract renderer.
+        #
+        # AuditInputService depends on DataExtractionPDFRenderer, not
+        # ReportLabDataExtractionPDFRenderer directly.
+        # -------------------------------------------------------------
+
+        try:
+            rendered = (
+                self._pdf_renderer.render(
+                    document=document,
+                    preview_png=preview_png,
+                )
+            )
+
+        except AppError:
+            raise
+
+        except Exception as exc:
+            raise AppIntegrityError(
+                "Family data PDF renderer failed outside the BIMAP application-error contract.",
+                component=_COMPONENT,
+                operation=operation,
+                field="pdf_renderer",
+                context=lower_error_context(
+                    exc
+                ),
+                cause=exc,
+            ) from exc
+
+        if not isinstance(
+            rendered,
+            (
+                bytes,
+                bytearray,
+                memoryview,
+            ),
+        ):
+            raise AppIntegrityError(
+                "Family data PDF renderer returned a non-binary artifact.",
+                component=_COMPONENT,
+                operation=operation,
+                field="pdf",
+                context={
+                    "received_type":
+                        type(rendered).__name__,
+                },
+            )
+
+        pdf_payload = bytes(
+            rendered
+        )
+
+        if not pdf_payload:
+            raise AppIntegrityError(
+                "Family data PDF renderer returned an empty artifact.",
+                component=_COMPONENT,
+                operation=operation,
+                field="pdf",
+            )
+
+        if not pdf_payload.startswith(
+            b"%PDF"
+        ):
+            raise AppIntegrityError(
+                "Family data renderer output is not a PDF document.",
+                component=_COMPONENT,
+                operation=operation,
+                field="pdf",
+            )
+
+        pdf_sha256 = hashlib.sha256(
+            pdf_payload
+        ).hexdigest()
+
+        # -------------------------------------------------------------
+        # Safe deterministic output filename.
+        # -------------------------------------------------------------
+
+        raw_stem = PurePath(
+            source.source.filename
+        ).stem.strip()
+
+        safe_stem = "".join(
+            character
+            if (
+                character.isalnum()
+                or character
+                in {
+                    ".",
+                    "_",
+                    "-",
+                }
+            )
+            else "-"
+            for character
+            in raw_stem
+        )
+
+        safe_stem = (
+            safe_stem
+            .strip(
+                "._-"
+            )[:120]
+        )
+
+        if not safe_stem:
+            safe_stem = (
+                "revit-family"
+            )
+
+        filename = (
+            f"{safe_stem}"
+            "-family-data.pdf"
+        )
+
+        # -------------------------------------------------------------
+        # Deterministic storage identity.
+        #
+        # order + kind + content digest makes retrying the same
+        # generated artifact naturally idempotent while keeping storage
+        # identity independent from the user-visible filename.
+        # -------------------------------------------------------------
+
+        order_key = hashlib.sha256(target_order.encode("utf-8")).hexdigest()[:16]
+
+        object_id = (
+            "audit-artifact-"
+            f"{order_key}-"
+            "family-data-"
+            f"{pdf_sha256}"
+        )
+
+        try:
+            stored_pdf = (
+                self._storage.put(
+                    BytesIO(pdf_payload),
+                    object_id=object_id,
+                    content_type="application/pdf",
+                    hash_algorithm="sha256",
+                    expected_size_bytes=(len(pdf_payload)),
+                    expected_hash=pdf_sha256,
+                )
+            )
+
+        except AppError:
+            raise
+
+        except Exception as exc:
+            raise AppIntegrityError(
+                "Unable to persist the Family Audit data PDF.",
+                component=_COMPONENT,
+                operation=operation,
+                field="storage",
+                context={
+                    "order_id": target_order,
+                    **lower_error_context(exc),
+                },
+                cause=exc,
+            ) from exc
+
+        # -------------------------------------------------------------
+        # Defensive integrity verification.
+        # -------------------------------------------------------------
+
+        if (
+            stored_pdf.hash_algorithm
+            != "sha256"
+        ):
+            raise AppIntegrityError(
+                "Stored Family Audit data PDF used an unexpected hash algorithm.",
+                component=_COMPONENT,
+                operation=operation,
+                field="stored_pdf.hash_algorithm",
+                context={
+                    "expected": "sha256",
+                    "received": stored_pdf.hash_algorithm,
+                },
+            )
+
+        if (
+            stored_pdf.content_hash
+            != pdf_sha256
+        ):
+            raise AppIntegrityError(
+                "Stored Family Audit data PDF hash does not match the rendered artifact.",
+                component=_COMPONENT,
+                operation=operation,
+                field="stored_pdf.content_hash",
+            )
+
+        if (
+            stored_pdf.size_bytes
+            != len(pdf_payload)
+        ):
+            raise AppIntegrityError(
+                "Stored Family Audit data PDF size does not match the rendered artifact.",
+                component=_COMPONENT,
+                operation=operation,
+                field="stored_pdf.size_bytes",
+                context={
+                    "expected_size_bytes": len(pdf_payload),
+                    "actual_size_bytes": stored_pdf.size_bytes,
+                },
+            )
+
+        artifact = AuditArtifactRef(
+            kind="family_data_pdf",
+            object_id=stored_pdf.object_id,
+            filename=filename,
+            content_type="application/pdf",
+            size_bytes=stored_pdf.size_bytes,
+            sha256=stored_pdf.content_hash,
+        )
+
+        logger.info(
+            {
+                "event": "audit_family_data_artifact_created",
+                "order_id": target_order,
+                "source_ref": source.source.source_ref,
+                "source_format": source.source_format.value,
+                "filename": artifact.filename,
+                "object_id": artifact.object_id,
+                "size_bytes": artifact.size_bytes,
+                "has_preview": preview_png is not None,
+            }
+        )
+
+        return artifact
+
     def prepare(
         self,
         order_id: str,
@@ -695,6 +1464,21 @@ class AuditInputService:
 
         extracted = tuple(self._extract_source(source) for source in sources)
         family_sources, project_source = self._classify_sources(product, extracted)
+        artifacts: list[AuditArtifactRef] = []
+
+        if (
+            product
+            is ProductCode.FAMILY_AUDIT
+            and len(family_sources) == 1
+        ):
+            family_source = (family_sources[0])
+
+            viewer = (self._viewer_artifact(target_order, family_source))
+
+            if viewer is not None:
+                artifacts.append(viewer)
+
+            artifacts.append(self._family_data_artifact(target_order, family_source))
 
         if isinstance(organization_rules, (str, bytes, bytearray, Mapping)):
             raise UnsupportedAppInputError(
@@ -746,12 +1530,25 @@ class AuditInputService:
             "order_id": target_order,
             "product_code": product.value,
             "family_payload": (
-                family_payload.to_dict() if family_payload is not None else None
+                family_payload.to_dict()
+                if family_payload
+                is not None
+                else None
             ),
+
             "project_payload": (
-                project_payload.to_dict() if project_payload is not None else None
+                project_payload.to_dict()
+                if project_payload
+                is not None
+                else None
             ),
+
             "evidence_refs": list(evidence_refs),
+            "artifacts": [
+                artifact.to_dict()
+                for artifact
+                in artifacts
+            ],
         }
         payload = canonical_app_json(document).encode("utf-8")
         digest = hashlib.sha256(payload).hexdigest()
@@ -786,6 +1583,7 @@ class AuditInputService:
             product_code=product,
             manifest_ref=manifest_ref,
             evidence_refs=evidence_refs,
+            artifacts=tuple(artifacts),
         )
 
     def resolve(
@@ -814,7 +1612,7 @@ class AuditInputService:
             component=_COMPONENT,
             operation="resolve",
         )
-        if schema_version not in {"1.0.0", _MANIFEST_SCHEMA_VERSION}:
+        if schema_version not in {"1.1.0", _MANIFEST_SCHEMA_VERSION}:
             raise AppIntegrityError(
                 "Audit input manifest schema version is unsupported.",
                 component=_COMPONENT,
@@ -865,17 +1663,107 @@ class AuditInputService:
         project_payload = (
             None if raw_project is None else ProjectEvidence.from_dict(raw_project)
         )
+        raw_artifacts = document.get("artifacts") or []
+
+        if (
+            not isinstance(raw_artifacts, list)
+        ):
+            raise AppIntegrityError(
+                "Audit input artifacts must "
+                "be an array.",
+                component=_COMPONENT,
+                operation="resolve",
+                field="artifacts",
+            )
+
+        artifacts = tuple(AuditArtifactRef.from_dict(item)
+            for item in raw_artifacts
+            if isinstance(item, Mapping))
 
         return ResolvedAuditInput(
             order_id=order_id,
             product_code=product,
             family_payload=family_payload,
             project_payload=project_payload,
+            artifacts=artifacts,
         )
+
+    def _supports_rfa_glb(self) -> bool:
+        for capability in (self._model_converter.capabilities):
+            if (
+                capability.source_format
+                is ModelSourceFormat.RFA
+                and ModelTargetFormat.GLB
+                in capability.target_formats
+            ):
+                return True
+
+        return False
+
+    def _viewer_artifact(self, order_id: str, source: _ExtractedSource) -> AuditArtifactRef | None:
+        if (
+            source.source_format
+            is not
+            ExtractionSourceFormat.RFA
+        ):
+            return None
+
+        # Preserve PartAtom fallback:
+        # no native conversion capability simply means
+        # "no viewer artifact", not a fake conversion.
+        if not self._supports_rfa_glb():
+            logger.warning(
+                {
+                    "event": "audit_viewer_artifact_unavailable",
+                    "order_id": order_id,
+                    "reason": "rfa_glb_converter_not_configured",
+                }
+            )
+            return None
+
+        with closing(self._storage.open(source.source.source_ref)) as stream:
+            converted = (
+                self._model_converter.convert(
+                    stream,
+                    source_format=(ModelSourceFormat.RFA),
+                    target_format=(ModelTargetFormat.GLB),
+                    output_stem=(f"{PurePath(source.source.filename).stem}"
+                        "-viewer")))
+
+        try:
+            order_key = (hashlib.sha256(order_id.encode("utf-8")).hexdigest()[:16])
+            object_id = (
+                f"audit-artifact-"
+                f"{order_key}-"
+                f"viewer-"
+                f"{converted.content_hash}"
+            )
+
+            stored = self._storage.put(
+                converted.stream,
+                object_id=object_id,
+                content_type=converted.content_type,
+                hash_algorithm=converted.hash_algorithm,
+                expected_size_bytes=converted.size_bytes,
+                expected_hash=converted.content_hash,
+            )
+
+            return AuditArtifactRef(
+                kind="viewer_model",
+                object_id=stored.object_id,
+                filename=converted.filename,
+                content_type=converted.content_type,
+                size_bytes=stored.size_bytes,
+                sha256=stored.content_hash,
+            )
+
+        finally:
+            converted.close()
 
 
 __all__ = [
     "AuditSourceRef",
+    "AuditArtifactRef",
     "PreparedAuditInput",
     "ResolvedAuditInput",
     "AuditInputService",
