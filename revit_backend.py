@@ -97,21 +97,21 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Final
 
-from applications.bimap.app.ports.data_extraction import (
+from applications.bimap.app.ports.data_extraction import ( # type: ignore
     DataExtractionCapability,
     DataSourceInspection,
     ExtractedModelData,
     ExtractionDataset,
     ExtractionSourceFormat,
 )
-from applications.bimap.app.ports.model_conversion import (
+from applications.bimap.app.ports.model_conversion import ( # type: ignore
     ConvertedModelArtifact,
     ModelConversionCapability,
     ModelSourceFormat,
     ModelSourceInspection,
     ModelTargetFormat,
 )
-from applications.bimap.app.utils.app_errors import (
+from applications.bimap.app.utils.app_errors import ( # type: ignore
     AppConfigurationError,
     AppError,
     AppIntegrityError,
@@ -184,11 +184,7 @@ _REVIT_FAMILY_ROW_SECTIONS: Final[tuple[str, ...]] = (
 )
 
 
-def _normalize_revit_extensions(
-    value: Mapping[str, Any],
-    *,
-    source_format: ExtractionSourceFormat,
-) -> dict[str, Any]:
+def _normalize_revit_extensions(value: Mapping[str, Any], *, source_format: ExtractionSourceFormat) -> dict[str, Any]:
     """Validate the source-specific native Revit extension envelope.
 
     Absence is allowed for backwards compatibility and causes semantic rules to
@@ -314,12 +310,7 @@ def _normalize_revit_extensions(
     return result
 
 
-def _positive_int(
-    value: Any,
-    *,
-    field: str,
-    default: int | None = None,
-) -> int:
+def _positive_int(value: Any, *, field: str, default: int | None = None) -> int:
     if value is None:
         if default is None:
             raise AppConfigurationError(
@@ -434,12 +425,7 @@ def _mapping(value: Any, *, field: str, operation: str) -> Mapping[str, Any]:
     return value
 
 
-def _mapping_rows(
-    value: Any,
-    *,
-    field: str,
-    operation: str,
-) -> tuple[Mapping[str, Any], ...]:
+def _mapping_rows(value: Any, *, field: str, operation: str) -> tuple[Mapping[str, Any], ...]:
     if not isinstance(value, list):
         raise AppIntegrityError(
             "Native Revit extraction dataset must be a JSON array.",
@@ -463,12 +449,7 @@ def _mapping_rows(
     return tuple(rows)
 
 
-def _validate_source_path(
-    path: Path,
-    *,
-    expected_suffix: str,
-    operation: str,
-) -> Path:
+def _validate_source_path(path: Path, *, expected_suffix: str, operation: str) -> Path:
     if not isinstance(path, Path):
         raise UnsupportedAppInputError(
             "Native Revit backend requires pathlib.Path source input.",
@@ -1098,12 +1079,7 @@ class RevitBackend:
         )
         return result
 
-    def render_preview_file(
-        self,
-        path: Path,
-        *,
-        source_format: ExtractionSourceFormat,
-    ) -> bytes | None:
+    def render_preview_file(self, path: Path, *, source_format: ExtractionSourceFormat) -> bytes | None:
         source = self._source_format(source_format)
         try:
             return self._worker.run_binary(
@@ -1166,12 +1142,7 @@ class RevitConversionBackend:
             )
         return source
 
-    def inspect_file(
-        self,
-        path: Path,
-        *,
-        source_format: ModelSourceFormat,
-    ) -> ModelSourceInspection:
+    def inspect_file(self, path: Path, *, source_format: ModelSourceFormat) -> ModelSourceInspection:
         source = self._source(source_format)
         payload = self._worker.run_json(
             path,
