@@ -98,7 +98,7 @@ from applications.bimap.infra.extraction import ( # type: ignore
     PartAtomRfaDataExtractor,
     TrimeshDataExtractor,
 )
-from applications.bimap.infra.reportlab_data_extraction_renderer import ReportLabDataExtractionPDFRenderer # type: ignore
+from applications.bimap.infra.reportlab_data_extraction_renderer import ReportLabDataExtractionPDFRenderer, ReportLabAuditReportRenderer # type: ignore
 from applications.bimap.infra.sqlite_audit_results import SQLiteAuditResultStore # type: ignore
 from applications.bimap.slai.task_builder import BIMAPSLAITaskBuilder # type: ignore
 from applications.bimap.utils.plan_loader import load_account_plan_catalog # type: ignore
@@ -730,6 +730,7 @@ def _create_local_bootstrap() -> Bootstrap:
             "RFA data extractor is registered."
         )
     data_extraction_pdf_renderer = ReportLabDataExtractionPDFRenderer()
+    audit_report_renderer = ReportLabAuditReportRenderer()
 
     # ---------------------------------------------------------
     # Local infrastructure
@@ -755,6 +756,7 @@ def _create_local_bootstrap() -> Bootstrap:
         model_converter=model_converter,
         data_extractor=data_extractor,
         data_extraction_pdf_renderer=data_extraction_pdf_renderer,
+        report_renderer=audit_report_renderer,
         audit_results=audit_results,
         slai_task_builder=BIMAPSLAITaskBuilder(),
     )
