@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+
+    <AssemblyName>Bimap.RevitLocalExporter</AssemblyName>
+    <RootNamespace>Bimap.RevitLocalExporter</RootNamespace>
+
+    <OutputType>Library</OutputType>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!--
+      Revit 2025 and 2026 use .NET 8. BIMAP targets Revit 2026 by default.
+      Override the installation directory without changing source code:
+
+        dotnet build -c Release ^
+          -p:RevitYear=2026 ^
+          -p:RevitInstallDir="C:\Program Files\Autodesk\Revit 2026"
+    -->
+    <RevitYear Condition="'$(RevitYear)' == ''">2026</RevitYear>
+    <RevitInstallDir Condition="'$(RevitInstallDir)' == ''">C:\Program Files\Autodesk\Revit $(RevitYear)</RevitInstallDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Use Autodesk's locally installed Revit API directly. There is no
+      SharpGLTF, APS, Forge, ODA, Blender, or other geometry dependency.
+    -->
+    <Reference Include="RevitAPI">
+      <HintPath>$(RevitInstallDir)\RevitAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <Reference Include="RevitAPIUI">
+      <HintPath>$(RevitInstallDir)\RevitAPIUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="ValidateRevitReferences" BeforeTargets="ResolveReferences">
+    <Error
+      Condition="!Exists('$(RevitInstallDir)\RevitAPI.dll')"
+      Text="RevitAPI.dll was not found at '$(RevitInstallDir)'. Set -p:RevitInstallDir to the installed Revit directory." />
+    <Error
+      Condition="!Exists('$(RevitInstallDir)\RevitAPIUI.dll')"
+      Text="RevitAPIUI.dll was not found at '$(RevitInstallDir)'. Set -p:RevitInstallDir to the installed Revit directory." />
+  </Target>
+
+</Project>

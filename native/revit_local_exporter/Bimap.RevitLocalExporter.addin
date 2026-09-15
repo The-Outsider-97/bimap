@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Command">
+    <Name>R3D BIMAP Revit Local Exporter</Name>
+    <Assembly>.\Bimap.RevitLocalExporter.dll</Assembly>
+    <AddInId>F9D84D6B-A543-48BE-BF41-36A4D00BE94A</AddInId>
+    <FullClassName>Bimap.RevitLocalExporter.ExportCommand</FullClassName>
+    <Text>BIMAP Export Viewer GLB</Text>
+    <Description>Exports the active Revit family or project to a BIMAP-compatible glTF 2.0 binary viewer model with stable Revit element identifiers.</Description>
+    <VendorId>R3DB</VendorId>
+    <VendorDescription>R3D BIMAP</VendorDescription>
+  </AddIn>
+</RevitAddIns>
