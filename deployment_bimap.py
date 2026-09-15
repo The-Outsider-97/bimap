@@ -668,6 +668,27 @@ def _create_local_bootstrap() -> Bootstrap:
         revit_executable is not None
         and revit_executable.strip()
     ):
+        configured_revit_worker = (Path(revit_executable.strip()).expanduser())
+
+        if (
+            configured_revit_worker
+            .suffix
+            .casefold()
+            in {
+                ".dll",
+                ".addin",
+            }
+        ):
+            raise RuntimeError(
+                f"{REVIT_EXTRACTOR_EXECUTABLE_ENV} "
+                "must point to a standalone native Revit worker executable "
+                "implementing BIMAP's inspect/extract/convert/preview CLI contract. "
+                "native/revit_local_exporter/Bimap.RevitLocalExporter.dll is a "
+                "Revit IExternalCommand add-in and must not be registered as that "
+                "process worker. Its generated GLB must instead enter BIMAP through "
+                "/orders/{order_id}/uploads/viewer-model."
+            )
+
         (
             revit_extraction_backend,
             revit_conversion_backend,
