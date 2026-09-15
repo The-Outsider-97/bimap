@@ -74,7 +74,6 @@ from applications.bimap.infra.local import ( # type: ignore
     DevelopmentMalware,
     DisabledPayment,
     InMemoryAccounts,
-   # InMemoryAuditResultStore,
     InMemoryEntitlementStore,
     InMemoryRepository,
     InMemoryStorage,
@@ -98,7 +97,8 @@ from applications.bimap.infra.extraction import ( # type: ignore
     PartAtomRfaDataExtractor,
     TrimeshDataExtractor,
 )
-from applications.bimap.infra.reportlab_data_extraction_renderer import ReportLabDataExtractionPDFRenderer, ReportLabAuditReportRenderer # type: ignore
+from applications.bimap.infra.reportlab_data_extraction_renderer import ReportLabDataExtractionPDFRenderer  # type: ignore
+from applications.bimap.infra.reportlab_audit_report_renderer import ReportLabAuditReportRenderer  # type: ignore
 from applications.bimap.infra.sqlite_audit_results import SQLiteAuditResultStore # type: ignore
 from applications.bimap.slai.task_builder import BIMAPSLAITaskBuilder # type: ignore
 from applications.bimap.utils.plan_loader import load_account_plan_catalog # type: ignore
