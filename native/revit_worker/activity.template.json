@@ -1,0 +1,30 @@
+{
+  "id": "BimapRevitWorkerActivity",
+  "engine": "Autodesk.Revit+2026",
+  "appbundles": [
+    "__APS_NICKNAME__.BimapRevitWorker+prod"
+  ],
+  "commandLine": [
+    "$(engine.path)\\RevitCoreConsole.exe /i \"$(args[inputFile].path)\" /al \"$(appbundles[BimapRevitWorker].path)\""
+  ],
+  "parameters": {
+    "inputFile": {
+      "verb": "get",
+      "description": "RFA or RVT source model",
+      "required": true,
+      "localName": "$(inputFile)"
+    },
+    "inputJson": {
+      "verb": "get",
+      "description": "BIMAP worker request",
+      "required": true,
+      "localName": "params.json"
+    },
+    "outputFile": {
+      "verb": "put",
+      "description": "JSON, GLB or PNG worker result",
+      "required": true,
+      "localName": "result.bin"
+    }
+  }
+}

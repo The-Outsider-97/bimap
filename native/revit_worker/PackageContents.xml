@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage>
+  <Components Description="R3D BIMAP Native Revit Worker for Revit 2026">
+    <RuntimeRequirements
+      OS="Win64"
+      Platform="Revit"
+      SeriesMin="R2026"
+      SeriesMax="R2026" />
+    <ComponentEntry
+      AppName="BIMAP Native Revit Worker"
+      Version="1.0.0"
+      ModuleName="./Contents/Bimap.RevitWorker.AppBundle.addin"
+      AppDescription="Native Revit extraction and GLB conversion for BIMAP."
+      LoadOnCommandInvocation="False"
+      LoadOnRevitStartup="True" />
+  </Components>
+</ApplicationPackage>
