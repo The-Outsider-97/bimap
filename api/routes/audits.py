@@ -6,6 +6,9 @@ import hashlib
 
 from collections.abc import Mapping
 from typing import Any
+from collections.abc import Iterator
+from urllib.parse import quote
+from starlette.responses import StreamingResponse
 
 from fastapi import APIRouter, Request, Response, status  # type: ignore
 
@@ -15,13 +18,14 @@ from ..utils.api_helpers import *
 from ...app.commands.enqueue_audit import EnqueueAudit
 from ...app.commands.grant_entitlement import GrantEntitlement
 from ...app.commands.validate_uploads import ValidateUploads
+from ...app.queries.get_audit_artifact import GetAuditArtifact
 from ...app.queries.get_audit_status import GetAuditStatus
 from ...app.queries.get_audit_workspace import GetAuditWorkspace
 from ...app.queries.get_order import GetOrder
 from ...app.services.audit_input_service import *
+from ...app.utils.app_errors import AppValidationError
 from ...contracts.audit_job import AuditJob
 from ...domain.orders.states import OrderState
-
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
 
 
@@ -36,6 +40,17 @@ def _derived_idempotency_key(value: str, stage: str) -> str:
     return f"audit:{digest}:{stage}"
 
 
+def _stream_audit_artifact(stream) -> Iterator[bytes]:
+    try:
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                break
+            yield bytes(chunk)
+    finally:
+        stream.close()
+
+
 class RouteAudits:
     __slots__ = (
         "router",
@@ -43,6 +58,7 @@ class RouteAudits:
         "_validate_uploads",
         "_grant_entitlement",
         "_enqueue_audit",
+        "_get_audit_artifact"
         "_get_audit_status",
         "_get_audit_workspace",
         "_get_order",
@@ -55,6 +71,7 @@ class RouteAudits:
         validate_uploads: ValidateUploads,
         grant_entitlement: GrantEntitlement,
         enqueue_audit: EnqueueAudit,
+        get_audit_artifact: GetAuditArtifact,
         get_audit_status: GetAuditStatus,
         get_audit_workspace: GetAuditWorkspace,
         get_order: GetOrder,
@@ -62,41 +79,14 @@ class RouteAudits:
         authorizer: RouteAuthorizer,
     ) -> None:
         dependencies = (
-            (
-                "prepare_input",
-                prepare_input,
-                AuditInputService,
-            ),
-            (
-                "validate_uploads",
-                validate_uploads,
-                ValidateUploads,
-            ),
-            (
-                "grant_entitlement",
-                grant_entitlement,
-                GrantEntitlement,
-            ),
-            (
-                "enqueue_audit",
-                enqueue_audit,
-                EnqueueAudit,
-            ),
-            (
-                "get_audit_status",
-                get_audit_status,
-                GetAuditStatus,
-            ),
-            (
-                "get_audit_workspace",
-                get_audit_workspace,
-                GetAuditWorkspace,
-            ),
-            (
-                "get_order",
-                get_order,
-                GetOrder,
-            ),
+            ("prepare_input", prepare_input, AuditInputService),
+            ("validate_uploads", validate_uploads, ValidateUploads),
+            ("grant_entitlement", grant_entitlement, GrantEntitlement),
+            ("enqueue_audit", enqueue_audit, EnqueueAudit),
+            ("get_audit_artifact", get_audit_artifact, GetAuditArtifact),
+            ("get_audit_status", get_audit_status, GetAuditStatus),
+            ("get_audit_workspace", get_audit_workspace, GetAuditWorkspace),
+            ("get_order", get_order, GetOrder),
         )
 
         for field, value, expected in dependencies:
@@ -109,27 +99,20 @@ class RouteAudits:
                     component=_COMPONENT,
                     operation="initialize",
                     field=field,
-                    context={
-                        "received_type":
-                            type(value).__name__,
-                    },
+                    context={"received_type": type(value).__name__},
                 )
 
         self._prepare_input = prepare_input
         self._validate_uploads = validate_uploads
         self._grant_entitlement = grant_entitlement
         self._enqueue_audit = enqueue_audit
+        self._get_audit_artifact = get_audit_artifact
         self._get_audit_status = get_audit_status
         self._get_audit_workspace = get_audit_workspace
         self._get_order = get_order
-        self._authorize = require_route_authorizer(
-            authorizer
-        )
+        self._authorize = require_route_authorizer(authorizer)
 
-        router = APIRouter(
-            prefix="/orders",
-            tags=["audits"],
-        )
+        router = APIRouter(prefix="/orders", tags=["audits"])
 
         router.add_api_route(
             "/{order_id}/audit",
@@ -139,7 +122,14 @@ class RouteAudits:
             response_class=Response,
             name="start_audit",
         )
-
+        router.add_api_route(
+            "/{order_id}/audit/artifacts/{artifact_kind}",
+            self.artifact,
+            methods=["GET"],
+            status_code=status.HTTP_200_OK,
+            response_class=StreamingResponse,
+            name="get_audit_artifact",
+        )
         router.add_api_route(
             "/{order_id}/audit/status",
             self.status,
@@ -148,7 +138,6 @@ class RouteAudits:
             response_class=Response,
             name="get_audit_status",
         )
-
         router.add_api_route(
             "/{order_id}/audit/workspace",
             self.workspace,
@@ -161,19 +150,14 @@ class RouteAudits:
         self.router = router
 
     @staticmethod
-    def _sources(
-        value: Any,
-    ) -> tuple[AuditSourceRef, ...]:
+    def _sources(value: Any) -> tuple[AuditSourceRef, ...]:
         if (
             not isinstance(value, list)
             or not value
         ):
             raise APIValidationError(
                 "sources must be a non-empty array.",
-                public_message=(
-                    "Upload the required BIM model "
-                    "before running the audit."
-                ),
+                public_message="Upload the required BIM model before running the audit.",
                 component=_COMPONENT,
                 operation="start_audit",
                 field="sources",
@@ -183,10 +167,7 @@ class RouteAudits:
         seen: set[str] = set()
 
         for index, item in enumerate(value):
-            if not isinstance(
-                item,
-                Mapping,
-            ):
+            if not isinstance(item, Mapping):
                 raise APIValidationError(
                     "Audit source must be an object.",
                     component=_COMPONENT,
@@ -194,20 +175,11 @@ class RouteAudits:
                     field=f"sources[{index}]",
                 )
 
-            data = validate_object_fields(
-                item,
-                required=(
-                    "source_ref",
-                    "filename",
-                ),
-            )
+            data = validate_object_fields(item, required=("source_ref", "filename"))
 
             source_ref = require_api_text(
                 data["source_ref"],
-                field=(
-                    f"sources[{index}]."
-                    "source_ref"
-                ),
+                field=(f"sources[{index}]." "source_ref"),
                 component=_COMPONENT,
                 operation="start_audit",
             )
@@ -232,27 +204,16 @@ class RouteAudits:
                 )
 
             seen.add(source_ref)
-
-            result.append(
-                AuditSourceRef(
-                    source_ref=source_ref,
-                    filename=filename,
-                )
-            )
+            result.append(AuditSourceRef(source_ref=source_ref, filename=filename))
 
         return tuple(result)
 
     @staticmethod
-    def _metadata(
-        value: Any,
-    ) -> dict[str, Any]:
+    def _metadata(value: Any) -> dict[str, Any]:
         if value is None:
             return {}
 
-        if not isinstance(
-            value,
-            Mapping,
-        ):
+        if not isinstance(value, Mapping):
             raise APIValidationError(
                 "metadata must be a JSON object.",
                 component=_COMPONENT,
@@ -262,32 +223,21 @@ class RouteAudits:
 
         return dict(value)
 
-    async def start(
-        self,
-        request: Request,
-        order_id: str,
-    ) -> Response:
+    async def start(self, request: Request, order_id: str) -> Response:
         target = require_api_text(
             order_id,
             field="order_id",
             component=_COMPONENT,
             operation="start_audit",
         )
-
         actor = await authorize_request(
             self._authorize,
             request,
             operation="start_audit",
             resource_id=target,
         )
-
-        request_key = require_idempotency_key(
-            request
-        )
-
-        order = self._get_order.find(
-            target
-        )
+        request_key = require_idempotency_key(request)
+        order = self._get_order.find(target)
 
         if order is None:
             raise APINotFoundError(
@@ -307,21 +257,13 @@ class RouteAudits:
                 component=_COMPONENT,
                 operation="start_audit",
                 field="order.state",
-                context={
-                    "state":
-                        order.state.value,
-                },
+                context={"state": order.state.value}, # type: ignore
             )
 
         payload = validate_object_fields(
             await read_json_object(request),
-            required=(
-                "job_id",
-                "sources",
-            ),
-            optional=(
-                "metadata",
-            ),
+            required=("job_id", "sources"),
+            optional="metadata",
         )
 
         job_id = require_api_text(
@@ -332,32 +274,15 @@ class RouteAudits:
             max_length=256,
         )
 
-        sources = self._sources(
-            payload["sources"]
-        )
-
-        prepared = self._prepare_input.prepare(
-            target,
-            order.product_code,
-            sources,
-        )
-
+        sources = self._sources(payload["sources"])
+        prepared = self._prepare_input.prepare(target, order.product_code, sources)
         validated = self._validate_uploads.execute(
             target,
-            idempotency_key=(
-                _derived_idempotency_key(
-                    request_key,
-                    "validate",
-                )
-            ),
+            idempotency_key=(_derived_idempotency_key(request_key, "validate")),
             actor=actor,
             metadata={
-                "audit_input_manifest_ref":
-                    prepared.manifest_ref,
-                "evidence_count":
-                    len(
-                        prepared.evidence_refs
-                    ),
+                "audit_input_manifest_ref": prepared.manifest_ref,
+                "evidence_count": len(prepared.evidence_refs),
             },
         )
 
@@ -374,18 +299,11 @@ class RouteAudits:
 
         self._grant_entitlement.execute(
             target,
-            idempotency_key=(
-                _derived_idempotency_key(
-                    request_key,
-                    "entitlement",
-                )
-            ),
+            idempotency_key=(_derived_idempotency_key(request_key, "entitlement")),
             actor=actor,
         )
 
-        entitled_order = self._get_order.execute(
-            target
-        )
+        entitled_order = self._get_order.execute(target)
 
         if (
             entitled_order.state
@@ -401,57 +319,74 @@ class RouteAudits:
         job = AuditJob.from_order(
             entitled_order,
             job_id=job_id,
-            evidence_refs=(
-                prepared.evidence_refs
-            ),
-            evidence_manifest_ref=(
-                prepared.manifest_ref
-            ),
-            metadata=self._metadata(
-                payload.get("metadata")
-            ),
+            evidence_refs=prepared.evidence_refs,
+            evidence_manifest_ref= prepared.manifest_ref,
+            metadata=self._metadata(payload.get("metadata")),
         )
 
-        receipt = self._enqueue_audit.execute(
-            job,
-            idempotency_key=(
-                _derived_idempotency_key(
-                    request_key,
-                    "queue",
-                )
-            ),
-            actor=actor,
-        )
-
-        audit_status = (
-            self._get_audit_status.execute(
-                target,
-                job=job,
-            )
-        )
+        receipt = self._enqueue_audit.execute(job, idempotency_key=(_derived_idempotency_key(request_key, "queue")), actor=actor)
+        audit_status = (self._get_audit_status.execute(target, job=job))
 
         return json_response(
             {
-                "job":
-                    job.to_dict(),
-                "queue":
-                    receipt.to_dict(),
-                "status":
-                    audit_status.to_dict(),
+                "job": job.to_dict(),
+                "queue": receipt.to_dict(),
+                "status": audit_status.to_dict(),
             },
-            status_code=(
-                status.HTTP_202_ACCEPTED
-            ),
+            status_code=status.HTTP_202_ACCEPTED,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    async def artifact(self, request: Request, order_id: str, artifact_kind: str) -> StreamingResponse:
+        target = require_api_text(
+            order_id,
+            field="order_id",
+            component=_COMPONENT,
+            operation="get_audit_artifact",
+        )
+
+        await authorize_request(
+            self._authorize,
+            request,
+            operation="get_audit_artifact",
+            resource_id=target,
+        )
+
+        try:
+            artifact = (self._get_audit_artifact.execute(target, artifact_kind))
+
+        except AppValidationError as exc:
+            raise APINotFoundError(
+                "Requested audit artifact does not exist.",
+                component=_COMPONENT,
+                operation="get_audit_artifact",
+                cause=exc,
+            ) from exc
+
+        disposition = (
+            "inline"
+            if artifact.kind
+            in {
+                "viewer_model",
+                "family_data_pdf",
+            }
+            else
+            "attachment"
+        )
+
+        return StreamingResponse(
+            _stream_audit_artifact(artifact.stream),
+            media_type=artifact.content_type,
             headers={
-                "Cache-Control": "no-store",
+                "Cache-Control": "private, no-store",
+                "Content-Disposition": (f'{disposition}; '
+                        f'filename="{artifact.filename}"'
+                    ),
+                "X-BIMAP-Artifact-SHA256": artifact.sha256,
             },
         )
 
-    async def status(
-        self,
-        request: Request,
-        order_id: str,
-    ) -> Response:
+    async def status(self, request: Request, order_id: str) -> Response:
         target = require_api_text(
             order_id,
             field="order_id",
@@ -465,10 +400,7 @@ class RouteAudits:
             operation="get_audit_status",
             resource_id=target,
         )
-
-        result = self._get_audit_status.find(
-            target
-        )
+        result = self._get_audit_status.find(target)
 
         if result is None:
             raise APINotFoundError(
@@ -477,19 +409,45 @@ class RouteAudits:
                 operation="get_audit_status",
                 field="order_id",
             )
+        return json_response(result.to_dict(), headers={"Cache-Control": "no-store"})
 
-        return json_response(
-            result.to_dict(),
-            headers={
-                "Cache-Control": "no-store",
-            },
-        )
+    @staticmethod
+    def _public_audit_artifacts(order_id: str, payload: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+        raw = payload.get("artifacts")
 
-    async def workspace(
-        self,
-        request: Request,
-        order_id: str,
-    ) -> Response:
+        if not isinstance(raw, Mapping):
+            return {}
+
+        encoded_order = quote(order_id, safe="")
+        result: dict[str, dict[str, Any]] = {}
+
+        for kind, metadata in raw.items():
+            if not isinstance(kind, str):
+                continue
+
+            if not isinstance(metadata, Mapping):
+                continue
+
+            result[kind] = {
+                "kind": kind,
+                "filename": metadata.get("filename"),
+                "content_type":metadata.get("content_type"),
+                "size_bytes":metadata.get("size_bytes"),
+                "sha256":metadata.get("sha256"),
+
+                # API-relative; apiResponse()
+                # adds /api/v1.
+                "href": (
+                    f"/orders/"
+                    f"{encoded_order}/"
+                    f"audit/artifacts/"
+                    f"{quote(kind, safe='')}"
+                ),
+            }
+
+        return result
+
+    async def workspace(self, request: Request, order_id: str) -> Response:
         target = require_api_text(
             order_id,
             field="order_id",
@@ -515,30 +473,23 @@ class RouteAudits:
                 field="order_id",
             )
 
-        result = (
-            self._get_audit_workspace.find(
-                target
-            )
-        )
+        result = (self._get_audit_workspace.find(target))
 
         if result is None:
             raise APINotFoundError(
                 "No completed audit result exists for this audit.",
-                public_message=(
-                    "The audit has not produced a "
-                    "completed result yet."
-                ),
+                public_message="The audit has not produced a completed result yet.",
                 component=_COMPONENT,
                 operation="get_audit_workspace",
                 field="order_id",
             )
 
-        return json_response(
-            result.to_dict(),
-            headers={
-                "Cache-Control": "no-store",
-            },
-        )
+        body = result.to_dict()
+        payload = dict(body["payload"])
+        payload["artifacts"] = self._public_audit_artifacts(target, payload)
+        body["payload"] = payload
+
+        return json_response(body, headers={"Cache-Control": "no-store"})
 
 
 __all__ = ["RouteAudits"]
