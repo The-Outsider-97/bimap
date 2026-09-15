@@ -208,6 +208,7 @@ class RouteAudits:
 
         return tuple(result)
 
+
     @staticmethod
     def _metadata(value: Any) -> dict[str, Any]:
         if value is None:
@@ -222,6 +223,58 @@ class RouteAudits:
             )
 
         return dict(value)
+
+    @staticmethod
+    def _viewer_model(value: Any) -> AuditViewerModelRef | None:
+        if value is None:
+            return None
+
+        if not isinstance(value, Mapping):
+            raise APIValidationError(
+                "viewer_model must be a JSON object.",
+                public_message=(
+                    "The viewer-model reference is invalid."
+                ),
+                component=_COMPONENT,
+                operation="start_audit",
+                field="viewer_model",
+            )
+
+        data = validate_object_fields(value, required=("viewer_ref", "filename"))
+        viewer_ref = require_api_text(data["viewer_ref"],
+            field=(
+                "viewer_model."
+                "viewer_ref"
+            ),
+            component=_COMPONENT,
+            operation="start_audit",
+        )
+
+        filename = require_api_text(
+            data[
+                "filename"
+            ],
+            field=(
+                "viewer_model."
+                "filename"
+            ),
+            component=_COMPONENT,
+            operation="start_audit",
+            max_length=255,
+        )
+
+        try:
+            return AuditViewerModelRef(viewer_ref=viewer_ref, filename=filename)
+
+        except AppValidationError as exc:
+            raise APIValidationError(
+                "viewer_model does not satisfy the BIMAP viewer-reference contract.",
+                public_message="The uploaded viewer model is invalid.",
+                component=_COMPONENT,
+                operation="start_audit",
+                field="viewer_model",
+                cause=exc,
+            ) from exc
 
     async def start(self, request: Request, order_id: str) -> Response:
         target = require_api_text(
@@ -262,8 +315,11 @@ class RouteAudits:
 
         payload = validate_object_fields(
             await read_json_object(request),
-            required=("job_id", "sources"),
-            optional=("metadata",),
+            required=("job_id", "sources",),
+            optional=(
+                "metadata",
+                "viewer_model",
+            ),
         )
 
         job_id = require_api_text(
@@ -275,7 +331,13 @@ class RouteAudits:
         )
 
         sources = self._sources(payload["sources"])
-        prepared = self._prepare_input.prepare(target, order.product_code, sources)
+        viewer_model = (self._viewer_model(payload.get("viewer_model")))
+        prepared = (self._prepare_input.prepare(target, order.product_code, sources,
+                viewer_model=(
+                    viewer_model
+                ),
+            )
+        )
         validated = self._validate_uploads.execute(
             target,
             idempotency_key=(_derived_idempotency_key(request_key, "validate")),
