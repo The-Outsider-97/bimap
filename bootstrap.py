@@ -711,7 +711,7 @@ class BootstrapQueries:
     list_orders: ListOrders
 
     get_products: GetProducts
-    get_audit_artifect: GetAuditArtifact
+    get_audit_artifact: GetAuditArtifact
     get_audit_status: GetAuditStatus
     list_reports: ListReports
 
@@ -1117,7 +1117,7 @@ class Bootstrap:
                     get_order=get_order,
                     list_orders=list_orders,
                     get_products=get_products,
-                    get_audit_artifect=get_audit_artifact,
+                    get_audit_artifact=get_audit_artifact,
                     get_audit_status=get_audit_status,
                     get_audit_workspace=get_audit_workspace,
                     list_reports=list_reports,
@@ -1142,6 +1142,7 @@ class Bootstrap:
 
                     prepare_audit_input=audit_input_service,
                     enqueue_audit=enqueue_audit,
+                    get_audit_artifact=get_audit_artifact,
                     get_audit_status=get_audit_status,
                     get_audit_workspace=get_audit_workspace,
 
