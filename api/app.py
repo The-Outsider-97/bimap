@@ -492,6 +492,7 @@ def _construct_route_groups(dependencies: APIDependencies) -> tuple[Any, ...]:
             use_cases.validate_uploads,
             use_cases.grant_entitlement,
             use_cases.enqueue_audit,
+            use_cases.get_audit_artifact,
             use_cases.get_audit_status,
             use_cases.get_audit_workspace,
             use_cases.get_order,

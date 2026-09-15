@@ -51,6 +51,7 @@ from ..app.commands.handle_payment import HandlePayment
 from ..app.commands.request_deletion import RequestDeletion
 from ..app.commands.stage_upload import StageUpload
 from ..app.commands.validate_uploads import ValidateUploads
+from ..app.queries.get_audit_artifact import GetAuditArtifact
 from ..app.queries.get_audit_status import GetAuditStatus
 from ..app.queries.get_audit_workspace import GetAuditWorkspace
 from ..app.queries.get_order import GetOrder
@@ -151,6 +152,7 @@ class APIUseCases:
 
     prepare_audit_input: AuditInputService
     enqueue_audit: EnqueueAudit
+    get_audit_artifact: GetAuditArtifact
     get_audit_status: GetAuditStatus
     get_audit_workspace: GetAuditWorkspace
 
@@ -188,6 +190,7 @@ class APIUseCases:
             ("stage_upload", self.stage_upload, StageUpload),
             ("prepare_audit_input", self.prepare_audit_input, AuditInputService),
             ("enqueue_audit", self.enqueue_audit, EnqueueAudit),
+            ("get_audit_artifact", self.get_audit_artifact, GetAuditArtifact),
             ("get_audit_status", self.get_audit_status, GetAuditStatus),
             ("get_audit_workspace", self.get_audit_workspace, GetAuditWorkspace),
         )
