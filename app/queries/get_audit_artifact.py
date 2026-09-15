@@ -44,13 +44,10 @@ class GetAuditArtifact:
             printer,
             logger,
             component=_COMPONENT,
-            action="Serializing audit artifect",
-            event="get_audit_artifect_projection_to_dict_start",
-            #context={
-            #    "filename": self.filename,
-            #    "content_type": self.content_type,
-            #    "sha256": self.sha256,},
+            action="Initializing get-audit-artifact query",
+            event="get_audit_artifact_query_init",
         )
+
         if not isinstance(results, AuditResultStore):
             raise AppConfigurationError(
                 "results must implement AuditResultStore.",
@@ -66,8 +63,11 @@ class GetAuditArtifact:
                 operation="initialize",
                 field="storage",
             )
+
         self._results = results
         self._storage = storage
+
+        logger.info({"event": "get_audit_artifact_query_initialized"})
 
     def execute(self, order_id: str, kind: str) -> AuditArtifactDownload:
         target_order = require_app_text(
