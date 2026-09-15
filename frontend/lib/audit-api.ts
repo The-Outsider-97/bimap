@@ -1,6 +1,7 @@
 import {
   apiJsonRequest,
   apiRequest,
+  apiResponse,
 } from "@/lib/api";
 import type {
   BimapProductCode,
@@ -21,6 +22,31 @@ export type SLAIGateDisposition =
   | "block"
   | "unknown";
 
+
+export type AuditArtifactKind =
+  | "viewer_model"
+  | "family_data_pdf";
+
+
+export type AuditArtifactDto = {
+  readonly kind: AuditArtifactKind;
+  readonly filename: string;
+  readonly content_type: string;
+  readonly size_bytes: number;
+  readonly sha256: string;
+  readonly href: string;
+};
+
+
+export type AuditArtifactsDto =
+  Readonly<
+    Partial<
+      Record<
+        AuditArtifactKind,
+        AuditArtifactDto
+      >
+    >
+  >;
 
 export type SLAIGovernanceGateDto = {
   readonly gate: string;
@@ -172,7 +198,24 @@ export type AuditExecutionPayloadDto = {
   readonly job: Readonly<Record<string, unknown>>;
   readonly deterministic: AuditDeterministicDto;
   readonly slai: SLAIMappedResultDto;
+  readonly artifacts?: AuditArtifactsDto;
 };
+
+export async function fetchAuditArtifactBlob(
+  artifact: AuditArtifactDto,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const response =
+    await apiResponse(
+      artifact.href,
+      {
+        method: "GET",
+        signal,
+      },
+    );
+
+  return response.blob();
+}
 
 export type AuditWorkspaceDto = {
   readonly order_id: string;
