@@ -81,6 +81,7 @@ from .app.ports.payment import Payment
 from .app.ports.queue import Queue
 from .app.ports.repositories import Repository
 from .app.ports.storage import Storage
+from .app.queries.get_audit_artifact import GetAuditArtifact
 from .app.queries.get_audit_status import GetAuditStatus
 from .app.queries.get_audit_workspace import GetAuditWorkspace
 from .app.queries.get_order import GetOrder
@@ -710,7 +711,7 @@ class BootstrapQueries:
     list_orders: ListOrders
 
     get_products: GetProducts
-
+    get_audit_artifect: GetAuditArtifact
     get_audit_status: GetAuditStatus
     list_reports: ListReports
 
@@ -1028,6 +1029,8 @@ class Bootstrap:
                     self.infrastructure.storage,
                     self.infrastructure.data_extractor,
                     self.infrastructure.clock,
+                    model_converter=self.infrastructure.model_converter,
+                    pdf_renderer=self.infrastructure.data_extraction_pdf_renderer,
                 )
 
                 audit_service = AuditService(
@@ -1107,12 +1110,14 @@ class Bootstrap:
                 get_order = GetOrder(self.infrastructure.repository)
                 list_orders = ListOrders(self.infrastructure.repository)
                 get_products = GetProducts(self.configuration.catalog, product_limits=self.configuration.product_limits)
+                get_audit_artifact = (GetAuditArtifact(self.infrastructure.audit_results, self.infrastructure.storage))
                 get_audit_status = GetAuditStatus(self.infrastructure.repository)
                 list_reports = ListReports(self.infrastructure.repository)
                 queries = BootstrapQueries(
                     get_order=get_order,
                     list_orders=list_orders,
                     get_products=get_products,
+                    get_audit_artifect=get_audit_artifact,
                     get_audit_status=get_audit_status,
                     get_audit_workspace=get_audit_workspace,
                     list_reports=list_reports,
