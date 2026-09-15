@@ -88,6 +88,7 @@ from applications.bimap.infra.conversion import ( # type: ignore
     RevitModelConverter,
     TrimeshModelConverter,
 )
+from applications.bimap.infra.email_artifact_mailer import EmailArtifactMailer  # type: ignore
 from applications.bimap.infra.extraction import ( # type: ignore
     BlenderFbxDataExtractor,
     DwgDxfDataExtractor,
@@ -625,6 +626,7 @@ def _create_local_bootstrap() -> Bootstrap:
 
         return path
     email_notifications = _build_email_service()
+    artifact_mailer = EmailArtifactMailer(email_notifications)
     require_sms_verification = _environment_bool(_REQUIRE_SMS_VERIFICATION_ENV, default=False)
 
     phone_verification = (
@@ -636,10 +638,7 @@ def _create_local_bootstrap() -> Bootstrap:
     session_ttl_minutes = _environment_positive_int(_SESSION_TTL_MINUTES_ENV, default=480,)
     auth_memory_path = str(_auth_memory_path())
     authentication = LocalSLAIAuthentication(
-        SLAIAuthService(
-            memory_path=auth_memory_path,
-            token_ttl_minutes=session_ttl_minutes,
-        ),
+        SLAIAuthService(memory_path=auth_memory_path, token_ttl_minutes=session_ttl_minutes),
         email_notifications,
         phone_verification,
         email_code_ttl_minutes=15,
@@ -749,9 +748,10 @@ def _create_local_bootstrap() -> Bootstrap:
         renewal_window_resolver=renewal_window_resolver,
         shared_memory=SharedMemory(),
         route_hooks=_build_route_hooks(authentication, accounts),
+        notifications=email_notifications,
+        artifact_mailer=artifact_mailer,
         account_summary_resolver=account_summary_resolver,
         account_avatar_uploader=None,
-        notifications=email_notifications,
         close_shared_memory_on_shutdown=True,
         model_converter=model_converter,
         data_extractor=data_extractor,
