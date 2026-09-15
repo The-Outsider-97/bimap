@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 from collections.abc import Iterator
 from urllib.parse import quote
-from starlette.responses import StreamingResponse
+from starlette.responses import StreamingResponse # type: ignore
 
 from fastapi import APIRouter, Request, Response, status  # type: ignore
 
@@ -263,7 +263,7 @@ class RouteAudits:
         payload = validate_object_fields(
             await read_json_object(request),
             required=("job_id", "sources"),
-            optional="metadata",
+            optional=("metadata",),
         )
 
         job_id = require_api_text(
