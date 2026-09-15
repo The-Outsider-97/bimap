@@ -20,6 +20,7 @@ import {
 } from "@/lib/bimap-api";
 import {
   allElementTargets,
+  fetchAuditArtifactBlob,
   findingsFromWorkspace,
   getAuditStatus,
   getAuditWorkspace,
@@ -29,6 +30,7 @@ import {
   ruleResultsFromWorkspace,
   startAudit,
   targetsForFinding,
+  type AuditArtifactDto,
   type AuditElementTarget,
   type AuditFindingDto,
   type AuditSeverity,
@@ -580,6 +582,15 @@ export function AuditWorkspace({ productCode }: Props) {
           return null;
         }
 
+        /*
+         * Persist the completed audit workspace.
+         *
+         * The generated viewer artifact is NOT loaded here directly.
+         * Model loading is handled by the effect immediately below.
+         *
+         * Keeping these responsibilities separate avoids coupling
+         * workspace retrieval to browser Blob/ObjectURL lifecycle.
+         */
         setWorkspace(result);
         setPhase("complete");
 
@@ -589,7 +600,14 @@ export function AuditWorkspace({ productCode }: Props) {
           );
         }
 
-        void loadReports(targetOrderId);
+        /*
+         * Released report artifacts are a separate lifecycle from the
+         * audit workspace artifacts. Refresh them independently.
+         */
+        void loadReports(
+          targetOrderId,
+        );
+
         return result;
       } catch (error) {
         if (
@@ -606,12 +624,194 @@ export function AuditWorkspace({ productCode }: Props) {
         }
 
         setPhase("error");
-        setMessage(getApiErrorMessage(error));
+        setMessage(
+          getApiErrorMessage(
+            error,
+          ),
+        );
+
         return null;
       }
     },
-    [loadReports, productCode],
+    [
+      loadReports,
+      productCode,
+    ],
   );
+
+
+  /*
+   * Automatically load BIMAP-generated viewer geometry.
+   *
+   * This runs AFTER loadWorkspace() stores a completed workspace in
+   * React state. It does not belong inside loadWorkspace(), because
+   * Blob URLs are browser/UI state and must follow the component
+   * lifecycle.
+   *
+   * A workspace may legitimately have no viewer_model artifact. In
+   * that case the manual GLB/GLTF loader remains available.
+   */
+  useEffect(() => {
+    const artifact =
+      workspace
+        ?.payload
+        .artifacts
+        ?.viewer_model
+      ?? null;
+
+    if (!artifact) {
+      return;
+    }
+
+    /*
+     * Abort an artifact request when:
+     * - another workspace replaces this one;
+     * - the generated artifact changes;
+     * - the component unmounts.
+     */
+    const controller =
+      new AbortController();
+
+    let active = true;
+
+    void (
+      async () => {
+        try {
+          const blob =
+            await fetchAuditArtifactBlob(
+              artifact,
+              controller.signal,
+            );
+
+          /*
+           * The request may have completed after this effect was
+           * replaced. Never install a stale model in that case.
+           */
+          if (
+            !active ||
+            controller.signal.aborted
+          ) {
+            return;
+          }
+
+          /*
+           * A BIMAP viewer artifact must be GLB/GLTF content.
+           *
+           * The backend remains authoritative for the artifact
+           * content type. This check prevents an unrelated binary
+           * artifact from being passed into Three.js accidentally.
+           */
+          const contentType =
+            artifact.content_type
+              .trim()
+              .toLowerCase();
+
+          if (
+            contentType !==
+              "model/gltf-binary" &&
+            contentType !==
+              "model/gltf+json" &&
+            contentType !==
+              "application/octet-stream"
+          ) {
+            throw new Error(
+              `Unsupported viewer artifact content type: ${artifact.content_type}`,
+            );
+          }
+
+          /*
+           * Revoke the previously installed model URL before replacing
+           * it. This includes a manually loaded GLB/GLTF or a viewer
+           * artifact belonging to an earlier audit.
+           */
+          if (modelUrlRef.current) {
+            URL.revokeObjectURL(
+              modelUrlRef.current,
+            );
+
+            modelUrlRef.current =
+              null;
+          }
+
+          const url =
+            URL.createObjectURL(
+              blob,
+            );
+
+          /*
+           * Check once more after ObjectURL creation. Although this
+           * window is small, revoking here prevents leaking the newly
+           * created URL if the effect became inactive.
+           */
+          if (
+            !active ||
+            controller.signal.aborted
+          ) {
+            URL.revokeObjectURL(
+              url,
+            );
+            return;
+          }
+
+          modelUrlRef.current =
+            url;
+
+          setModelUrl(
+            url,
+          );
+
+          setModelName(
+            artifact.filename,
+          );
+        } catch (error) {
+          /*
+           * Abort is expected during workspace replacement/unmount and
+           * must not be shown as an audit failure.
+           */
+          if (
+            controller.signal.aborted ||
+            !active
+          ) {
+            return;
+          }
+
+          setMessage(
+            `Audit completed, but the generated viewer model could not be loaded: ${
+              getApiErrorMessage(
+                error,
+              )
+            }`,
+          );
+        }
+      }
+    )();
+
+    /*
+     * IMPORTANT:
+     *
+     * Abort the network request here, but DO NOT revoke
+     * modelUrlRef.current here.
+     *
+     * The model URL remains valid for BIMModelViewer until:
+     * - another model replaces it;
+     * - clearModel() is called; or
+     * - the component-wide cleanup runs on unmount.
+     *
+     * Those owners already revoke modelUrlRef.current.
+     */
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [
+    workspace?.order_id,
+    workspace
+      ?.payload
+      .artifacts
+      ?.viewer_model
+      ?.sha256,
+  ]);
+
 
   const refreshStatus = useCallback(
     async (
@@ -656,6 +856,63 @@ export function AuditWorkspace({ productCode }: Props) {
     },
     [loadWorkspace],
   );
+
+  const downloadAuditArtifact = useCallback(
+    async (
+      artifact: AuditArtifactDto,
+    ) => {
+      try {
+        const blob =
+          await fetchAuditArtifactBlob(
+            artifact,
+          );
+
+        const url =
+          URL.createObjectURL(
+            blob,
+          );
+
+        try {
+          const anchor =
+            document.createElement("a");
+
+          anchor.href = url;
+          anchor.download =
+            artifact.filename;
+          anchor.rel = "noopener";
+
+          document.body.appendChild(
+            anchor,
+          );
+
+          anchor.click();
+          anchor.remove();
+        } finally {
+          window.setTimeout(
+            () =>
+              URL.revokeObjectURL(
+                url,
+              ),
+            0,
+          );
+        }
+      } catch (error) {
+        setMessage(
+          getApiErrorMessage(
+            error,
+          ),
+        );
+      }
+    },
+    [],
+  );
+
+  const familyDataPdf =
+    workspace
+      ?.payload
+      .artifacts
+      ?.family_data_pdf
+      ?? null;
 
   const stopPolling = useCallback(() => {
     if (pollRef.current !== null) {
@@ -1470,6 +1727,31 @@ export function AuditWorkspace({ productCode }: Props) {
           </dl>
 
           <div className={styles.artifactList}>
+            {familyDataPdf ? (
+              <button
+                type="button"
+                onClick={() =>
+                  void downloadAuditArtifact(
+                    familyDataPdf,
+                  )
+                }
+              >
+                <span>
+                  <strong>
+                    {familyDataPdf.filename}
+                  </strong>
+
+                  <small>
+                    Family data extraction
+                  </small>
+                </span>
+
+                <span aria-hidden="true">
+                  ↓
+                </span>
+              </button>
+            ) : null}
+
             {reports?.items.flatMap((report) =>
               report.artifacts.map((artifact) => (
                 <button
@@ -1485,23 +1767,33 @@ export function AuditWorkspace({ productCode }: Props) {
                     <strong>
                       {artifact.filename}
                     </strong>
+
                     <small>
                       Report {report.report_version}
                     </small>
                   </span>
-                  <span aria-hidden="true">↓</span>
+
+                  <span aria-hidden="true">
+                    ↓
+                  </span>
                 </button>
               )),
             )}
 
-            {(!reports || reports.found_count === 0) ? (
+            {!familyDataPdf &&
+            (!reports ||
+              reports.found_count === 0) ? (
               <div className={styles.emptyState}>
                 <strong>
-                  No released report artifacts
+                  No audit artifacts available
                 </strong>
-                <p>
-                  Artifacts appear here after BIMAP reporting and release complete.
-                </p>
+
+                <div>
+                  Family data becomes available
+                  with the completed audit workspace.
+                  Governed report artifacts appear
+                  after reporting and release complete.
+                </div>
               </div>
             ) : null}
           </div>
