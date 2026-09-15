@@ -58,7 +58,7 @@ class RouteAudits:
         "_validate_uploads",
         "_grant_entitlement",
         "_enqueue_audit",
-        "_get_audit_artifact"
+        "_get_audit_artifact",
         "_get_audit_status",
         "_get_audit_workspace",
         "_get_order",
