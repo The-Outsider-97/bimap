@@ -41,11 +41,7 @@ _COMPONENT = "worker_audit"
 class WorkerAudit:
     """Execute one validated active ``AuditJob`` through ``AuditService``."""
 
-    __slots__ = (
-        "_service",
-        "_order_service",
-        "_audit_inputs",
-    )
+    __slots__ = ("_service", "_order_service", "_audit_inputs")
 
     def __init__(self, service: AuditService, order_service: OrderService, audit_inputs: AuditInputService) -> None:
         announce_worker_action(
@@ -109,6 +105,7 @@ class WorkerAudit:
         correlation_id: str | None = None,
         max_context_bytes: int | None = None,
         task_overrides: Mapping[str, Any] | None = None,
+        resolved_artifacts: dict[str, Any] = {}
     ) -> AuditExecutionResult:
         """Run one complete deterministic + governed SLAI audit execution."""
         announce_worker_action(
@@ -179,13 +176,20 @@ class WorkerAudit:
                 )
 
             resolved = self._audit_inputs.resolve(
-                job.evidence_manifest_ref,
-                expected_order_id=job.order_id,
-                expected_product_code=job.product_code,
-            )
+                    job.evidence_manifest_ref,
+                    expected_order_id=job.order_id,
+                    expected_product_code=(job.product_code)
+                    )
 
             family_payload = resolved.family_payload
             project_payload = resolved.project_payload
+
+            resolved_artifacts = {
+                artifact.kind:
+                    artifact.to_dict()
+                for artifact
+                in resolved.artifacts
+            }
 
         # Execute exactly once. The previous implementation invoked
         # AuditService.run_audit() once before resolving the prepared input and
@@ -206,6 +210,7 @@ class WorkerAudit:
                     correlation_id=correlation_id,
                     max_context_bytes=max_context_bytes,
                     task_overrides=task_overrides,
+                    artifacts=resolved_artifacts,
                 ),
                 component=_COMPONENT,
                 operation="execute",
@@ -244,10 +249,7 @@ class WorkerAudit:
             except Exception:
                 # Do not replace the original audit exception merely because
                 # lifecycle failure recording also failed.
-                logger.exception(
-                    "Failed to transition failed audit "
-                    "to analysis_failed."
-                )
+                logger.exception("Failed to transition failed audit to analysis_failed.")
 
             raise
 
@@ -298,9 +300,7 @@ class WorkerAudit:
                 ),
                 "finding_count": validated.deterministic.finding_count,
                 "evidence_count": validated.deterministic.evidence_count,
-                "slai_terminated_early": bool(
-                    validated.slai.terminated_early
-                ),
+                "slai_terminated_early": bool(validated.slai.terminated_early),
             }
         )
 
