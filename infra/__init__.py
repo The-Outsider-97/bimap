@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .email_artifact_mailer import EmailArtifactMailer
+    from .reportlab_audit_report_renderer import ReportLabAuditReportRenderer
     from .reportlab_data_extraction_renderer import ReportLabDataExtractionPDFRenderer
     from .local import (
         DevelopmentMalware,
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "EmailArtifactMailer",
+    "ReportLabAuditReportRenderer",
     "ReportLabDataExtractionPDFRenderer",
     "DevelopmentMalware",
     "DisabledPayment",
@@ -57,6 +59,10 @@ def __getattr__(name: str) -> Any:
     if name == "EmailArtifactMailer":
         from .email_artifact_mailer import EmailArtifactMailer
         return EmailArtifactMailer
+
+    if name == "ReportLabAuditReportRenderer":
+        from .reportlab_audit_report_renderer import ReportLabAuditReportRenderer
+        return ReportLabAuditReportRenderer
 
     if name == "ReportLabDataExtractionPDFRenderer":
         from .reportlab_data_extraction_renderer import ReportLabDataExtractionPDFRenderer
