@@ -13,6 +13,8 @@ jobs, define audit rules, or fabricate organization policy.
 from __future__ import annotations
 
 import hashlib
+import json
+import struct
 
 from collections.abc import Mapping, Sequence
 from contextlib import closing
@@ -32,7 +34,6 @@ from ...contracts.family_evidence import FamilyEvidence
 from ...contracts.project_evidence import ProjectEvidence
 from ...domain.products.models import ProductCode
 from ...domain.utils.domain_errors import DomainError
-
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
 
 
@@ -43,12 +44,17 @@ _COMPONENT = "audit_input_service"
 _MANIFEST_CONTENT_TYPE = "application/vnd.bimap.audit-input+json"
 _MANIFEST_SCHEMA_VERSION = "1.2.0"
 _REVIT_FAMILY_EXTENSION = "revit_family"
-
-
-@dataclass(
-    frozen=True,
-    slots=True,
+_GLB_MAGIC = b"glTF"
+_GLB_VERSION = 2
+_GLB_JSON_CHUNK_TYPE = 0x4E4F534A
+_MAX_VIEWER_JSON_BYTES = (
+    64
+    * 1024
+    * 1024
 )
+
+
+@dataclass(frozen=True, slots=True)
 class AuditArtifactRef:
     kind: str
     object_id: str
@@ -207,6 +213,58 @@ class AuditSourceRef:
                 field="filename",
             )
         object.__setattr__(self, "source_ref", source_ref)
+        object.__setattr__(self, "filename", filename)
+
+
+@dataclass(frozen=True, slots=True)
+class AuditViewerModelRef:
+    """
+    Reference to a staged derived viewer artifact.
+
+    This is intentionally separate from AuditSourceRef because GLB geometry is
+    not authoritative audit evidence.
+    """
+
+    viewer_ref: str
+    filename: str
+
+    def __post_init__(self) -> None:
+        viewer_ref = require_app_text(
+            self.viewer_ref,
+            field="viewer_ref",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation="validate_viewer_model",
+        )
+
+        filename = require_app_text(
+            self.filename,
+            field="filename",
+            error_type=AppValidationError,
+            component=_COMPONENT,
+            operation="validate_viewer_model",
+            max_length=255,
+        )
+
+        if (
+            "/" in filename
+            or "\\" in filename
+            or filename
+            in {
+                ".",
+                "..",
+            }
+            or PurePath(filename).suffix.casefold()
+            != ".glb"
+        ):
+            raise AppValidationError(
+                "Audit viewer model must be a safe .glb basename.",
+                component=_COMPONENT,
+                operation="validate_viewer_model",
+                field="filename",
+            )
+
+        object.__setattr__(self, "viewer_ref", viewer_ref)
         object.__setattr__(self, "filename", filename)
 
 
@@ -539,6 +597,489 @@ class AuditInputService:
                 if extension.get(key) is not None
             }
         return manifest
+
+    def _read_bimap_viewer_metadata(self, viewer: AuditViewerModelRef, stored: StoredObject) -> Mapping[str, Any]:
+        """
+        Read only BIMAP's GLB root JSON metadata.
+
+        No geometry parser or third-party glTF dependency is required.
+        """
+
+        operation = ("read_viewer_metadata")
+
+        with closing(self._storage.open(viewer.viewer_ref)) as stream:
+            header = stream.read(20)
+
+            if (
+                not isinstance(
+                    header,
+                    (
+                        bytes,
+                        bytearray,
+                        memoryview,
+                    ),
+                )
+                or len(header)
+                != 20
+            ):
+                raise AppIntegrityError(
+                    "Stored viewer artifact has an incomplete GLB header.",
+                    component=_COMPONENT,
+                    operation=operation,
+                    field="viewer_model",
+                )
+
+            (
+                magic,
+                version,
+                declared_length,
+                json_length,
+                json_type,
+            ) = struct.unpack(
+                "<4sIIII",
+                bytes(header),
+            )
+
+            if (
+                magic
+                != _GLB_MAGIC
+                or version
+                != _GLB_VERSION
+            ):
+                raise AppIntegrityError(
+                    "Stored viewer artifact is not a GLB 2.0 container.",
+                    component=_COMPONENT,
+                    operation=operation,
+                    field="viewer_model",
+                )
+
+            if (
+                declared_length
+                != stored.size_bytes
+            ):
+                raise AppIntegrityError(
+                    "Stored viewer GLB length does not match storage metadata.",
+                    component=_COMPONENT,
+                    operation=operation,
+                    field="viewer_model",
+                    context={
+                        "declared_length":
+                            declared_length,
+                        "stored_size_bytes":
+                            stored.size_bytes,
+                    },
+                )
+
+            if (
+                json_type
+                != _GLB_JSON_CHUNK_TYPE
+                or json_length
+                <= 0
+                or json_length
+                > _MAX_VIEWER_JSON_BYTES
+                or json_length
+                % 4
+                != 0
+                or 20
+                + json_length
+                > declared_length
+            ):
+                raise AppIntegrityError(
+                    "Stored viewer GLB has an invalid JSON chunk.",
+                    component=_COMPONENT,
+                    operation=operation,
+                    field="viewer_model",
+                    context={
+                        "json_length":
+                            json_length,
+                    },
+                )
+
+            json_payload = (
+                stream.read(
+                    json_length
+                )
+            )
+
+            if (
+                not isinstance(
+                    json_payload,
+                    (
+                        bytes,
+                        bytearray,
+                        memoryview,
+                    ),
+                )
+                or len(
+                    json_payload
+                )
+                != json_length
+            ):
+                raise AppIntegrityError(
+                    "Stored viewer GLB JSON chunk is truncated.",
+                    component=_COMPONENT,
+                    operation=operation,
+                    field="viewer_model",
+                )
+
+        try:
+            root = json.loads(
+                bytes(
+                    json_payload
+                )
+                .rstrip(
+                    b" \t\r\n\x00"
+                )
+                .decode(
+                    "utf-8"
+                )
+            )
+
+        except (
+            UnicodeError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise AppIntegrityError(
+                "Stored viewer GLB contains invalid UTF-8 JSON.",
+                component=_COMPONENT,
+                operation=operation,
+                field="viewer_model",
+                cause=exc,
+            ) from exc
+
+        if not isinstance(
+            root,
+            Mapping,
+        ):
+            raise AppIntegrityError(
+                "Stored viewer GLB root must be a JSON object.",
+                component=_COMPONENT,
+                operation=operation,
+                field="viewer_model",
+            )
+
+        extras = root.get(
+            "extras"
+        )
+
+        if not isinstance(
+            extras,
+            Mapping,
+        ):
+            raise AppIntegrityError(
+                "BIMAP viewer GLB is missing root extras metadata.",
+                component=_COMPONENT,
+                operation=operation,
+                field="viewer_model.extras",
+            )
+
+        if (
+            extras.get(
+                "bimapSchema"
+            )
+            != "viewer-model/1.0"
+        ):
+            raise AppIntegrityError(
+                "Viewer GLB does not advertise BIMAP viewer-model/1.0.",
+                component=_COMPONENT,
+                operation=operation,
+                field=(
+                    "viewer_model."
+                    "extras.bimapSchema"
+                ),
+                context={
+                    "received":
+                        extras.get(
+                            "bimapSchema"
+                        ),
+                },
+            )
+
+        return dict(
+            extras
+        )
+
+
+    def _uploaded_viewer_artifact(
+        self,
+        order_id: str,
+        viewer: AuditViewerModelRef,
+        source: _ExtractedSource,
+    ) -> AuditArtifactRef:
+        """
+        Bind one locally exported GLB to exactly one authoritative RFA/RVT source.
+        """
+
+        operation = (
+            "bind_viewer_model"
+        )
+
+        if (
+            source.source_format
+            not in {
+                ExtractionSourceFormat.RFA,
+                ExtractionSourceFormat.RVT,
+            }
+        ):
+            raise UnsupportedAppInputError(
+                "A BIMAP Revit Local Exporter GLB can accompany RFA/RVT sources only.",
+                component=_COMPONENT,
+                operation=operation,
+                field="viewer_model",
+                context={
+                    "source_format":
+                        source
+                        .source_format
+                        .value,
+                },
+            )
+
+        stored = self._storage.stat(
+            viewer.viewer_ref
+        )
+
+        if stored is None:
+            raise AppValidationError(
+                "Referenced viewer model does not exist.",
+                component=_COMPONENT,
+                operation=operation,
+                field=(
+                    "viewer_model."
+                    "viewer_ref"
+                ),
+            )
+
+        if (
+            stored.size_bytes
+            <= 0
+        ):
+            raise AppIntegrityError(
+                "Stored viewer model is empty.",
+                component=_COMPONENT,
+                operation=operation,
+                field="viewer_model",
+            )
+
+        if (
+            stored
+            .hash_algorithm
+            .casefold()
+            != "sha256"
+        ):
+            raise AppIntegrityError(
+                "Viewer model must use SHA-256 integrity metadata.",
+                component=_COMPONENT,
+                operation=operation,
+                field=(
+                    "viewer_model."
+                    "hash_algorithm"
+                ),
+            )
+
+        if (
+            source
+            .stored
+            .hash_algorithm
+            .casefold()
+            != "sha256"
+        ):
+            raise AppIntegrityError(
+                "Authoritative audit source must use SHA-256 before viewer association.",
+                component=_COMPONENT,
+                operation=operation,
+                field=(
+                    "source."
+                    "hash_algorithm"
+                ),
+            )
+
+        metadata = (
+            self
+            ._read_bimap_viewer_metadata(
+                viewer,
+                stored,
+            )
+        )
+
+        source_kind = (
+            metadata.get(
+                "sourceKind"
+            )
+        )
+
+        if (
+            source_kind
+            != source
+            .source_format
+            .value
+        ):
+            raise AppIntegrityError(
+                "Viewer GLB source kind does not match the authoritative audit source.",
+                component=_COMPONENT,
+                operation=operation,
+                field=(
+                    "viewer_model."
+                    "extras.sourceKind"
+                ),
+                context={
+                    "expected":
+                        source
+                        .source_format
+                        .value,
+                    "received":
+                        source_kind,
+                },
+            )
+
+        if (
+            metadata.get(
+                "sourceFingerprintKind"
+            )
+            != "saved-file-sha256"
+        ):
+            raise AppIntegrityError(
+                "Viewer GLB does not contain the required saved-file SHA-256 provenance.",
+                component=_COMPONENT,
+                operation=operation,
+                field=(
+                    "viewer_model."
+                    "extras."
+                    "sourceFingerprintKind"
+                ),
+            )
+
+        if (
+            metadata.get(
+                "sourceDocumentModifiedAtExport"
+            )
+            is not False
+        ):
+            raise AppIntegrityError(
+                "Viewer GLB was not exported from a clean saved Revit document.",
+                component=_COMPONENT,
+                operation=operation,
+                field=(
+                    "viewer_model."
+                    "extras."
+                    "sourceDocumentModifiedAtExport"
+                ),
+            )
+
+        source_sha256 = (
+            metadata.get(
+                "sourceSha256"
+            )
+        )
+
+        if not isinstance(
+            source_sha256,
+            str,
+        ):
+            raise AppIntegrityError(
+                "Viewer GLB is missing its source SHA-256.",
+                component=_COMPONENT,
+                operation=operation,
+                field=(
+                    "viewer_model."
+                    "extras.sourceSha256"
+                ),
+            )
+
+        normalized_source_sha256 = (
+            source_sha256
+            .strip()
+            .casefold()
+        )
+
+        if (
+            len(
+                normalized_source_sha256
+            )
+            != 64
+            or any(
+                character
+                not in
+                "0123456789abcdef"
+                for character
+                in normalized_source_sha256
+            )
+        ):
+            raise AppIntegrityError(
+                "Viewer GLB source SHA-256 is invalid.",
+                component=_COMPONENT,
+                operation=operation,
+                field=(
+                    "viewer_model."
+                    "extras.sourceSha256"
+                ),
+            )
+
+        expected_source_sha256 = (
+            source
+            .stored
+            .content_hash
+            .casefold()
+        )
+
+        if (
+            normalized_source_sha256
+            != expected_source_sha256
+        ):
+            raise AppIntegrityError(
+                "Viewer GLB was generated from a different RFA/RVT source.",
+                component=_COMPONENT,
+                operation=operation,
+                field=(
+                    "viewer_model."
+                    "extras.sourceSha256"
+                ),
+                context={
+                    "source_ref":
+                        source
+                        .source
+                        .source_ref,
+                },
+            )
+
+        artifact = AuditArtifactRef(
+            kind="viewer_model",
+            object_id=(
+                stored.object_id
+            ),
+            filename=(
+                viewer.filename
+            ),
+            content_type=(
+                "model/gltf-binary"
+            ),
+            size_bytes=(
+                stored.size_bytes
+            ),
+            sha256=(
+                stored.content_hash
+            ),
+        )
+
+        logger.info(
+            {
+                "event":
+                    "audit_uploaded_viewer_bound",
+                "order_id":
+                    order_id,
+                "viewer_ref":
+                    viewer.viewer_ref,
+                "source_ref":
+                    source.source.source_ref,
+                "source_format":
+                    source.source_format.value,
+                "size_bytes":
+                    stored.size_bytes,
+                "source_fingerprint_verified":
+                    True,
+            }
+        )
+
+        return artifact
 
     def _family_contract(
         self,
@@ -1417,6 +1958,7 @@ class AuditInputService:
         product_code: ProductCode | str,
         sources: tuple[AuditSourceRef, ...],
         *,
+        viewer_model: AuditViewerModelRef | None = None,
         organization_rules: tuple[EvidenceContract, ...] = (),
     ) -> PreparedAuditInput:
         target_order = require_app_text(
@@ -1451,6 +1993,26 @@ class AuditInputService:
                     context={"received_type": type(source).__name__},
                 )
 
+        if (
+            viewer_model is not None
+            and not isinstance(
+                viewer_model,
+                AuditViewerModelRef,
+            )
+        ):
+            raise UnsupportedAppInputError(
+                "viewer_model must be an AuditViewerModelRef or None.",
+                component=_COMPONENT,
+                operation="prepare",
+                field="viewer_model",
+                context={
+                    "received_type":
+                        type(
+                            viewer_model
+                        ).__name__,
+                },
+            )
+
         try:
             product = ProductCode.parse(product_code)
         except DomainError as exc:
@@ -1466,17 +2028,59 @@ class AuditInputService:
         family_sources, project_source = self._classify_sources(product, extracted)
         artifacts: list[AuditArtifactRef] = []
 
+        viewer_source = (
+            project_source
+            if project_source
+            is not None
+            else (
+                family_sources[0]
+                if len(
+                    family_sources
+                )
+                == 1
+                else None
+            )
+        )
+
+        if viewer_model is not None:
+            if viewer_source is None:
+                raise AppIntegrityError(
+                    "Audit product has no authoritative source for the supplied viewer model.",
+                    component=_COMPONENT,
+                    operation="prepare",
+                    field="viewer_model",
+                )
+
+            artifacts.append(
+                self._uploaded_viewer_artifact(
+                    target_order,
+                    viewer_model,
+                    viewer_source,
+                )
+            )
+
+        elif viewer_source is not None:
+            generated_viewer = (
+                self._viewer_artifact(
+                    target_order,
+                    viewer_source,
+                )
+            )
+
+            if (
+                generated_viewer
+                is not None
+            ):
+                artifacts.append(
+                    generated_viewer
+                )
+
         if (
             product
             is ProductCode.FAMILY_AUDIT
             and len(family_sources) == 1
         ):
             family_source = (family_sources[0])
-
-            viewer = (self._viewer_artifact(target_order, family_source))
-
-            if viewer is not None:
-                artifacts.append(viewer)
 
             artifacts.append(self._family_data_artifact(target_order, family_source))
 
@@ -1688,11 +2292,15 @@ class AuditInputService:
             artifacts=artifacts,
         )
 
-    def _supports_rfa_glb(self) -> bool:
-        for capability in (self._model_converter.capabilities):
+    def _supports_glb(self, source_format: ModelSourceFormat) -> bool:
+        for capability in (
+            self
+            ._model_converter
+            .capabilities
+        ):
             if (
                 capability.source_format
-                is ModelSourceFormat.RFA
+                is source_format
                 and ModelTargetFormat.GLB
                 in capability.target_formats
             ):
@@ -1700,61 +2308,122 @@ class AuditInputService:
 
         return False
 
+
     def _viewer_artifact(self, order_id: str, source: _ExtractedSource) -> AuditArtifactRef | None:
-        if (
-            source.source_format
-            is not
-            ExtractionSourceFormat.RFA
-        ):
+        """
+        Optional server-side viewer fallback.
+
+        A locally uploaded verified GLB takes precedence. This method is reached
+        only when no local viewer companion was supplied.
+        """
+
+        try:
+            model_source_format = (ModelSourceFormat.parse(source.source_format.value))
+
+        except Exception:
             return None
 
-        # Preserve PartAtom fallback:
-        # no native conversion capability simply means
-        # "no viewer artifact", not a fake conversion.
-        if not self._supports_rfa_glb():
+        if not self._supports_glb(model_source_format):
             logger.warning(
                 {
                     "event": "audit_viewer_artifact_unavailable",
                     "order_id": order_id,
-                    "reason": "rfa_glb_converter_not_configured",
+                    "source_format": source.source_format.value,
+                    "reason": "glb_converter_not_configured",
                 }
             )
+
             return None
 
-        with closing(self._storage.open(source.source.source_ref)) as stream:
+        with closing(
+            self._storage.open(
+                source
+                .source
+                .source_ref
+            )
+        ) as stream:
             converted = (
-                self._model_converter.convert(
+                self
+                ._model_converter
+                .convert(
                     stream,
-                    source_format=(ModelSourceFormat.RFA),
-                    target_format=(ModelTargetFormat.GLB),
-                    output_stem=(f"{PurePath(source.source.filename).stem}"
-                        "-viewer")))
+                    source_format=(
+                        model_source_format
+                    ),
+                    target_format=(
+                        ModelTargetFormat.GLB
+                    ),
+                    output_stem=(
+                        f"{PurePath(source.source.filename).stem}"
+                        "-viewer"
+                    ),
+                )
+            )
 
         try:
-            order_key = (hashlib.sha256(order_id.encode("utf-8")).hexdigest()[:16])
+            order_key = (
+                hashlib
+                .sha256(
+                    order_id
+                    .encode(
+                        "utf-8"
+                    )
+                )
+                .hexdigest()[
+                    :16
+                ]
+            )
+
             object_id = (
-                f"audit-artifact-"
+                "audit-artifact-"
                 f"{order_key}-"
-                f"viewer-"
+                "viewer-"
                 f"{converted.content_hash}"
             )
 
-            stored = self._storage.put(
-                converted.stream,
-                object_id=object_id,
-                content_type=converted.content_type,
-                hash_algorithm=converted.hash_algorithm,
-                expected_size_bytes=converted.size_bytes,
-                expected_hash=converted.content_hash,
+            stored = (
+                self
+                ._storage
+                .put(
+                    converted.stream,
+                    object_id=object_id,
+                    content_type=(
+                        converted
+                        .content_type
+                    ),
+                    hash_algorithm=(
+                        converted
+                        .hash_algorithm
+                    ),
+                    expected_size_bytes=(
+                        converted
+                        .size_bytes
+                    ),
+                    expected_hash=(
+                        converted
+                        .content_hash
+                    ),
+                )
             )
 
             return AuditArtifactRef(
                 kind="viewer_model",
-                object_id=stored.object_id,
-                filename=converted.filename,
-                content_type=converted.content_type,
-                size_bytes=stored.size_bytes,
-                sha256=stored.content_hash,
+                object_id=(
+                    stored.object_id
+                ),
+                filename=(
+                    converted.filename
+                ),
+                content_type=(
+                    converted
+                    .content_type
+                ),
+                size_bytes=(
+                    stored.size_bytes
+                ),
+                sha256=(
+                    stored.content_hash
+                ),
             )
 
         finally:
@@ -1763,6 +2432,7 @@ class AuditInputService:
 
 __all__ = [
     "AuditSourceRef",
+    "AuditViewerModelRef",
     "AuditArtifactRef",
     "PreparedAuditInput",
     "ResolvedAuditInput",
