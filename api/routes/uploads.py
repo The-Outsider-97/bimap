@@ -24,6 +24,7 @@ from __future__ import annotations
 import inspect
 import hashlib
 import inspect
+import struct
 
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, BinaryIO, TypeAlias
@@ -46,6 +47,9 @@ printer = PrettyPrinter()
 
 _COMPONENT = "api_route_uploads"
 _UPLOAD_HASH_CHUNK_BYTES = 1024 * 1024
+_GLB_MAGIC = b"glTF"
+_GLB_VERSION = 2
+_GLB_JSON_CHUNK_TYPE = 0x4E4F534A
 
 UploadManifestValidator: TypeAlias = Callable[
     [Request, str, Mapping[str, Any]],
@@ -137,6 +141,140 @@ def _model_object_id(order_id: str, source_sha256: str) -> str:
     identity = hashlib.sha256(f"{order_id}\0{source_sha256}".encode("utf-8")).hexdigest()
     return f"upload-{identity}"
 
+
+def _viewer_object_id(order_id: str, viewer_sha256: str) -> str:
+    """
+    Return a deterministic storage identity for a derived GLB viewer artifact.
+
+    `viewer_model` is deliberately part of the digest so a visualization
+    artifact cannot share the semantic identity of an authoritative model
+    source.
+    """
+
+    identity = hashlib.sha256(
+        (
+            f"{order_id}"
+            "\0viewer_model\0"
+            f"{viewer_sha256}"
+        ).encode("utf-8")
+    ).hexdigest()
+
+    return f"viewer-upload-{identity}"
+
+
+def _validate_glb_header(stream: BinaryIO, *, expected_size: int) -> None:
+    """
+    Validate the dependency-free GLB 2.0 container envelope.
+
+    This intentionally does not parse geometry. BIMAP only verifies the
+    container here. Source provenance is validated later by AuditInputService.
+    """
+
+    try:
+        stream.seek(0)
+        header = stream.read(20)
+
+    except (AttributeError, OSError) as exc:
+        raise APIValidationError(
+            "Viewer-model stream could not be read.",
+            public_message="The selected viewer model could not be read.",
+            component=_COMPONENT,
+            operation="stage_viewer_model",
+            field="viewer_model",
+            cause=exc,
+        ) from exc
+
+    finally:
+        try:
+            stream.seek(0)
+        except (AttributeError, OSError):
+            pass
+
+    if not isinstance(header, (bytes, bytearray, memoryview)):
+        raise APIValidationError(
+            "Viewer-model stream returned non-binary data.",
+            public_message=(
+                "The selected viewer model is not a valid GLB file."
+            ),
+            component=_COMPONENT,
+            operation="stage_viewer_model",
+            field="viewer_model",
+        )
+
+    header_bytes = bytes(header)
+
+    if len(header_bytes) != 20:
+        raise APIValidationError(
+            "Viewer model has an incomplete GLB header.",
+            public_message="The selected viewer model is not a valid GLB 2.0 file.",
+            component=_COMPONENT,
+            operation="stage_viewer_model",
+            field="viewer_model",
+        )
+
+    (
+        magic,
+        version,
+        declared_length,
+        json_length,
+        json_type,
+    ) = struct.unpack(
+        "<4sIIII",
+        header_bytes,
+    )
+
+    if magic != _GLB_MAGIC:
+        raise APIValidationError(
+            "Viewer model does not contain the GLB magic signature.",
+            public_message="The selected viewer model is not a valid GLB file.",
+            component=_COMPONENT,
+            operation="stage_viewer_model",
+            field="viewer_model",
+        )
+
+    if version != _GLB_VERSION:
+        raise APIValidationError(
+            "Viewer model is not GLB version 2.",
+            public_message="Only glTF 2.0 binary viewer models are supported.",
+            component=_COMPONENT,
+            operation="stage_viewer_model",
+            field="viewer_model",
+            context={
+                "version": version,
+            },
+        )
+
+    if declared_length != expected_size:
+        raise APIValidationError(
+            "GLB declared length does not match the uploaded size.",
+            public_message="The selected viewer model is incomplete or corrupted.",
+            component=_COMPONENT,
+            operation="stage_viewer_model",
+            field="viewer_model",
+            context={
+                "declared_length": declared_length,
+                "uploaded_size": expected_size,
+            },
+        )
+
+    if (
+        json_type != _GLB_JSON_CHUNK_TYPE
+        or json_length <= 0
+        or json_length % 4 != 0
+        or 20 + json_length > expected_size
+    ):
+        raise APIValidationError(
+            "GLB first chunk is not a valid JSON chunk.",
+            public_message="The selected viewer model has an invalid GLB structure.",
+            component=_COMPONENT,
+            operation="stage_viewer_model",
+            field="viewer_model",
+            context={
+                "json_chunk_length": json_length,
+                "json_chunk_type": json_type,
+            },
+        )
+
 # ===================================================================
 
 class RouteUploads:
@@ -226,6 +364,14 @@ class RouteUploads:
             name="stage_model_upload",
         )
         router.add_api_route(
+            "/{order_id}/uploads/viewer-model",
+            self.stage_viewer_model,
+            methods=["POST"],
+            status_code=status.HTTP_201_CREATED,
+            response_class=Response,
+            name="stage_viewer_model_upload",
+        )
+        router.add_api_route(
             "/{order_id}/validate",
             self.validate,
             methods=["POST"],
@@ -238,7 +384,7 @@ class RouteUploads:
         logger.info(
             {
                 "event": "api_route_uploads_initialized",
-                "registered_route_count": 3,
+                "registered_route_count": 4,
             }
         )
 
@@ -439,7 +585,11 @@ class RouteUploads:
                 "size_bytes": result.stored_object.size_bytes,
                 "content_hash": result.stored_object.content_hash,
                 "hash_algorithm": result.stored_object.hash_algorithm,
-                "malware_verdict": result.malware_scan.verdict.value,
+                "malware_verdict": getattr(
+                    result.malware_scan.verdict,
+                    "value",
+                    result.malware_scan.verdict,
+                ),
             }
         )
 
@@ -458,6 +608,176 @@ class RouteUploads:
             headers={
                 "Cache-Control": "no-store",
             },
+        )
+
+    async def stage_viewer_model(self, request: Request, order_id: str) -> Response:
+        """
+        POST /orders/{order_id}/uploads/viewer-model
+
+        Stage one derived BIMAP GLB viewer artifact.
+
+        The GLB is explicitly not treated as an authoritative AuditSourceRef.
+        """
+
+        announce_api_action(
+            printer,
+            logger,
+            component=_COMPONENT,
+            action="Handling viewer-model upload request",
+            event="api_route_uploads_stage_viewer_start",
+            context={
+                "order_id": order_id,
+            },
+        )
+
+        target = require_api_text(
+            order_id,
+            field="order_id",
+            component=_COMPONENT,
+            operation="stage_viewer_model",
+        )
+
+        await authorize_request(
+            self._authorize,
+            request,
+            operation="stage_viewer_model",
+            resource_id=target,
+        )
+
+        try:
+            form = await request.form(
+                max_files=1,
+                max_fields=1,
+            )
+
+        except Exception as exc:
+            raise APIValidationError(
+                "Viewer-model multipart body could not be parsed.",
+                public_message="The viewer-model upload is malformed.",
+                component=_COMPONENT,
+                operation="stage_viewer_model",
+                field="body",
+                cause=exc,
+            ) from exc
+
+        unexpected = tuple(sorted(set(form.keys()) - {"viewer_model"}))
+
+        if unexpected:
+            raise APIValidationError(
+                "Viewer-model request contains unsupported form fields.",
+                public_message="The viewer-model upload contains unsupported fields.",
+                component=_COMPONENT,
+                operation="stage_viewer_model",
+                field="body",
+                context={
+                    "unexpected_fields": unexpected,
+                },
+            )
+
+        if len(form.getlist("viewer_model")) != 1:
+            raise APIValidationError(
+                "viewer_model must occur exactly once.",
+                public_message="Choose exactly one GLB viewer model.",
+                component=_COMPONENT,
+                operation="stage_viewer_model",
+                field="viewer_model",
+            )
+
+        viewer = form.get("viewer_model")
+
+        if not isinstance(viewer, UploadFile):
+            raise APIValidationError(
+                "viewer_model must be a multipart file upload.",
+                public_message=(
+                    "Choose a GLB viewer model before uploading."
+                ),
+                component=_COMPONENT,
+                operation="stage_viewer_model",
+                field="viewer_model",
+            )
+
+        filename = (viewer.filename or "").strip()
+
+        if (
+            not filename
+            or not filename
+            .casefold()
+            .endswith(".glb")
+        ):
+            await viewer.close()
+
+            raise APIValidationError(
+                "Viewer-model filename must use the .glb extension.",
+                public_message="The BIMAP viewer model must be a .glb file.",
+                component=_COMPONENT,
+                operation="stage_viewer_model",
+                field="viewer_model.filename",
+            )
+
+        try:
+            (
+                size_bytes,
+                viewer_sha256,
+            ) = await run_in_threadpool(_measure_and_hash_source, viewer.file)
+
+            await run_in_threadpool(_validate_glb_header, viewer.file, expected_size=size_bytes)
+            object_id = _viewer_object_id(target, viewer_sha256)
+
+            try:
+                result = await run_in_threadpool(
+                    self._stage_upload.execute,
+                    target,
+                    viewer.file,
+                    object_id=object_id,
+                    filename=filename,
+                    content_type="model/gltf-binary",
+                    expected_size_bytes=size_bytes,
+                    expected_hash=viewer_sha256,
+                    hash_algorithm="sha256",
+                )
+
+            except AppValidationError as exc:
+                if (
+                    getattr(exc, "field", None)
+                    == "malware_verdict"
+                ):
+                    raise APIValidationError(
+                        "Uploaded viewer model did not pass the required malware gate.",
+                        public_message="The uploaded viewer model did not pass the required safety scan.",
+                        component=_COMPONENT,
+                        operation="stage_viewer_model",
+                        field="viewer_model",
+                        cause=exc,
+                    ) from exc
+
+                raise
+
+        finally:
+            await viewer.close()
+
+        logger.info(
+            {
+                "event":
+                    "api_route_uploads_stage_viewer_completed",
+                "order_id": result.order_id,
+                "object_id": result.stored_object.object_id,
+                "size_bytes": result.stored_object.size_bytes,
+                "content_hash": result.stored_object.content_hash,
+                "hash_algorithm": result.stored_object.hash_algorithm,
+                "malware_verdict": result.malware_scan.verdict.value, # type: ignore
+            }
+        )
+
+        return json_response(
+            {
+                "order_id": result.order_id,
+                "viewer_ref": result.stored_object.object_id,
+                "filename": filename,
+                "stored_object": result.stored_object.to_dict(),
+                "malware_scan": result.malware_scan.to_dict(),
+            },
+            status_code=status.HTTP_201_CREATED,
+            headers={"Cache-Control": "no-store"},
         )
 
     async def _validate_manifest(
