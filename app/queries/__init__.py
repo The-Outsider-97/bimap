@@ -1,5 +1,6 @@
 """Application query handlers and immutable query projections."""
 
+from .get_audit_artifact import *
 from .get_audit_status import *
 from .get_audit_workspace import *
 from .get_order import *
@@ -8,6 +9,7 @@ from .list_orders import *
 from .list_reports import *
 
 
+from .get_audit_artifact import __all__ as _get_audit_artifact_exports
 from .get_audit_status import __all__ as _get_audit_status_exports
 from .get_audit_workspace import __all__ as _get_audit_workspace_exports
 from .get_order import __all__ as _get_order_exports
@@ -17,6 +19,7 @@ from .list_reports import __all__ as _list_reports_exports
 
 
 __all__ = [
+    *_get_audit_artifact_exports,
     *_get_audit_status_exports,
     *_get_audit_workspace_exports,
     *_get_order_exports,
