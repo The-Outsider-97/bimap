@@ -86,6 +86,16 @@ AccountAvatarUploader = Callable[
     [Request, Account],
     str | None | Awaitable[str | None],
 ]
+ContactMessageSender = Callable[
+    [
+        str,  # sender_name
+        str,  # sender_email
+        str,  # subject_display
+        str,  # message
+        str,  # ticket_number
+    ],
+    None,
+]
 
 
 def _require_handler(value: Any, expected: type[Any], *, field: str) -> Any:
@@ -223,6 +233,7 @@ class APIRouteHooks:
     deletion_admission_gate: "DeletionAdmissionGate"
     deletion_object_resolver: "DeletionObjectResolver"
     payment_signature_header: str
+    contact_message_sender: ContactMessageSender
 
     def __post_init__(self) -> None:
         announce_api_action(
@@ -239,6 +250,7 @@ class APIRouteHooks:
             ("download_url_issuer", self.download_url_issuer),
             ("deletion_admission_gate", self.deletion_admission_gate),
             ("deletion_object_resolver", self.deletion_object_resolver),
+            ("contact_message_sender", self.contact_message_sender),
         )
         for field, value in hooks:
             _require_hook(value, field=field)
@@ -611,6 +623,7 @@ def get_api_dependencies(request: Request) -> APIDependencies:
 
 __all__ = [
     "APIUseCases",
+    "ContactMessageSender",
     "APIRouteHooks",
     "APIHealthDependencies",
     "APIAdminDependencies",

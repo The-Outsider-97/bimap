@@ -6,6 +6,7 @@ from .admin import *
 from .audits import *
 from .auth import *
 from .checkout import *
+from .contact import *
 from .conversions import *
 from .data_extractions import *
 from .deletion import *
@@ -24,6 +25,7 @@ from .admin import __all__ as _admin_exports
 from .audits import __all__ as _audits_exports
 from .auth import __all__ as _auth_exports
 from .checkout import __all__ as _checkout_exports
+from .contact import __all__ as _contact_exports
 from .conversions import __all__ as _conversions_exports
 from .data_extractions import __all__ as _data_extractions_exports
 from .deletion import __all__ as _deletion_exports
@@ -43,6 +45,7 @@ __all__ = [
     *_audits_exports,
     *_auth_exports,
     *_checkout_exports,
+    *_contact_exports,
     *_conversions_exports,
     *_data_extractions_exports,
     *_deletion_exports,

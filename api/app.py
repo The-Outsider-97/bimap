@@ -43,6 +43,7 @@ from .middleware.security import Security, SecurityPolicy
 from .routes.admin import RouteAdmin
 from .routes.audits import RouteAudits
 from .routes.checkout import RouteCheckout
+from .routes.contact import RouteContact
 from .routes.conversions import RouteConversions
 from .routes.data_extractions import RouteDataExtractions
 from .routes.deletion import RouteDeletion
@@ -429,7 +430,7 @@ async def _handle_request_validation_exception(request: Request, error: Exceptio
     error_count: int | None = None
     if isinstance(error, RequestValidationError):
         try:
-            validation_errors = error.errors()
+            validation_errors = error.errors() # type: ignore
             if isinstance(validation_errors, (list, tuple)):
                 error_count = len(validation_errors)
         except Exception:
@@ -466,6 +467,7 @@ def _construct_route_groups(dependencies: APIDependencies) -> tuple[Any, ...]:
             expose_details=health.expose_details,
         ),
         RouteProducts(use_cases.get_products),
+        RouteContact(hooks.contact_message_sender),
         RouteAuth(auth.service),
         RouteAccount(
             account.service,
