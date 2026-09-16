@@ -50,7 +50,7 @@ class EmailRenderer:
                         field="data",
                     )
                 content = build_verification_email(data, self.branding)
-            if event is EmailNotificationType.CONTACT_MESSAGE:
+            elif event is EmailNotificationType.CONTACT_MESSAGE:
                 if not isinstance(data, ContactMessageData):
                     raise EmailValidationError(
                         "Contact email requires ContactMessageData.",
