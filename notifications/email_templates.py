@@ -7,6 +7,47 @@ from html import escape
 from .email_models import *
 
 
+_UPGRADE_ELIGIBLE_PLANS = frozenset(
+    {
+        "basic",
+        "pro",
+        "plus",
+    }
+)
+
+
+def _upgrade_block(plan_code: str | None, upgrade_url: str | None) -> tuple[str, str]:
+    if (
+        plan_code is None
+        or plan_code.casefold()
+        not in _UPGRADE_ELIGIBLE_PLANS
+    ):
+        return "", ""
+
+    text = (
+        "\n\nGet more from BIMAP\n"
+        "Your current plan can be upgraded for additional capacity and a broader BIMAP experience."
+    )
+
+    html = (
+        '<div style="margin:28px 0 0;padding:18px;'
+        'border:1px solid #d0d5dd;border-radius:8px;'
+        'background:#f9fafb;">'
+        '<strong>Get more from BIMAP</strong>'
+        '<p style="margin:8px 0 0;color:#475467;">'
+        "Upgrade your current plan for additional capacity and a broader BIMAP experience."
+        "</p>"
+        + (
+            _button("Compare BIMAP Plans", upgrade_url)
+            if upgrade_url
+            else ""
+        )
+        + "</div>"
+    )
+
+    return text, html
+
+
 def _greeting(name: str | None) -> str:
     return f"Hi {name}," if name else "Hi,"
 
@@ -228,6 +269,7 @@ def build_contact_message_email(data: ContactMessageData, branding: EmailBrandin
 
 
 __all__ = [
+    "_upgrade_block",
     "build_verification_email",
     "build_audit_result_email",
     "build_purchase_result_email",

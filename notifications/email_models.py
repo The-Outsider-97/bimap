@@ -412,6 +412,12 @@ class PurchaseResultData:
     occurred_at: str
     amount_display: str
     status_display: str
+    item_type: str | None = None
+    amount_eur_display: str | None = None
+    amount_usd_display: str | None = None
+    fx_observed_at: str | None = None
+    plan_code: str | None = None
+    upgrade_url: str | None = None
     action_url: str | None = None
     successful: bool = True
 
@@ -496,6 +502,9 @@ class ServiceResultData:
     status_display: str
     action_url: str | None = None
     successful: bool = True
+    detail_rows: tuple[tuple[str, str], ...] = ()
+    plan_code: str | None = None
+    upgrade_url: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
