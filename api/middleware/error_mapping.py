@@ -56,34 +56,150 @@ def _report_mapped_error(
     """
     Emit severity-appropriate telemetry for one handled HTTP failure.
 
-    Expected client/routing outcomes must not be represented as application
-    failures. Server-side failures retain error-level visibility.
+    Expected authentication-state probes are informational rather than
+    warnings. Genuine authentication failures, malformed requests,
+    authorization failures and server-side failures retain their normal
+    severity.
+
+    This distinction is important because the frontend legitimately probes
+    ``/account/me`` during application initialization to determine whether
+    an HttpOnly BIMAP session already exists.
     """
 
-    source_cause = getattr(source, "cause", None)
+    source_cause = getattr(
+        source,
+        "cause",
+        None,
+    )
+
+    source_component = getattr(
+        source,
+        "component",
+        None,
+    )
+
+    source_operation = getattr(
+        source,
+        "operation",
+        None,
+    )
+
+    status_code = int(
+        mapped.status_code
+    )
+
     payload = {
-        "event": "api_exception_mapped", "source_type": type(source).__name__,
-        "source_code": getattr(source, "code", None),
-        "source_component": getattr(source, "component", None),
-        "source_operation": getattr(source, "operation", None),
-        "source_field": getattr(source, "field", None),
+        "event":
+            "api_exception_mapped",
+
+        "source_type":
+            type(source).__name__,
+
+        "source_code":
+            getattr(
+                source,
+                "code",
+                None,
+            ),
+
+        "source_component":
+            source_component,
+
+        "source_operation":
+            source_operation,
+
+        "source_field":
+            getattr(
+                source,
+                "field",
+                None,
+            ),
+
         # AppError.context is already sanitized by
         # sanitize_app_context().
-        "source_context": dict(getattr(source, "context", {}) or {}),
+        "source_context":
+            dict(
+                getattr(
+                    source,
+                    "context",
+                    {},
+                )
+                or {}
+            ),
+
         "source_cause_type":
             (
                 type(source_cause).__name__
                 if source_cause is not None
                 else None
             ),
-        "mapped_code": mapped.code,
-        "status_code": mapped.status_code,
-        "retryable": mapped.retryable,
-        "correlation_id": correlation_id,
-        "request_id": request_id,
-        }
 
-    status_code = int(mapped.status_code)
+        "mapped_code":
+            mapped.code,
+
+        "status_code":
+            status_code,
+
+        "retryable":
+            mapped.retryable,
+
+        "correlation_id":
+            correlation_id,
+
+        "request_id":
+            request_id,
+    }
+
+    # ---------------------------------------------------------
+    # Expected unauthenticated session probe
+    # ---------------------------------------------------------
+    #
+    # AccountProvider calls GET /account/me during startup.
+    #
+    # A browser without a bimap_session cookie is therefore an
+    # ordinary signed-out state, not an application warning.
+    #
+    # Restrict this downgrade specifically to the missing-cookie
+    # operation. Other 401 responses, such as invalid credentials
+    # or expired/invalid sessions, remain warning-level events.
+    # ---------------------------------------------------------
+
+    expected_missing_session = (
+        status_code == 401
+        and isinstance(source,
+            APIUnauthorizedError,
+        )
+        and source_component
+            == "api_route_auth"
+        and source_operation
+            == "read_session_cookie"
+    )
+
+    if expected_missing_session:
+        logger.info(
+            {
+                **payload,
+                "event":
+                    "api_session_not_present",
+                "expected":
+                    True,
+            }
+        )
+
+        printer.status(
+            "API",
+            (
+                "No authenticated BIMAP "
+                "session is present"
+            ),
+            "info",
+        )
+
+        return
+
+    # ---------------------------------------------------------
+    # Server-side failures
+    # ---------------------------------------------------------
 
     if status_code >= 500:
         logger.error(payload)
@@ -92,12 +208,17 @@ def _report_mapped_error(
             "API",
             (
                 f"HTTP request failed with "
-                f"{status_code} ({mapped.code})"
+                f"{status_code} "
+                f"({mapped.code})"
             ),
             "error",
         )
 
         return
+
+    # ---------------------------------------------------------
+    # Expected missing resource
+    # ---------------------------------------------------------
 
     if status_code == 404:
         logger.info(payload)
@@ -105,7 +226,7 @@ def _report_mapped_error(
         printer.status(
             "API",
             (
-                f"HTTP resource not found "
+                "HTTP resource not found "
                 f"({mapped.code})"
             ),
             "info",
@@ -113,13 +234,18 @@ def _report_mapped_error(
 
         return
 
+    # ---------------------------------------------------------
+    # Genuine client / authentication / authorization errors
+    # ---------------------------------------------------------
+
     logger.warning(payload)
 
     printer.status(
         "API",
         (
             f"HTTP request rejected with "
-            f"{status_code} ({mapped.code})"
+            f"{status_code} "
+            f"({mapped.code})"
         ),
         "warning",
     )
