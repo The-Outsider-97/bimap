@@ -24,6 +24,13 @@ public sealed class ExportCommand : IExternalCommand
 {
     private const string ProductName = "R3D BIMAP Revit Local Exporter";
 
+    /// <summary>
+    /// Executes the BIMAP Revit export command for the currently active document.
+    /// </summary>
+    /// <param name="commandData">Revit command context.</param>
+    /// <param name="message">Error message returned to Revit when execution fails.</param>
+    /// <param name="elements">Element set available for failure reporting.</param>
+    /// <returns>The Revit command execution result.</returns>
     public Result Execute(
         ExternalCommandData commandData,
         ref string message,
