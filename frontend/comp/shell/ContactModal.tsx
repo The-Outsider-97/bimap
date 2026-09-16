@@ -1,11 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+
+import {
+  sendContactMessage,
+} from "@/lib/bimap-api";
+
 
 type Props = {
   open: boolean;
   onClose: () => void;
 };
+
 
 export function ContactModal({
   open,
@@ -14,12 +25,22 @@ export function ContactModal({
   const closeButtonRef =
     useRef<HTMLButtonElement>(null);
 
-  const [submitted, setSubmitted] =
+  const [submitting, setSubmitting] =
     useState(false);
+
+  const [ticketNumber, setTicketNumber] =
+    useState<string | null>(null);
+
+  const [submitError, setSubmitError] =
+    useState<string | null>(null);
+
 
   useEffect(() => {
     if (!open) {
-      setSubmitted(false);
+      setSubmitting(false);
+      setTicketNumber(null);
+      setSubmitError(null);
+
       return;
     }
 
@@ -35,9 +56,90 @@ export function ContactModal({
     };
   }, [open]);
 
+
+  async function handleSubmit(
+    event: FormEvent<HTMLFormElement>,
+  ): Promise<void> {
+    event.preventDefault();
+
+    if (submitting) {
+      return;
+    }
+
+    const form =
+      event.currentTarget;
+
+    const formData =
+      new FormData(form);
+
+    const name =
+      String(
+        formData.get("name") ?? "",
+      ).trim();
+
+    const email =
+      String(
+        formData.get("email") ?? "",
+      ).trim();
+
+    const subject =
+      String(
+        formData.get("subject") ?? "",
+      ).trim();
+
+    const message =
+      String(
+        formData.get("message") ?? "",
+      ).trim();
+
+
+    if (
+      !name ||
+      !email ||
+      !subject ||
+      !message
+    ) {
+      setSubmitError(
+        "Please complete all required fields.",
+      );
+
+      return;
+    }
+
+
+    setSubmitting(true);
+    setTicketNumber(null);
+    setSubmitError(null);
+
+
+    try {
+      const result =
+        await sendContactMessage({
+          name,
+          email,
+          subject,
+          message,
+        });
+
+      setTicketNumber(
+        result.ticket_number,
+      );
+
+      form.reset();
+    } catch {
+      setSubmitError(
+        "Your message could not be sent. Please try again.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+
   if (!open) {
     return null;
   }
+
 
   return (
     <div
@@ -72,9 +174,12 @@ export function ContactModal({
             onClick={onClose}
             aria-label="Close contact panel"
           >
-            <span aria-hidden="true">×</span>
+            <span aria-hidden="true">
+              ×
+            </span>
           </button>
         </div>
+
 
         <p
           id="contact-description"
@@ -86,43 +191,55 @@ export function ContactModal({
           BIMAP information.
         </p>
 
+
         <form
           className="contact-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setSubmitted(true);
-          }}
+          onSubmit={handleSubmit}
         >
           <div className="contact-form__row">
             <label>
-              <span>Name</span>
+              <span>
+                Name
+              </span>
 
               <input
                 name="name"
                 type="text"
                 autoComplete="name"
+                maxLength={128}
+                disabled={submitting}
                 required
               />
             </label>
 
+
             <label>
-              <span>Email</span>
+              <span>
+                Email
+              </span>
 
               <input
                 name="email"
                 type="email"
                 autoComplete="email"
+                maxLength={254}
+                disabled={submitting}
                 required
               />
             </label>
           </div>
 
+
           <label>
-            <span>Subject</span>
+            <span>
+              Subject
+            </span>
 
             <select
               name="subject"
               defaultValue="bim-audit"
+              disabled={submitting}
+              required
             >
               <option value="bim-audit">
                 BIM Audit
@@ -133,7 +250,7 @@ export function ContactModal({
               </option>
 
               <option value="3d-content">
-                3D Models & Scenes
+                3D Models &amp; Scenes
               </option>
 
               <option value="2d-content">
@@ -154,25 +271,37 @@ export function ContactModal({
             </select>
           </label>
 
+
           <label>
-            <span>Message</span>
+            <span>
+              Message
+            </span>
 
             <textarea
               name="message"
               rows={6}
+              maxLength={10_000}
+              disabled={submitting}
               required
             />
           </label>
+
 
           <div className="contact-form__foot">
             <p
               className="contact-form__status"
               aria-live="polite"
+              role="status"
             >
-              {submitted
-                ? "The interface is ready. Message delivery will be connected to the BIMAP backend contact endpoint."
-                : "Do not attach project files through the general contact form."}
+              {submitError
+                ? submitError
+                : ticketNumber
+                  ? `Message sent successfully. Your ticket number is ${ticketNumber}.`
+                  : submitting
+                    ? "Sending your message..."
+                    : "Do not attach project files through the general contact form."}
             </p>
+
 
             <div className="contact-form__actions">
               <button
@@ -186,18 +315,25 @@ export function ContactModal({
                 Cancel
               </button>
 
+
               <button
                 type="submit"
                 className="
                   contact-button
                   contact-button--primary
                 "
+                disabled={submitting}
+                aria-disabled={submitting}
               >
-                Send message
+                {submitting
+                  ? "Sending..."
+                  : "Send message"}
 
-                <span aria-hidden="true">
-                  ↗
-                </span>
+                {!submitting && (
+                  <span aria-hidden="true">
+                    ↗
+                  </span>
+                )}
               </button>
             </div>
           </div>
