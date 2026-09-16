@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Security.Cryptography;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
@@ -51,6 +52,27 @@ public sealed class ExportCommand : IExternalCommand
                 return Result.Cancelled;
             }
 
+            /*
+             * For a saved local RFA/RVT, the exported GLB must represent the
+             * exact bytes BIMAP will audit. If the Revit document has unsaved
+             * changes, hashing Document.PathName would fingerprint the last
+             * saved file while the geometry exporter would use the modified
+             * in-memory document. Refuse that ambiguous state.
+             */
+            if (HasUnsavedLocalChanges(document))
+            {
+                TaskDialog.Show(
+                    ProductName,
+                    "Save the Revit model before exporting BIMAP viewer geometry.\n\n" +
+                    "BIMAP links the GLB to the audited RFA/RVT by SHA-256. " +
+                    "Exporting while the document has unsaved changes would make " +
+                    "the viewer geometry differ from the saved audit source.");
+                return Result.Cancelled;
+            }
+
+            GlbSourceProvenance? provenance =
+                TryCreateSourceProvenance(document);
+
             RevitExportResult export =
                 RevitGeometryExporter.Export(document);
 
@@ -66,7 +88,10 @@ public sealed class ExportCommand : IExternalCommand
             }
 
             GlbWriteResult written =
-                GlbWriter.Write(outputPath, export);
+                GlbWriter.Write(
+                    outputPath,
+                    export,
+                    provenance);
 
             Trace.WriteLine(
                 FormattableString.Invariant(
@@ -75,7 +100,8 @@ public sealed class ExportCommand : IExternalCommand
                     $"triangles={export.TriangleCount}, " +
                     $"vertices={export.VertexCount}, " +
                     $"bytes={written.SizeBytes}, " +
-                    $"sha256={written.Sha256}"));
+                    $"sha256={written.Sha256}, " +
+                    $"sourceFingerprint={(provenance is null ? "unavailable" : "sha256")}"));
 
             TaskDialog dialog = new(ProductName)
             {
@@ -86,7 +112,12 @@ public sealed class ExportCommand : IExternalCommand
                     $"Elements with geometry: {export.Elements.Count.ToString(CultureInfo.InvariantCulture)}\n" +
                     $"Triangles: {export.TriangleCount.ToString(CultureInfo.InvariantCulture)}\n" +
                     $"Vertices: {export.VertexCount.ToString(CultureInfo.InvariantCulture)}\n" +
-                    $"Size: {FormatBytes(written.SizeBytes)}\n\n" +
+                    $"Size: {FormatBytes(written.SizeBytes)}\n" +
+                    (
+                        provenance is null
+                            ? "Source SHA-256: unavailable\n\n"
+                            : $"Source SHA-256: {provenance.Sha256}\n\n"
+                    ) +
                     "Load this .glb in BIMAP Model Navigator. " +
                     "The original RFA/RVT remains the authoritative audit source.",
                 CommonButtons = TaskDialogCommonButtons.Close
@@ -110,6 +141,75 @@ public sealed class ExportCommand : IExternalCommand
 
             TaskDialog.Show(ProductName, message);
             return Result.Failed;
+        }
+    }
+
+    private static bool HasUnsavedLocalChanges(
+        Document document)
+    {
+        string path =
+            document.PathName;
+
+        return
+            document.IsModified &&
+            !string.IsNullOrWhiteSpace(path) &&
+            File.Exists(path);
+    }
+
+    private static GlbSourceProvenance?
+        TryCreateSourceProvenance(
+            Document document)
+    {
+        string path =
+            document.PathName;
+
+        if (string.IsNullOrWhiteSpace(path) ||
+            !File.Exists(path))
+        {
+            /*
+             * Unsaved, cloud-hosted, or otherwise non-local documents can still
+             * produce a useful GLB, but no source fingerprint is fabricated.
+             */
+            return null;
+        }
+
+        try
+        {
+            using FileStream stream = new(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 128 * 1024,
+                FileOptions.SequentialScan);
+
+            string sha256 =
+                Convert.ToHexString(
+                        SHA256.HashData(stream))
+                    .ToLowerInvariant();
+
+            return new GlbSourceProvenance(
+                FileName:
+                    Path.GetFileName(path),
+                Sha256:
+                    sha256,
+                FingerprintKind:
+                    "saved-file-sha256",
+                DocumentModifiedAtExport:
+                    document.IsModified);
+        }
+        catch (
+            Exception exception)
+            when (
+                exception is IOException
+                or UnauthorizedAccessException
+                or NotSupportedException
+                or ArgumentException)
+        {
+            Trace.TraceWarning(
+                "[BIMAP] Revit source fingerprint unavailable: " +
+                $"{exception.GetType().Name}: {exception.Message}");
+            return null;
         }
     }
 

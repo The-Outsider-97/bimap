@@ -21,14 +21,14 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
 
     <!--
-      Revit 2025 and 2026 use .NET 8. BIMAP targets Revit 2026 by default.
+      Revit 2025 and 2025 use .NET 8. BIMAP targets Revit 2025 by default.
       Override the installation directory without changing source code:
 
         dotnet build -c Release ^
-          -p:RevitYear=2026 ^
-          -p:RevitInstallDir="C:\Program Files\Autodesk\Revit 2026"
+          -p:RevitYear=2025 ^
+          -p:RevitInstallDir="C:\Program Files\Autodesk\Revit 2025"
     -->
-    <RevitYear Condition="'$(RevitYear)' == ''">2026</RevitYear>
+    <RevitYear Condition="'$(RevitYear)' == ''">2025</RevitYear>
     <RevitInstallDir Condition="'$(RevitInstallDir)' == ''">C:\Program Files\Autodesk\Revit $(RevitYear)</RevitInstallDir>
   </PropertyGroup>
 

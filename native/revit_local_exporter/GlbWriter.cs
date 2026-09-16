@@ -52,7 +52,8 @@ internal static class GlbWriter
 
     public static GlbWriteResult Write(
         string outputPath,
-        RevitExportResult model)
+        RevitExportResult model,
+        GlbSourceProvenance? provenance = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(
             outputPath);
@@ -88,7 +89,8 @@ internal static class GlbWriter
         {
             BuildGlb(
                 temporaryPath,
-                model);
+                model,
+                provenance);
 
             ValidateGlbFile(
                 temporaryPath);
@@ -132,7 +134,8 @@ internal static class GlbWriter
 
     private static void BuildGlb(
         string path,
-        RevitExportResult model)
+        RevitExportResult model,
+        GlbSourceProvenance? provenance)
     {
         Dictionary<string, int> materialIndices =
             model.Materials
@@ -349,6 +352,20 @@ internal static class GlbWriter
                         "viewer-model/1.0",
                     ["sourceDocumentTitle"] =
                         model.SourceDocumentTitle,
+
+                    /*
+                     * Never publish Document.PathName. BIMAP only needs an
+                     * auditable source identity, not the user's local path.
+                     */
+                    ["sourceFilename"] =
+                        provenance?.FileName,
+                    ["sourceSha256"] =
+                        provenance?.Sha256,
+                    ["sourceFingerprintKind"] =
+                        provenance?.FingerprintKind,
+                    ["sourceDocumentModifiedAtExport"] =
+                        provenance?.DocumentModifiedAtExport,
+
                     ["sourceKind"] =
                         model.SourceKind,
                     ["sourceRevitVersion"] =
@@ -961,3 +978,15 @@ internal sealed record GlbWriteResult(
     string Path,
     long SizeBytes,
     string Sha256);
+
+/// <summary>
+/// Source identity embedded in the GLB root extras.
+///
+/// Sha256 is the digest of the saved local RFA/RVT file. It is deliberately
+/// absent when BIMAP cannot safely fingerprint a saved local source.
+/// </summary>
+internal sealed record GlbSourceProvenance(
+    string FileName,
+    string Sha256,
+    string FingerprintKind,
+    bool DocumentModifiedAtExport);
