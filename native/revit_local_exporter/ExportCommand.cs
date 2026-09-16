@@ -95,13 +95,7 @@ public sealed class ExportCommand : IExternalCommand
 
             Trace.WriteLine(
                 FormattableString.Invariant(
-                    $"[BIMAP] GLB export completed: " +
-                    $"elements={export.Elements.Count}, " +
-                    $"triangles={export.TriangleCount}, " +
-                    $"vertices={export.VertexCount}, " +
-                    $"bytes={written.SizeBytes}, " +
-                    $"sha256={written.Sha256}, " +
-                    $"sourceFingerprint={(provenance is null ? "unavailable" : "sha256")}"));
+                    $"[BIMAP] GLB export completed: elements={export.Elements.Count}, triangles={export.TriangleCount}, vertices={export.VertexCount}, bytes={written.SizeBytes}, sha256={written.Sha256}, sourceFingerprint={(provenance is null ? "unavailable" : "sha256")}"));
 
             TaskDialog dialog = new(ProductName)
             {
