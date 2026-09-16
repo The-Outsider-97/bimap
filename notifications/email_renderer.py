@@ -50,6 +50,15 @@ class EmailRenderer:
                         field="data",
                     )
                 content = build_verification_email(data, self.branding)
+            if event is EmailNotificationType.CONTACT_MESSAGE:
+                if not isinstance(data, ContactMessageData):
+                    raise EmailValidationError(
+                        "Contact email requires ContactMessageData.",
+                        component="email_renderer",
+                        operation="render",
+                        field="data",
+                    )
+                content = build_contact_message_email(data, self.branding)
             elif event in {EmailNotificationType.AUDIT_COMPLETED, EmailNotificationType.AUDIT_FAILED}:
                 if not isinstance(data, AuditResultData):
                     raise EmailValidationError(

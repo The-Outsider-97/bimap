@@ -187,9 +187,50 @@ def build_service_result_email(data: ServiceResultData, branding: EmailBranding)
     return EmailContent(subject=subject, text_body=text, html_body=_html_layout(title=subject, body=body, branding=branding))
 
 
+def build_contact_message_email(data: ContactMessageData, branding: EmailBranding) -> EmailContent:
+    subject = (
+        f"[{branding.product_name} · {data.ticket_number}] "
+        f"{data.subject_display}"
+    )
+
+    text = (
+        f"New {branding.product_name} contact message\n\n"
+        f"Ticket: {data.ticket_number}\n"
+        f"Name: {data.sender_name}\n"
+        f"Email: {data.sender_email}\n"
+        f"Subject: {data.subject_display}\n\n"
+        "Message:\n"
+        f"{data.message}\n"
+    )
+
+    body = (
+        '<p style="margin:0 0 16px;">'
+        "A new BIMAP contact message has been received."
+        "</p>"
+        + _detail_rows(
+            (
+                ("Ticket", data.ticket_number),
+                ("Name", data.sender_name),
+                ("Email", data.sender_email),
+                ("Subject", data.subject_display),
+            )
+        )
+        + (
+            '<div style="margin:20px 0 0;padding:16px;'
+            'background:#f9fafb;border:1px solid #eaecf0;'
+            'border-radius:8px;white-space:pre-wrap;">'
+            f'{escape(data.message, quote=True)}'
+            "</div>"
+        )
+    )
+
+    return EmailContent( subject=subject, text_body=text, html_body=_html_layout(title=subject, body=body, branding=branding))
+
+
 __all__ = [
     "build_verification_email",
     "build_audit_result_email",
     "build_purchase_result_email",
     "build_service_result_email",
+    "build_contact_message_email",
 ]

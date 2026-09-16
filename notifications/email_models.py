@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from .utils.email_helpers import *
 
 class EmailNotificationType(str, Enum):
     EMAIL_VERIFICATION = "email_verification"
+    CONTACT_MESSAGE = "contact_message"
     AUDIT_COMPLETED = "audit_completed"
     AUDIT_FAILED = "audit_failed"
     PURCHASE_COMPLETED = "purchase_completed"
@@ -30,11 +32,70 @@ class EmailDeliveryStatus(str, Enum):
 @dataclass(frozen=True, slots=True)
 class EmailAttachment:
     """Attachment payload accepted by the email service."""
-
     filename: str
     content_type: str
-    payload: bytes
+    payload: bytes = field(repr=False)
     content_sha256: str
+
+    def __post_init__(self) -> None:
+        filename = require_text(
+            self.filename,
+            field="filename",
+            max_length=255,
+            allow_newlines=False,
+        )
+
+        content_type = require_text(
+            self.content_type,
+            field="content_type",
+            max_length=128,
+            allow_newlines=False,
+        ).casefold()
+
+        if "/" not in content_type:
+            raise EmailValidationError(
+                "Attachment content_type must be a MIME media type.",
+                component="email_models",
+                operation="validate_attachment",
+                field="content_type",
+            )
+
+        if not isinstance(self.payload, bytes):
+            raise EmailValidationError(
+                "Attachment payload must be bytes.",
+                component="email_models",
+                operation="validate_attachment",
+                field="payload",
+            )
+
+        if not self.payload:
+            raise EmailValidationError(
+                "Attachment payload cannot be empty.",
+                component="email_models",
+                operation="validate_attachment",
+                field="payload",
+            )
+
+        expected_hash = require_text(
+            self.content_sha256,
+            field="content_sha256",
+            max_length=64,
+            allow_newlines=False,
+        ).casefold()
+
+        actual_hash = sha256(self.payload).hexdigest()
+
+        if expected_hash != actual_hash:
+            raise EmailValidationError(
+                "Attachment SHA-256 does not match its payload.",
+                component="email_models",
+                operation="validate_attachment",
+                field="content_sha256",
+            )
+
+        object.__setattr__(self, "filename", filename)
+        object.__setattr__(self, "content_type", content_type)
+        object.__setattr__(self, "content_sha256", expected_hash)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,22 +115,72 @@ class EmailBranding:
     support_email: str | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "product_name",
-            require_text(self.product_name, field="product_name", max_length=128, allow_newlines=False),
-        )
-        object.__setattr__(
-            self,
-            "team_name",
-            require_text(self.team_name, field="team_name", max_length=128, allow_newlines=False),
-        )
+        object.__setattr__(self, "product_name", require_text(self.product_name, field="product_name", max_length=128, allow_newlines=False))
+        object.__setattr__(self, "team_name", require_text(self.team_name, field="team_name", max_length=128, allow_newlines=False))
         if self.support_email is not None:
-            object.__setattr__(
-                self,
-                "support_email",
-                normalize_email_address(self.support_email, field="support_email"),
-            )
+            object.__setattr__(self, "support_email", normalize_email_address(self.support_email, field="support_email"))
+
+
+@dataclass(frozen=True, slots=True)
+class ContactMessageData:
+    sender_name: str
+    sender_email: str
+    subject_display: str
+    message: str
+    ticket_number: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "sender_name",
+            require_text(
+                self.sender_name,
+                field="sender_name",
+                max_length=128,
+                allow_newlines=False,
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "sender_email",
+            normalize_email_address(
+                self.sender_email,
+                field="sender_email",
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "subject_display",
+            require_text(
+                self.subject_display,
+                field="subject_display",
+                max_length=128,
+                allow_newlines=False,
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "message",
+            require_text(
+                self.message,
+                field="message",
+                max_length=10_000,
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "ticket_number",
+            require_text(
+                self.ticket_number,
+                field="ticket_number",
+                max_length=64,
+                allow_newlines=False,
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,21 +190,9 @@ class EmailContent:
     html_body: str = field(repr=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "subject",
-            require_header_value(self.subject, field="subject", max_length=256),
-        )
-        object.__setattr__(
-            self,
-            "text_body",
-            require_text(self.text_body, field="text_body", max_length=200_000),
-        )
-        object.__setattr__(
-            self,
-            "html_body",
-            require_text(self.html_body, field="html_body", max_length=500_000),
-        )
+        object.__setattr__(self, "subject", require_header_value(self.subject, field="subject", max_length=256))
+        object.__setattr__(self, "text_body", require_text(self.text_body, field="text_body", max_length=200_000))
+        object.__setattr__(self, "html_body", require_text(self.html_body, field="html_body", max_length=500_000))
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +204,7 @@ class OutboundEmail:
     idempotency_key: str | None = None
     correlation_id: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict, repr=False)
+    attachments: tuple[EmailAttachment, ...] = field(default_factory=tuple, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.recipient, EmailAddress):
@@ -163,11 +263,19 @@ class OutboundEmail:
                 allow_newlines=False,
             ),
         )
-        object.__setattr__(
-            self,
-            "headers",
-            MappingProxyType(normalize_metadata_headers(self.headers)),
-        )
+        object.__setattr__(self, "headers", MappingProxyType(normalize_metadata_headers(self.headers)))
+        attachments = tuple(self.attachments)
+
+        for index, attachment in enumerate(attachments):
+            if not isinstance(attachment, EmailAttachment):
+                raise EmailValidationError(
+                    "attachments must contain only EmailAttachment values.",
+                    component="email_models",
+                    operation="validate_outbound_email",
+                    field=f"attachments[{index}]",
+                )
+
+        object.__setattr__(self, "attachments", attachments)
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,16 +286,8 @@ class EmailDeliveryReceipt:
     accepted_at: datetime
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "provider",
-            require_text(self.provider, field="provider", max_length=64, allow_newlines=False),
-        )
-        object.__setattr__(
-            self,
-            "message_id",
-            require_header_value(self.message_id, field="message_id", max_length=998),
-        )
+        object.__setattr__(self, "provider", require_text(self.provider, field="provider", max_length=64, allow_newlines=False))
+        object.__setattr__(self, "message_id", require_header_value(self.message_id, field="message_id", max_length=998))
         if not isinstance(self.status, EmailDeliveryStatus):
             try:
                 object.__setattr__(self, "status", EmailDeliveryStatus(str(self.status)))
@@ -216,11 +316,7 @@ class EmailVerificationData:
     expires_in_minutes: int = 15
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "user_name",
-            optional_text(self.user_name, field="user_name", max_length=128, allow_newlines=False),
-        )
+        object.__setattr__(self, "user_name", optional_text(self.user_name, field="user_name", max_length=128, allow_newlines=False))
         object.__setattr__(self, "verification_code", require_verification_code(self.verification_code))
         if isinstance(self.expires_in_minutes, bool) or not isinstance(self.expires_in_minutes, int):
             raise EmailValidationError(
@@ -478,8 +574,10 @@ class EmailTransport(Protocol):
 
 
 __all__ = [
+    "EmailAttachment",
     "EmailNotificationType",
     "EmailDeliveryStatus",
+    "ContactMessageData",
     "EmailAddress",
     "EmailBranding",
     "EmailContent",

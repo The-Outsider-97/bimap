@@ -291,6 +291,15 @@ class SMTPProvider:
 
         mime.set_content(message.content.text_body, subtype="plain", charset="utf-8")
         mime.add_alternative(message.content.html_body, subtype="html", charset="utf-8")
+        for attachment in message.attachments:
+            maintype, subtype = attachment.content_type.split("/", 1)
+
+            mime.add_attachment(
+                attachment.payload,
+                maintype=maintype,
+                subtype=subtype,
+                filename=attachment.filename,
+            )
         return mime, message_id
 
     def _connect(self) -> smtplib.SMTP:

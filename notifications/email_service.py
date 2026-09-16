@@ -90,26 +90,40 @@ class EmailService(Notifications):
         data: Any,
         idempotency_key: str | None = None,
         correlation_id: str | None = None,
+        attachments: tuple[EmailAttachment, ...] = (),
+        reply_to: EmailAddress | None = None,
     ) -> EmailDeliveryReceipt:
         content = self.renderer.render(event_type, data)
+
         outbound = OutboundEmail(
             recipient=recipient,
             content=content,
             event_type=event_type,
-            reply_to=self.reply_to,
+            reply_to=(
+                reply_to
+                if reply_to is not None
+                else self.reply_to
+            ),
             idempotency_key=idempotency_key,
             correlation_id=correlation_id,
+            attachments=attachments,
         )
+
         try:
             receipt = self.transport.send(outbound)
+
         except EmailError:
             raise
+
         except Exception as exc:
             raise EmailTransportError(
                 "Email transport failed unexpectedly.",
                 component="email_service",
                 operation="deliver",
-                context={"event_type": event_type.value, "lower_error_type": type(exc).__name__},
+                context={
+                    "event_type": event_type.value,
+                    "lower_error_type": type(exc).__name__,
+                },
                 cause=exc,
             ) from exc
 
@@ -120,8 +134,10 @@ class EmailService(Notifications):
                 "recipient": mask_email_address(recipient.email),
                 "provider": receipt.provider,
                 "message_id": receipt.message_id,
+                "attachment_count": len(attachments),
             }
         )
+
         return receipt
 
     def send_verification_email(
@@ -158,6 +174,7 @@ class EmailService(Notifications):
         recipient_name: str | None = None,
         idempotency_key: str | None = None,
         correlation_id: str | None = None,
+        attachments: tuple[EmailAttachment, ...] = (),
     ) -> EmailDeliveryReceipt:
         printer.status("EMAIL", "Sending audit result email", "info")
         if not isinstance(data, AuditResultData):
@@ -174,6 +191,7 @@ class EmailService(Notifications):
             data=data,
             idempotency_key=idempotency_key,
             correlation_id=correlation_id,
+            attachments=attachments,
         )
 
     def send_purchase_result_email(
@@ -184,6 +202,7 @@ class EmailService(Notifications):
         recipient_name: str | None = None,
         idempotency_key: str | None = None,
         correlation_id: str | None = None,
+        attachments: tuple[EmailAttachment, ...] = (),
     ) -> EmailDeliveryReceipt:
         printer.status("EMAIL", "Sending purchase result email", "info")
         if not isinstance(data, PurchaseResultData):
@@ -200,6 +219,7 @@ class EmailService(Notifications):
             data=data,
             idempotency_key=idempotency_key,
             correlation_id=correlation_id,
+            attachments=attachments,
         )
 
     def send_service_result_email(
@@ -210,6 +230,7 @@ class EmailService(Notifications):
         recipient_name: str | None = None,
         idempotency_key: str | None = None,
         correlation_id: str | None = None,
+        attachments: tuple[EmailAttachment, ...] = (),
     ) -> EmailDeliveryReceipt:
         printer.status("EMAIL", "Sending service result email", "info")
         if not isinstance(data, ServiceResultData):
@@ -226,6 +247,7 @@ class EmailService(Notifications):
             data=data,
             idempotency_key=idempotency_key,
             correlation_id=correlation_id,
+            attachments=attachments,
         )
 
     @staticmethod
@@ -341,6 +363,32 @@ class EmailService(Notifications):
             operation="notification_to_email",
             field="event_type",
             context={"event_type": event.value},
+        )
+
+    def send_contact_message_email(
+        self,
+        data: ContactMessageData,
+        *,
+        idempotency_key: str | None = None,
+        correlation_id: str | None = None,
+    ) -> EmailDeliveryReceipt:
+        support_email = self.renderer.branding.support_email
+
+        if support_email is None:
+            raise EmailConfigurationError(
+                "Contact email requires a configured support address.",
+                component="email_service",
+                operation="send_contact_message_email",
+                field="branding.support_email",
+            )
+
+        return self._deliver(
+            recipient=EmailAddress(support_email, "Remy3Design"),
+            event_type=EmailNotificationType.CONTACT_MESSAGE,
+            data=data,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            reply_to=EmailAddress(data.sender_email, data.sender_name),
         )
 
 
