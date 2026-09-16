@@ -46,8 +46,9 @@ from fastapi import Request # type: ignore
 from applications.bimap.domain.accounts.models import Account  # type: ignore
 from applications.bimap.domain.accounts.plans import AccountPlanCatalog, QuotaMode, UsageKind  # type: ignore
 from applications.bimap.domain.orders.states import EXCEPTION_STATES, OrderState  # type: ignore
-from applications.bimap.notifications import EmailAddress, EmailBranding, EmailRenderer, EmailService # type: ignore
+from applications.bimap.notifications import ContactMessageData, EmailAddress, EmailBranding, EmailRenderer, EmailService # type: ignore
 from applications.bimap.notifications.providers import SMTPProvider # type: ignore
+from applications.bimap.notifications.utils.email_errors import EmailValidationError # type: ignore
 from applications.bimap.api.app import APISettings # type: ignore
 from applications.bimap.api.dependencies import APIRouteHooks # type: ignore
 from applications.bimap.api.middleware.request_limits import RequestLimitPolicy # type: ignore
@@ -55,6 +56,7 @@ from applications.bimap.api.middleware.security import SecurityPolicy # type: ig
 from applications.bimap.api.routes.auth import SESSION_COOKIE_NAME  # type: ignore
 from applications.bimap.api.routes.downloads import DownloadGrant # type: ignore
 from applications.bimap.api.utils.api_errors import APIServiceUnavailableError, APIUnauthorizedError  # type: ignore
+from applications.bimap.app.utils.app_errors import AppValidationError # type: ignore
 from applications.bimap.audit_engine.bim_qa.auditor import BIMQAAuditor # type: ignore
 from applications.bimap.audit_engine.combined.auditor import CombinedAuditor # type: ignore
 from applications.bimap.audit_engine.rfa.auditor import RFAAuditor # type: ignore
@@ -145,6 +147,58 @@ def _build_email_service() -> EmailService:
             "Remy3Design",
         ),
     )
+
+def _build_contact_message_sender(email_service: EmailService):
+    """
+    Adapt the concrete BIMAP EmailService to the API contact-message hook.
+
+    Email address/content validation remains owned by the canonical
+    notification models.
+    """
+
+    if not isinstance(email_service, EmailService):
+        raise TypeError(
+            "email_service must be an EmailService."
+        )
+
+    def _send(
+        sender_name: str,
+        sender_email: str,
+        subject_display: str,
+        message: str,
+        ticket_number: str,
+    ) -> None:
+        try:
+            data = ContactMessageData(
+                sender_name=sender_name,
+                sender_email=sender_email,
+                subject_display=subject_display,
+                message=message,
+                ticket_number=ticket_number,
+            )
+
+            email_service.send_contact_message_email(
+                data,
+            )
+
+        except EmailValidationError as exc:
+            # This is request-data validation, not an internal
+            # server failure. Translate it to the existing
+            # application validation vocabulary so API
+            # ErrorMapping returns a client error.
+            raise AppValidationError(
+                "Contact message validation failed.",
+                component="deployment_bimap",
+                operation="send_contact_message",
+                field=getattr(
+                    exc,
+                    "field",
+                    None,
+                ),
+                cause=exc,
+            ) from exc
+
+    return _send
 
 def _required_environment(name: str) -> str:
     value = os.getenv(name)
@@ -331,7 +385,7 @@ def _local_authorizer_factory(authentication, accounts):
     return _local_authorizer
 
 
-def _build_route_hooks(authentication, accounts) -> APIRouteHooks:
+def _build_route_hooks(authentication, accounts, contact_message_sender) -> APIRouteHooks:
     printer.status("BIMAP", "Building local API route hooks", "info")
     return APIRouteHooks(
         authorizer=_local_authorizer_factory(authentication, accounts),
@@ -341,6 +395,7 @@ def _build_route_hooks(authentication, accounts) -> APIRouteHooks:
         deletion_admission_gate=_local_deletion_admission_gate,
         deletion_object_resolver=_local_deletion_object_resolver,
         payment_signature_header="x-bimap-payment-signature",
+        contact_message_sender=contact_message_sender,
     )
 
 
@@ -768,7 +823,7 @@ def _create_local_bootstrap() -> Bootstrap:
         entitlement_store=entitlement_store,
         renewal_window_resolver=renewal_window_resolver,
         shared_memory=SharedMemory(),
-        route_hooks=_build_route_hooks(authentication, accounts),
+        route_hooks=_build_route_hooks(authentication, accounts, _build_contact_message_sender(email_notifications)),
         notifications=email_notifications,
         artifact_mailer=artifact_mailer,
         account_summary_resolver=account_summary_resolver,
