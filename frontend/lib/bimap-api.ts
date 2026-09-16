@@ -15,7 +15,6 @@ export type BimapProductScope =
   | "project"
   | "combined";
 
-
 export type ProductDefinitionDto = {
   readonly code:
     BimapProductCode;
@@ -145,6 +144,21 @@ export type BimapStagedUploadDto = {
 };
 
 
+/**
+ * A staged derived GLB viewer artifact.
+ *
+ * `viewer_ref` is intentionally distinct from `source_ref`: the GLB is
+ * visualization geometry and is never an authoritative audit source.
+ */
+export type BimapStagedViewerModelDto = {
+  readonly order_id: string;
+  readonly viewer_ref: string;
+  readonly filename: string;
+  readonly stored_object: BimapStoredObjectDto;
+  readonly malware_scan: BimapMalwareScanDto;
+};
+
+
 export type BimapOrderDto = {
   readonly schema_version:
     string;
@@ -201,27 +215,41 @@ export type BimapOrderDto = {
 
 
 export type PaymentCheckoutDto = {
-  readonly order_id:
-    string;
-
-  readonly checkout_id:
-    string;
-
-  readonly provider_name:
-    string;
-
-  readonly amount:
-    string;
-
-  readonly currency:
-    string;
-
-  readonly customer_action_url:
-    string | null;
-
-  readonly expires_at:
-    string | null;
+  readonly order_id: string;
+  readonly checkout_id: string;
+  readonly provider_name: string;
+  readonly amount: string;
+  readonly currency: string;
+  readonly customer_action_url: string | null;
+  readonly expires_at: string | null;
 };
+
+
+export type ContactMessageRequest = {
+  readonly name: string;
+  readonly email: string;
+  readonly subject: string;
+  readonly message: string;
+};
+
+
+export type ContactMessageResponse = {
+  readonly ticket_number: string;
+  readonly status: "accepted";
+};
+
+
+export async function sendContactMessage(
+  payload: ContactMessageRequest,
+): Promise<ContactMessageResponse> {
+  return apiJsonRequest<ContactMessageResponse>(
+    "/contact",
+    {
+      method: "POST",
+      body: payload,
+    },
+  );
+}
 
 
 function requireIdempotencyKey(
@@ -245,9 +273,7 @@ function idempotencyHeaders(
 ): HeadersInit {
   return {
     "Idempotency-Key":
-      requireIdempotencyKey(
-        value,
-      ),
+      requireIdempotencyKey(value,),
   };
 }
 
@@ -301,6 +327,76 @@ export async function stageOrderModelUpload(
         target,
       )
     }/uploads/model`,
+    {
+      method: "POST",
+      body: form,
+      signal,
+    },
+  );
+}
+
+
+/**
+ * Stage the GLB produced by `native/revit_local_exporter`.
+ *
+ * This route is separate from `/uploads/model` so a derived viewer artifact
+ * cannot accidentally enter BIMAP's authoritative source/evidence contract.
+ */
+export async function stageOrderViewerModelUpload(
+  orderId: string,
+  file: File,
+  signal?: AbortSignal,
+): Promise<BimapStagedViewerModelDto> {
+  const target =
+    orderId.trim();
+
+  if (!target) {
+    throw new TypeError(
+      "Order ID cannot be empty.",
+    );
+  }
+
+  if (!(file instanceof File)) {
+    throw new TypeError(
+      "A GLB viewer model is required.",
+    );
+  }
+
+  const filename =
+    file.name.trim();
+
+  if (
+    !filename ||
+    !filename.toLowerCase().endsWith(".glb")
+  ) {
+    throw new TypeError(
+      "The BIMAP viewer model must be a .glb file.",
+    );
+  }
+
+  if (file.size <= 0) {
+    throw new TypeError(
+      "The selected viewer model is empty.",
+    );
+  }
+
+  const form =
+    new FormData();
+
+  form.set(
+    "viewer_model",
+    file,
+    filename,
+  );
+
+  return apiRequest<
+    BimapStagedViewerModelDto
+  >(
+    `/orders/${
+      encodeURIComponent(
+        target,
+      )
+    }/uploads/viewer-model`,
     {
       method: "POST",
       body: form,
