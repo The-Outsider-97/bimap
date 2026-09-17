@@ -5,6 +5,10 @@ import {
   useRef,
 } from "react";
 
+import type {
+  MouseEvent as ReactMouseEvent,
+} from "react";
+
 import {
   FormatBadge,
 } from "@/comp/ui/FormatBadge";
@@ -12,6 +16,10 @@ import {
 import {
   PurchaseModelButton,
 } from "./PurchaseModelButton";
+
+import {
+  formatThreeDFormat,
+} from "./types";
 
 import type {
   RevitIfcInformation,
@@ -38,11 +46,13 @@ function displayValue(
     | string
     | number
     | boolean
+    | null
     | undefined,
-) {
+): string {
 
   if (
     value === undefined ||
+    value === null ||
     value === ""
   ) {
     return "Not configured";
@@ -85,14 +95,9 @@ function IfcInformation({
           </span>
 
           <strong>
-            {
-              displayValue(
-                ifc.schema,
-              )
-            }
+            {displayValue(ifc.schema)}
           </strong>
         </div>
-
 
         <div>
           <span>
@@ -100,14 +105,9 @@ function IfcInformation({
           </span>
 
           <strong>
-            {
-              displayValue(
-                ifc.entity,
-              )
-            }
+            {displayValue(ifc.entity)}
           </strong>
         </div>
-
 
         <div>
           <span>
@@ -115,14 +115,11 @@ function IfcInformation({
           </span>
 
           <strong>
-            {
-              displayValue(
-                ifc.predefinedType,
-              )
-            }
+            {displayValue(
+              ifc.predefinedType,
+            )}
           </strong>
         </div>
-
 
         <div>
           <span>
@@ -130,14 +127,11 @@ function IfcInformation({
           </span>
 
           <strong>
-            {
-              displayValue(
-                ifc.objectType,
-              )
-            }
+            {displayValue(
+              ifc.objectType,
+            )}
           </strong>
         </div>
-
 
         <div>
           <span>
@@ -145,14 +139,11 @@ function IfcInformation({
           </span>
 
           <strong>
-            {
-              displayValue(
-                ifc.typeName,
-              )
-            }
+            {displayValue(
+              ifc.typeName,
+            )}
           </strong>
         </div>
-
 
         <div>
           <span>
@@ -160,15 +151,12 @@ function IfcInformation({
           </span>
 
           <strong>
-            {
-              displayValue(
-                ifc.classification,
-              )
-            }
+            {displayValue(
+              ifc.classification,
+            )}
           </strong>
         </div>
       </div>
-
 
       {ifc.properties &&
       ifc.properties.length > 0 ? (
@@ -183,20 +171,14 @@ function IfcInformation({
             {ifc.properties.map(
               (property) => (
                 <div
-                  key={
-                    property.name
-                  }
+                  key={property.name}
                 >
                   <dt>
-                    {
-                      property.name
-                    }
+                    {property.name}
                   </dt>
 
                   <dd>
-                    {
-                      property.value
-                    }
+                    {property.value}
                   </dd>
                 </div>
               ),
@@ -206,6 +188,346 @@ function IfcInformation({
       ) : null}
     </>
   );
+}
+
+
+function TechnicalInformation({
+  product,
+}: {
+  product: ThreeDProduct;
+}) {
+  const technical =
+    product.technical;
+
+  if (
+    technical.kind === "revit"
+  ) {
+    return (
+      <>
+        <div
+          className="
+            model-spec-grid
+            model-spec-grid--summary
+          "
+        >
+          <div>
+            <span>
+              Revit version
+            </span>
+
+            <strong>
+              {displayValue(
+                technical.revitVersion,
+              )}
+            </strong>
+          </div>
+
+          <div>
+            <span>
+              Parametric
+            </span>
+
+            <strong>
+              {displayValue(
+                technical.parametric,
+              )}
+            </strong>
+          </div>
+        </div>
+
+        <IfcInformation
+          ifc={technical.ifc}
+        />
+      </>
+    );
+  }
+
+  if (
+    technical.kind === "3ds-max"
+  ) {
+    return (
+      <>
+        <div
+          className="model-spec-grid"
+        >
+          <div>
+            <span>
+              3ds Max version
+            </span>
+
+            <strong>
+              {displayValue(
+                technical.maxVersion,
+              )}
+            </strong>
+          </div>
+
+          <div>
+            <span>
+              Total vertices
+            </span>
+
+            <strong>
+              {displayValue(
+                technical.vertices,
+              )}
+            </strong>
+          </div>
+
+          <div>
+            <span>
+              Total polygons
+            </span>
+
+            <strong>
+              {displayValue(
+                technical.polygons,
+              )}
+            </strong>
+          </div>
+
+          <div>
+            <span>
+              Materials
+            </span>
+
+            <strong>
+              {technical.materials.length > 0
+                ? technical.materials.length
+                : "Not configured"}
+            </strong>
+          </div>
+        </div>
+
+        {technical.materials.length > 0 ? (
+          <div
+            className="model-materials"
+          >
+            <h4>
+              Material list
+            </h4>
+
+            <ul>
+              {technical.materials.map(
+                (material) => (
+                  <li
+                    key={material}
+                  >
+                    {material}
+                  </li>
+                ),
+              )}
+            </ul>
+          </div>
+        ) : null}
+      </>
+    );
+  }
+
+  if (
+    technical.kind === "mesh"
+  ) {
+    return (
+      <>
+        <div
+          className="model-spec-grid"
+        >
+          <div>
+            <span>
+              Total vertices
+            </span>
+
+            <strong>
+              {displayValue(
+                technical.vertices,
+              )}
+            </strong>
+          </div>
+
+          <div>
+            <span>
+              Total edges
+            </span>
+
+            <strong>
+              {displayValue(
+                technical.edges,
+              )}
+            </strong>
+          </div>
+
+          <div>
+            <span>
+              Total polygons
+            </span>
+
+            <strong>
+              {displayValue(
+                technical.polygons,
+              )}
+            </strong>
+          </div>
+
+          <div>
+            <span>
+              Units
+            </span>
+
+            <strong>
+              {displayValue(
+                technical.units,
+              )}
+            </strong>
+          </div>
+
+          <div>
+            <span>
+              Materials
+            </span>
+
+            <strong>
+              {technical.materials.length > 0
+                ? technical.materials.length
+                : "Not configured"}
+            </strong>
+          </div>
+
+          <div>
+            <span>
+              Textures included
+            </span>
+
+            <strong>
+              {displayValue(
+                technical.texturesIncluded,
+              )}
+            </strong>
+          </div>
+        </div>
+
+        {technical.materials.length > 0 ? (
+          <div
+            className="model-materials"
+          >
+            <h4>
+              Material list
+            </h4>
+
+            <ul>
+              {technical.materials.map(
+                (material) => (
+                  <li
+                    key={material}
+                  >
+                    {material}
+                  </li>
+                ),
+              )}
+            </ul>
+          </div>
+        ) : null}
+      </>
+    );
+  }
+
+  return (
+    <div
+      className="model-spec-grid"
+    >
+      <div>
+        <span>
+          DWG version
+        </span>
+
+        <strong>
+          {displayValue(
+            technical.dwgVersion,
+          )}
+        </strong>
+      </div>
+
+      <div>
+        <span>
+          Units
+        </span>
+
+        <strong>
+          {displayValue(
+            technical.units,
+          )}
+        </strong>
+      </div>
+
+      <div>
+        <span>
+          Solids
+        </span>
+
+        <strong>
+          {displayValue(
+            technical.solids,
+          )}
+        </strong>
+      </div>
+
+      <div>
+        <span>
+          Surfaces
+        </span>
+
+        <strong>
+          {displayValue(
+            technical.surfaces,
+          )}
+        </strong>
+      </div>
+
+      <div>
+        <span>
+          Meshes
+        </span>
+
+        <strong>
+          {displayValue(
+            technical.meshes,
+          )}
+        </strong>
+      </div>
+
+      <div>
+        <span>
+          Layers
+        </span>
+
+        <strong>
+          {displayValue(
+            technical.layers,
+          )}
+        </strong>
+      </div>
+    </div>
+  );
+}
+
+
+function technicalHeading(
+  product: ThreeDProduct,
+): string {
+  switch (
+    product.technical.kind
+  ) {
+    case "revit":
+      return "Revit / IFC information";
+
+    case "3ds-max":
+      return "3ds Max model information";
+
+    case "cad-3d":
+      return "3D CAD information";
+
+    case "mesh":
+      return "Mesh information";
+  }
 }
 
 
@@ -221,7 +543,6 @@ export function ThreeDProductModal({
 
 
   useEffect(() => {
-
     const dialog =
       dialogRef.current;
 
@@ -229,9 +550,7 @@ export function ThreeDProductModal({
       return;
     }
 
-
     if (product) {
-
       if (!dialog.open) {
         dialog.showModal();
       }
@@ -243,7 +562,6 @@ export function ThreeDProductModal({
       return;
     }
 
-
     if (dialog.open) {
       dialog.close();
     }
@@ -251,80 +569,68 @@ export function ThreeDProductModal({
     document.body.classList.remove(
       "is-model-modal-open",
     );
-
   }, [product]);
 
 
   useEffect(() => {
-
     return () => {
       document.body.classList.remove(
         "is-model-modal-open",
       );
     };
-
   }, []);
+
+
+  const handleBackdropMouseDown = (
+    event:
+      ReactMouseEvent<
+        HTMLDialogElement
+      >,
+  ) => {
+    if (
+      event.target ===
+      event.currentTarget
+    ) {
+      event.currentTarget.close();
+    }
+  };
 
 
   return (
     <dialog
       ref={dialogRef}
-
       className="model-modal"
-
       aria-label={
         product
           ? `${product.title} product details`
           : "3D model details"
       }
-
       onClose={onClose}
-
-      onMouseDown={(event) => {
-
-        /*
-         * Clicking the native
-         * dialog backdrop.
-         */
-        if (
-          event.target ===
-          event.currentTarget
-        ) {
-          event.currentTarget.close();
-        }
-      }}
+      onMouseDown={
+        handleBackdropMouseDown
+      }
     >
       {product ? (
         <div
           className="model-modal__shell"
         >
-
           <header
             className="model-modal__header"
           >
             <div>
               <p>
-                {
-                  product.category
-                }
+                {product.category}
               </p>
 
               <h2>
-                {
-                  product.title
-                }
+                {product.title}
               </h2>
             </div>
 
-
             <button
               type="button"
-
               className="model-modal__close"
-
-              aria-label=
-                "Close product details"
-
+              aria-label="Close product details"
               onClick={() =>
                 dialogRef.current
                   ?.close()
@@ -335,11 +641,9 @@ export function ThreeDProductModal({
             </button>
           </header>
 
-
           <div
             className="model-modal__body"
           >
-
             <section
               className="model-modal__intro"
             >
@@ -351,19 +655,17 @@ export function ThreeDProductModal({
                     <FormatBadge
                       key={format}
                     >
-                      {format}
+                      {formatThreeDFormat(
+                        format,
+                      )}
                     </FormatBadge>
                   ),
                 )}
               </div>
 
-
               <p>
-                {
-                  product.description
-                }
+                {product.description}
               </p>
-
 
               <PurchaseModelButton
                 product={product}
@@ -371,14 +673,11 @@ export function ThreeDProductModal({
               />
             </section>
 
-
             <section
               className="model-modal__section"
-
               aria-labelledby=
                 "model-renders-heading"
             >
-
               <div
                 className="model-modal__section-heading"
               >
@@ -400,39 +699,25 @@ export function ThreeDProductModal({
                 </div>
               </div>
 
-
               <div
                 className="model-render-stack"
               >
-                {
-                  product.renders
-                    .length > 0
-                  ? (
-                    product.renders.map(
+                {product.renders.length > 0
+                  ? product.renders.map(
                       (
                         render,
                         index,
                       ) => (
-
                         <figure
-                          className=
-                            "model-render"
-
+                          className="model-render"
                           key={
                             `${product.id}-${index}`
                           }
                         >
-
                           {render.src ? (
                             <img
-                              src={
-                                render.src
-                              }
-
-                              alt={
-                                render.alt
-                              }
-
+                              src={render.src}
+                              alt={render.alt}
                               loading="lazy"
                             />
                           ) : (
@@ -442,14 +727,12 @@ export function ThreeDProductModal({
                             >
                               <span>
                                 Render{" "}
-                                {
-                                  String(
-                                    index + 1,
-                                  ).padStart(
-                                    2,
-                                    "0",
-                                  )
-                                }
+                                {String(
+                                  index + 1,
+                                ).padStart(
+                                  2,
+                                  "0",
+                                )}
                               </span>
 
                               <p>
@@ -459,19 +742,14 @@ export function ThreeDProductModal({
                             </div>
                           )}
 
-
                           {render.caption ? (
                             <figcaption>
-                              {
-                                render.caption
-                              }
+                              {render.caption}
                             </figcaption>
                           ) : null}
-
                         </figure>
                       ),
                     )
-                  )
                   : (
                     <div
                       className=
@@ -481,19 +759,15 @@ export function ThreeDProductModal({
                       been configured
                       for this product.
                     </div>
-                  )
-                }
+                  )}
               </div>
             </section>
 
-
             <section
               className="model-modal__section"
-
               aria-labelledby=
                 "model-tech-heading"
             >
-
               <div
                 className="model-modal__section-heading"
               >
@@ -510,221 +784,42 @@ export function ThreeDProductModal({
                     id=
                       "model-tech-heading"
                   >
-                    {
-                      product.technical
-                        .kind === "revit"
-                        ? "Revit / IFC information"
-                        : "3ds Max model information"
-                    }
+                    {technicalHeading(
+                      product,
+                    )}
                   </h3>
                 </div>
               </div>
 
-
-              {
-                product.technical
-                  .kind === "revit"
-                ? (
-                  <>
-                    <div
-                      className="
-                        model-spec-grid
-                        model-spec-grid--summary
-                      "
-                    >
-                      <div>
-                        <span>
-                          Revit version
-                        </span>
-
-                        <strong>
-                          {
-                            displayValue(
-                              product
-                                .technical
-                                .revitVersion,
-                            )
-                          }
-                        </strong>
-                      </div>
-
-
-                      <div>
-                        <span>
-                          Parametric
-                        </span>
-
-                        <strong>
-                          {
-                            displayValue(
-                              product
-                                .technical
-                                .parametric,
-                            )
-                          }
-                        </strong>
-                      </div>
-                    </div>
-
-
-                    <IfcInformation
-                      ifc={
-                        product
-                          .technical
-                          .ifc
-                      }
-                    />
-                  </>
-                )
-                : (
-                  <div
-                    className="model-spec-grid"
-                  >
-
-                    <div>
-                      <span>
-                        3ds Max version
-                      </span>
-
-                      <strong>
-                        {
-                          displayValue(
-                            product
-                              .technical
-                              .maxVersion,
-                          )
-                        }
-                      </strong>
-                    </div>
-
-
-                    <div>
-                      <span>
-                        Total vertices
-                      </span>
-
-                      <strong>
-                        {
-                          displayValue(
-                            product
-                              .technical
-                              .vertices,
-                          )
-                        }
-                      </strong>
-                    </div>
-
-
-                    <div>
-                      <span>
-                        Total polygons
-                      </span>
-
-                      <strong>
-                        {
-                          displayValue(
-                            product
-                              .technical
-                              .polygons,
-                          )
-                        }
-                      </strong>
-                    </div>
-
-
-                    <div>
-                      <span>
-                        Materials
-                      </span>
-
-                      <strong>
-                        {
-                          product
-                            .technical
-                            .materials
-                            .length > 0
-                          ? product
-                              .technical
-                              .materials
-                              .length
-                          : "Not configured"
-                        }
-                      </strong>
-                    </div>
-                  </div>
-                )
-              }
-
-
-              {
-                product.technical
-                  .kind === "3ds-max" &&
-                product.technical
-                  .materials.length > 0
-                ? (
-                  <div
-                    className="model-materials"
-                  >
-                    <h4>
-                      Material list
-                    </h4>
-
-                    <ul>
-                      {
-                        product
-                          .technical
-                          .materials
-                          .map(
-                            (material) => (
-                              <li
-                                key={
-                                  material
-                                }
-                              >
-                                {
-                                  material
-                                }
-                              </li>
-                            ),
-                          )
-                      }
-                    </ul>
-                  </div>
-                )
-                : null
-              }
-
+              <TechnicalInformation
+                product={product}
+              />
             </section>
           </div>
-
 
           <footer
             className="model-modal__footer"
           >
             <div>
               <span>
-                {
-                  product.formats.join(
-                    " · ",
+                {product.formats
+                  .map(
+                    formatThreeDFormat,
                   )
-                }
+                  .join(" · ")}
               </span>
 
               <span>
-                {
-                  product.priceLabel ??
-                  "Price not configured"
-                }
+                {product.priceLabel ??
+                  "Price not configured"}
               </span>
             </div>
-
 
             <PurchaseModelButton
               product={product}
               compact
             />
           </footer>
-
         </div>
       ) : null}
     </dialog>
