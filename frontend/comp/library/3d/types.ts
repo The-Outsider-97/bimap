@@ -1,25 +1,29 @@
 export type ThreeDFormat =
   | "RFA"
   | "RVT"
-  | "MAX";
+  | "MAX"
+  | "STL"
+  | "DWG_3D"
+  | "OBJ"
+  | "GLB";
+
+export function formatThreeDFormat(
+  format: ThreeDFormat,
+): string {
+  return format === "DWG_3D"
+    ? "3D DWG"
+    : format;
+}
 
 export type ProductRender = {
-  src?: string;
+  src?: string | null;
   alt: string;
-  caption?: string;
+  caption?: string | null;
 };
 
 export type ProductPreview = {
-  /**
-   * Square turntable video used on the storefront card.
-   *
-   * Recommended:
-   * .webm with .mp4 fallback added later if needed.
-   *
-   * Do not expose the purchased RFA/RVT/MAX source file.
-   */
-  videoSrc?: string;
-  posterSrc?: string;
+  videoSrc?: string | null;
+  posterSrc?: string | null;
 };
 
 export type IfcProperty = {
@@ -39,61 +43,57 @@ export type RevitIfcInformation = {
 
 export type RevitTechnicalInformation = {
   kind: "revit";
-
-  revitVersion?: string;
-
-  /**
-   * Undefined means the catalog entry
-   * has not yet been verified.
-   */
-  parametric?: boolean;
-
+  revitVersion?: string | null;
+  parametric?: boolean | null;
   ifc: RevitIfcInformation;
 };
 
 export type MaxTechnicalInformation = {
   kind: "3ds-max";
-
-  maxVersion?: string;
-
-  vertices?: number;
-  polygons?: number;
-
+  maxVersion?: string | null;
+  vertices?: number | null;
+  polygons?: number | null;
   materials: readonly string[];
+};
+
+export type MeshTechnicalInformation = {
+  kind: "mesh";
+  vertices?: number | null;
+  edges?: number | null;
+  polygons?: number | null;
+  units?: string | null;
+  materials: readonly string[];
+  texturesIncluded?: boolean | null;
+};
+
+export type Cad3DTechnicalInformation = {
+  kind: "cad-3d";
+  dwgVersion?: string | null;
+  units?: string | null;
+  solids?: number | null;
+  surfaces?: number | null;
+  meshes?: number | null;
+  layers?: number | null;
 };
 
 export type ThreeDTechnicalInformation =
   | RevitTechnicalInformation
-  | MaxTechnicalInformation;
+  | MaxTechnicalInformation
+  | MeshTechnicalInformation
+  | Cad3DTechnicalInformation;
 
 export type ThreeDProduct = {
   id: string;
   slug: string;
-
   title: string;
   shortDescription: string;
   description: string;
-
   formats: readonly ThreeDFormat[];
-
   category: string;
   tags: readonly string[];
-
   preview: ProductPreview;
-
   renders: readonly ProductRender[];
-
   technical: ThreeDTechnicalInformation;
-
-  /**
-   * Add the actual checkout URL once
-   * commerce has been implemented.
-   */
   purchaseHref?: string;
-
-  /**
-   * Example:
-   * "€ 24.95"
-   */
-  priceLabel?: string;
+  priceLabel?: string | null;
 };
