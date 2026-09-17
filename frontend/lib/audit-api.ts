@@ -680,12 +680,22 @@ export type AuditSourceDto = {
 };
 
 
+/**
+ * Reference to a staged derived GLB. This is intentionally not an AuditSourceDto.
+ */
+export type AuditViewerModelRefDto = {
+  readonly viewer_ref: string;
+  readonly filename: string;
+};
+
+
 export function startAudit(
   orderId: string,
   input: {
     jobId: string;
     idempotencyKey: string;
     sources: readonly AuditSourceDto[];
+    viewerModel?: AuditViewerModelRefDto | null;
     metadata?: Readonly<Record<string, unknown>>;
   },
 ): Promise<StartAuditResponseDto> {
@@ -709,6 +719,13 @@ export function startAudit(
 
         sources:
           input.sources,
+
+        ...(input.viewerModel
+          ? {
+              viewer_model:
+                input.viewerModel,
+            }
+          : {}),
 
         ...(input.metadata
           ? {
