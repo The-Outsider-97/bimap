@@ -1,0 +1,11 @@
+*** api/app.py
+--- api/app.py
+@@
+ from .routes.products import RouteProducts
++from .routes.storefront import RouteStorefront
+@@
+     account = dependencies.account
++    storefront = dependencies.storefront
+@@
+         RouteProducts(use_cases.get_products),
++        RouteStorefront(storefront.catalog),

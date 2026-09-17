@@ -1,0 +1,32 @@
+*** api/dependencies.py
+--- api/dependencies.py
+@@
+ from ...app.services.account_service import AccountService
++from ...app.ports.store_catalog import StoreCatalog
+@@
+ class APIAccountDependencies:
+@@
+
++@dataclass(frozen=True, slots=True)
++class APIStorefrontDependencies:
++    catalog: StoreCatalog
++
++    def __post_init__(self) -> None:
++        if not isinstance(self.catalog, StoreCatalog):
++            raise APIConfigurationError(
++                "catalog must implement StoreCatalog.",
++                component=_COMPONENT,
++                operation="validate_storefront_dependencies",
++                field="catalog",
++                context={"received_type": type(self.catalog).__name__},
++            )
++
+@@
+ class APIDependencies:
+@@
+     account: APIAccountDependencies
++    storefront: APIStorefrontDependencies
+     admin: APIAdminDependencies | None = None
+@@
+             ("account", self.account, APIAccountDependencies),
++            ("storefront", self.storefront, APIStorefrontDependencies),

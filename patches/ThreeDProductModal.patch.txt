@@ -1,0 +1,64 @@
+*** frontend/comp/library/3d/ThreeDProductModal.tsx
+--- frontend/comp/library/3d/ThreeDProductModal.tsx
+@@
+ import type {
+   RevitIfcInformation,
+   ThreeDProduct,
+ } from "./types";
++import { formatThreeDFormat } from "./types";
+@@
+-                      {format}
++                      {formatThreeDFormat(format)}
+@@
+-                    {
+-                      product.technical
+-                        .kind === "revit"
+-                        ? "Revit / IFC information"
+-                        : "3ds Max model information"
+-                    }
++                    {product.technical.kind === "revit"
++                      ? "Revit / IFC information"
++                      : product.technical.kind === "3ds-max"
++                        ? "3ds Max model information"
++                        : product.technical.kind === "cad-3d"
++                          ? "3D CAD information"
++                          : "Mesh information"}
+@@
+-                product.technical
+-                  .kind === "revit"
++                product.technical.kind === "revit"
+                 ? (
+@@
+-                )
+-                : (
++                ) : product.technical.kind === "3ds-max" ? (
+                   <div
+                     className="model-spec-grid"
+                   >
+@@
+                   </div>
+-                )
++                ) : product.technical.kind === "mesh" ? (
++                  <div className="model-spec-grid">
++                    <div><span>Total vertices</span><strong>{displayValue(product.technical.vertices ?? undefined)}</strong></div>
++                    <div><span>Total edges</span><strong>{displayValue(product.technical.edges ?? undefined)}</strong></div>
++                    <div><span>Total polygons</span><strong>{displayValue(product.technical.polygons ?? undefined)}</strong></div>
++                    <div><span>Units</span><strong>{displayValue(product.technical.units ?? undefined)}</strong></div>
++                    <div><span>Materials</span><strong>{product.technical.materials.length || "Not configured"}</strong></div>
++                    <div><span>Textures included</span><strong>{displayValue(product.technical.texturesIncluded ?? undefined)}</strong></div>
++                  </div>
++                ) : (
++                  <div className="model-spec-grid">
++                    <div><span>DWG version</span><strong>{displayValue(product.technical.dwgVersion ?? undefined)}</strong></div>
++                    <div><span>Units</span><strong>{displayValue(product.technical.units ?? undefined)}</strong></div>
++                    <div><span>Solids</span><strong>{displayValue(product.technical.solids ?? undefined)}</strong></div>
++                    <div><span>Surfaces</span><strong>{displayValue(product.technical.surfaces ?? undefined)}</strong></div>
++                    <div><span>Meshes</span><strong>{displayValue(product.technical.meshes ?? undefined)}</strong></div>
++                    <div><span>Layers</span><strong>{displayValue(product.technical.layers ?? undefined)}</strong></div>
++                  </div>
++                )
+@@
+-                  product.formats.join(
+-                    " · ",
+-                  )
++                  product.formats.map(formatThreeDFormat).join(" · ")

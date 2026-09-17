@@ -1,0 +1,11 @@
+*** api/routes/__init__.py
+--- api/routes/__init__.py
+@@
+ from .products import *
++from .storefront import *
+@@
+ from .products import __all__ as _products_exports
++from .storefront import __all__ as _storefront_exports
+@@
+     *_products_exports,
++    *_storefront_exports,

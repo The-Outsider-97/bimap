@@ -1,0 +1,21 @@
+*** bootstrap.py
+--- bootstrap.py
+@@
+ from pathlib import Path
+@@
++from .infra.store_catalog import FilesystemStoreCatalog
+@@
+                 api_account = APIAccountDependencies(
+@@
+                 )
++
++                api_storefront = APIStorefrontDependencies(
++                    catalog=FilesystemStoreCatalog(
++                        Path(__file__).resolve().parent / "store"
++                    ),
++                )
+@@
+                 api_dependencies = APIDependencies(
+@@
+                     account=api_account,
++                    storefront=api_storefront,
