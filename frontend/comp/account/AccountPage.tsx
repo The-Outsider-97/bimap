@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import {
   useEffect,
   useMemo,
@@ -30,6 +32,7 @@ import {
 import type {
   TocItem,
 } from "@/lib/types";
+
 
 const toc:
   readonly TocItem[] = [
@@ -448,10 +451,7 @@ export function AccountPage() {
           </div>
         </section>
 
-<section
-  className="section account-section"
-  id="account-plan"
->
+
 <section
   className="section account-section"
   id="account-audits"
@@ -762,6 +762,12 @@ export function AccountPage() {
     </div>
   </div>
 </section>
+
+<section
+  className="section account-section"
+  id="account-plan"
+>
+
   <div className="content-width">
     <div className="account-section__heading">
       <div>
@@ -777,6 +783,17 @@ export function AccountPage() {
           Your plan
         </h2>
       </div>
+
+      <Link
+        href="/pricing"
+        className="account-secondary-action"
+      >
+        Manage plan
+
+        <span aria-hidden="true">
+          ↗
+        </span>
+      </Link>
     </div>
 
     {summary ? (
