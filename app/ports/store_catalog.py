@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import Any
 
 
+class StoreCatalogError(RuntimeError):
+    """Expected storefront catalog/configuration failure."""
+
+
 class StoreCatalog(ABC):
     """Read-only catalog boundary used by the public storefront API."""
 
@@ -21,4 +25,7 @@ class StoreCatalog(ABC):
         raise NotImplementedError
 
 
-__all__ = ["StoreCatalog"]
+__all__ = [
+    "StoreCatalog",
+    "StoreCatalogError",
+]
