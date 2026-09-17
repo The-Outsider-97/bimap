@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         SystemClock,
     )
     from .sqlite_audit_results import SQLiteAuditResultStore
+    from .store_catalog import StoreCatalog
 
 
 __all__ = [
@@ -44,6 +45,7 @@ __all__ = [
     "InMemoryStorage",
     "InProcessQueue",
     "SQLiteAuditResultStore",
+    "StoreCatalog",
     "SystemClock",
 ]
 
@@ -71,6 +73,10 @@ def __getattr__(name: str) -> Any:
     if name == "SQLiteAuditResultStore":
         from .sqlite_audit_results import SQLiteAuditResultStore
         return SQLiteAuditResultStore
+
+    if name == "StoreCatalog":
+        from .store_catalog import StoreCatalog
+        return StoreCatalog
 
     if name in {
         "DevelopmentMalware",
