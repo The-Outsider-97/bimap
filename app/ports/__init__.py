@@ -12,6 +12,7 @@ from .queue import *
 from .repositories import *
 from .slai import *
 from .storage import *
+from .store_catalog import *
 
 
 from .accounts import __all__ as _accounts_exports
@@ -28,6 +29,7 @@ from .queue import __all__ as _queue_exports
 from .repositories import __all__ as _repositories_exports
 from .slai import __all__ as _slai_exports
 from .storage import __all__ as _storage_exports
+from .store_catalog import __all__ as _store_catalog_exports
 
 
 __all__ = [
@@ -45,4 +47,5 @@ __all__ = [
     *_repositories_exports,
     *_slai_exports,
     *_storage_exports,
+    *_store_catalog_exports,
 ]  # type: ignore
