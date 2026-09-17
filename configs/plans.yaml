@@ -1,5 +1,17 @@
 schema_version: 1
 
+subscription_pricing:
+  currency: EUR
+  billing_cadences:
+    - monthly
+    - yearly
+  annual_billable_months: 11
+  monthly_price:
+    basic: "0.00"
+    pro: "10.00"
+    plus: "30.00"
+    business: "90.00"
+
 plans:
   basic:
     display_name: Basic
