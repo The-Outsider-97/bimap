@@ -46,6 +46,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from threading import RLock
 from types import MappingProxyType
 from typing import Any, cast
@@ -106,6 +107,7 @@ from .audit_engine.rfa.auditor import RFAAuditor
 from .domain.accounts.plans import AccountPlanCatalog
 from .domain.products.limits import ProductLimits
 from .domain.products.models import ProductCatalog
+from .infra.store_catalog import *
 from .reporting.package_builder import PackageBuilder
 from .reporting.report_builder import ReportBuilder, ReportRenderer
 from .slai.adapter import SLAIAdapter
@@ -1189,9 +1191,16 @@ class Bootstrap:
                     )
                 )
 
+                api_storefront = APIStorefrontDependencies(
+                    catalog=FilesystemStoreCatalog(
+                        Path(__file__).resolve().parent / "store"
+                    ),
+                )
+
                 api_dependencies = APIDependencies(
                     auth=api_auth,
                     account=api_account,
+                    storefront=api_storefront,
                     use_cases=api_use_cases,
                     route_hooks=(
                         self.infrastructure.route_hooks
