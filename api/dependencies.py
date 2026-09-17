@@ -63,6 +63,7 @@ from ..app.services.audit_input_service import AuditInputService
 from ..app.services.authentication_service import AuthenticationService
 from ..app.services.review_service import ReviewService
 from ..app.ports.slai import SLAIPort
+from ..app.ports.store_catalog import StoreCatalog
 from ..domain.accounts.models import Account
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
 
@@ -452,6 +453,21 @@ class APIAccountDependencies:
 
 
 @dataclass(frozen=True, slots=True)
+class APIStorefrontDependencies:
+    catalog: StoreCatalog
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.catalog, StoreCatalog):
+            raise APIConfigurationError(
+                "catalog must implement StoreCatalog.",
+                component=_COMPONENT,
+                operation="validate_storefront_dependencies",
+                field="catalog",
+                context={"received_type": type(self.catalog).__name__},
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class APIAdminDependencies:
     """Optional internal-admin route dependencies.
 
@@ -487,6 +503,7 @@ class APIDependencies:
     health: APIHealthDependencies
     auth: APIAuthDependencies
     account: APIAccountDependencies
+    storefront: APIStorefrontDependencies
     admin: APIAdminDependencies | None = None
 
     def __post_init__(self) -> None:
@@ -503,6 +520,8 @@ class APIDependencies:
             ("health", self.health, APIHealthDependencies),
             ("auth", self.auth, APIAuthDependencies),
             ("account", self.account, APIAccountDependencies),
+            ("storefront", self.storefront, APIStorefrontDependencies),
+
         )
         for field, value, expected_type in expected:
             if not isinstance(value, expected_type):

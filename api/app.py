@@ -53,6 +53,7 @@ from .routes.health import RouteHealth
 from .routes.orders import RouteOrders
 from .routes.products import RouteProducts
 from .routes.reports import RouteReports
+from .routes.storefront import RouteStorefront
 from .routes.uploads import RouteUploads
 from .routes.webhooks import RouteWebhooks
 from .routes.account import RouteAccount
@@ -459,14 +460,12 @@ def _construct_route_groups(dependencies: APIDependencies) -> tuple[Any, ...]:
     health = dependencies.health
     auth = dependencies.auth
     account = dependencies.account
+    storefront = dependencies.storefront
 
     route_groups: list[Any] = [
-        RouteHealth(
-            health.slai,
-            required_agents=health.required_agents,
-            expose_details=health.expose_details,
-        ),
+        RouteHealth(health.slai, required_agents=health.required_agents, expose_details=health.expose_details),
         RouteProducts(use_cases.get_products),
+        RouteStorefront(storefront.catalog),
         RouteContact(hooks.contact_message_sender),
         RouteAuth(auth.service),
         RouteAccount(
@@ -525,19 +524,9 @@ def _construct_route_groups(dependencies: APIDependencies) -> tuple[Any, ...]:
             deletion_admission_gate=hooks.deletion_admission_gate,
             deletion_object_resolver=hooks.deletion_object_resolver,
         ),
-        RouteWebhooks(
-            use_cases.handle_payment,
-            signature_header=hooks.payment_signature_header,
-        ),
-        RouteConversions(
-            cast(Any, use_cases).convert_model,
-            auth.service,
-        ),
-
-        RouteDataExtractions(
-            cast(Any, use_cases).extract_model_data,
-            auth.service,
-        ),
+        RouteWebhooks(use_cases.handle_payment, signature_header=hooks.payment_signature_header),
+        RouteConversions(cast(Any, use_cases).convert_model, auth.service),
+        RouteDataExtractions(cast(Any, use_cases).extract_model_data, auth.service),
     ]
 
     if dependencies.admin is not None:
