@@ -79,6 +79,30 @@ export function SidePanel({
 
         <div className="side-panel__bottom">
           <Link
+            href="/pricing"
+            className="side-donation"
+            onClick={onClose}
+          >
+            <span className="side-donation__mark">
+              P
+            </span>
+
+            <span className="side-donation__content">
+              <small>Subscription</small>
+              <strong>
+                Plans &amp; pricing
+              </strong>
+            </span>
+
+            <span
+              className="side-donation__arrow"
+              aria-hidden="true"
+            >
+              ↗
+            </span>
+          </Link>
+
+          <Link
             href={donationNavigation.href}
             className="side-donation"
             onClick={onClose}

@@ -98,6 +98,14 @@ export function Header({
           aria-label=
             "Primary actions"
         >
+          <Link
+            className=
+              "header-link"
+            href="/pricing"
+          >
+            Plans
+          </Link>
+
           <a
             className=
               "header-link"
