@@ -23,9 +23,13 @@ import {
 
 import {
   PLAN_CATALOG,
+  getPlanPrice,
+  getYearlyEffectiveMonthlyPrice,
+  getYearlySavings,
   isDowngrade,
   isUpgrade,
   requestSubscriptionChange,
+  type BillingCadence,
   type PlanDefinition,
 } from "@/lib/pricing";
 
@@ -71,6 +75,25 @@ function formatQuota(
   }
 
   return `${value} / ${cadence}`;
+}
+
+const currencyFormatter =
+  new Intl.NumberFormat(
+    "en-IE",
+    {
+      style: "currency",
+      currency: "EUR",
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    },
+  );
+
+function formatCurrency(
+  value: number,
+): string {
+  return currencyFormatter.format(
+    value,
+  );
 }
 
 function actionLabel(
@@ -133,6 +156,14 @@ export default function PricingPage() {
     useState<
       AccountPlan | null
     >(null);
+
+  const [
+    billingCadence,
+    setBillingCadence,
+  ] =
+    useState<BillingCadence>(
+      "monthly",
+    );
 
   const [
     message,
@@ -244,6 +275,7 @@ export default function PricingPage() {
         const result =
           await requestSubscriptionChange(
             targetPlan,
+            billingCadence,
           );
 
         if (
@@ -354,7 +386,8 @@ export default function PricingPage() {
                   capacity together
                   with each plan&apos;s
                   purchase-discount
-                  limits.
+                  limits and billing
+                  options.
                 </p>
               </div>
 
@@ -457,16 +490,57 @@ export default function PricingPage() {
                 </h2>
               </div>
 
-              <p>
-                Paid plan prices are
-                intentionally not
-                invented here. BIMAP
-                should display the
-                configured subscription
-                price only after the
-                billing catalog is
-                authoritative.
-              </p>
+              <div
+                className={
+                  styles.billingControl
+                }
+              >
+                <span>
+                  Billing period
+                </span>
+
+                <div
+                  className={
+                    styles.billingToggle
+                  }
+                  role="group"
+                  aria-label=
+                    "Billing period"
+                >
+                  <button
+                    type="button"
+                    data-active={
+                      billingCadence ===
+                      "monthly"
+                    }
+                    onClick={() =>
+                      setBillingCadence(
+                        "monthly",
+                      )
+                    }
+                  >
+                    Monthly
+                  </button>
+
+                  <button
+                    type="button"
+                    data-active={
+                      billingCadence ===
+                      "yearly"
+                    }
+                    onClick={() =>
+                      setBillingCadence(
+                        "yearly",
+                      )
+                    }
+                  >
+                    Yearly
+                    <small>
+                      Save 1 month
+                    </small>
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div
@@ -493,6 +567,22 @@ export default function PricingPage() {
                   const busy =
                     actionPlan ===
                     plan.code;
+
+                  const price =
+                    getPlanPrice(
+                      plan,
+                      billingCadence,
+                    );
+
+                  const yearlySavings =
+                    getYearlySavings(
+                      plan,
+                    );
+
+                  const yearlyMonthlyEquivalent =
+                    getYearlyEffectiveMonthlyPrice(
+                      plan,
+                    );
 
                   return (
                     <article
@@ -527,6 +617,66 @@ export default function PricingPage() {
                             apply
                           </strong>
                         ) : null}
+                      </div>
+
+                      <div
+                        className={
+                          styles.price
+                        }
+                      >
+                        {plan.monthlyPriceEur ===
+                        0 ? (
+                          <>
+                            <strong>
+                              Free
+                            </strong>
+
+                            <span>
+                              No subscription
+                              fee
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <div
+                              className={
+                                styles.priceLine
+                              }
+                            >
+                              <strong>
+                                {formatCurrency(
+                                  price,
+                                )}
+                              </strong>
+
+                              <span>
+                                /
+                                {billingCadence ===
+                                "monthly"
+                                  ? "month"
+                                  : "year"}
+                              </span>
+                            </div>
+
+                            {billingCadence ===
+                            "yearly" ? (
+                              <small>
+                                {formatCurrency(
+                                  yearlyMonthlyEquivalent,
+                                )}
+                                /month equivalent
+                                · save {formatCurrency(
+                                  yearlySavings,
+                                )}
+                                /year
+                              </small>
+                            ) : (
+                              <small>
+                                Billed monthly
+                              </small>
+                            )}
+                          </>
+                        )}
                       </div>
 
                       <div
@@ -660,6 +810,10 @@ export default function PricingPage() {
                             is verified by the
                             BIMAP backend before
                             entitlement changes.
+                            {billingCadence ===
+                            "yearly"
+                              ? " Yearly billing gives 12 months of access for the price of 11."
+                              : ""}
                           </small>
                         ) : (
                           <small>
@@ -849,6 +1003,53 @@ export default function PricingPage() {
                 </thead>
 
                 <tbody>
+                  <tr>
+                    <th>
+                      Monthly price
+                    </th>
+                    {PLAN_CATALOG.map(
+                      (plan) => (
+                        <td
+                          key={
+                            plan.code
+                          }
+                        >
+                          {plan.monthlyPriceEur ===
+                          0
+                            ? "Free"
+                            : `${formatCurrency(
+                                plan.monthlyPriceEur,
+                              )} / month`}
+                        </td>
+                      ),
+                    )}
+                  </tr>
+
+                  <tr>
+                    <th>
+                      Yearly price
+                    </th>
+                    {PLAN_CATALOG.map(
+                      (plan) => (
+                        <td
+                          key={
+                            plan.code
+                          }
+                        >
+                          {plan.monthlyPriceEur ===
+                          0
+                            ? "Free"
+                            : `${formatCurrency(
+                                getPlanPrice(
+                                  plan,
+                                  "yearly",
+                                ),
+                              )} / year`}
+                        </td>
+                      ),
+                    )}
+                  </tr>
+
                   <tr>
                     <th>
                       Audits

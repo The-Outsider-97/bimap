@@ -245,6 +245,156 @@
   line-height: 1.65;
 }
 
+.billingControl {
+  display: grid;
+  gap: 10px;
+
+  justify-items: end;
+}
+
+.billingControl > span {
+  color:
+    var(--muted);
+
+  font:
+    9px
+    var(--font-mono);
+
+  text-transform:
+    uppercase;
+
+  letter-spacing:
+    0.09em;
+}
+
+.billingToggle {
+  display: inline-grid;
+
+  grid-template-columns:
+    1fr 1fr;
+
+  border:
+    1px solid
+    var(--line);
+
+  background:
+    var(--surface);
+}
+
+.billingToggle button {
+  min-height: 46px;
+
+  display: flex;
+  align-items: center;
+  gap: 9px;
+
+  padding:
+    0 15px;
+
+  border: 0;
+  border-right:
+    1px solid
+    var(--line);
+
+  background:
+    transparent;
+
+  color:
+    var(--muted);
+
+  cursor: pointer;
+
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.billingToggle button:last-child {
+  border-right: 0;
+}
+
+.billingToggle button[
+  data-active="true"
+] {
+  background:
+    var(--bimap-yellow);
+
+  color:
+    var(--bimap-black);
+}
+
+.billingToggle small {
+  font:
+    8px
+    var(--font-mono);
+
+  text-transform:
+    uppercase;
+
+  letter-spacing:
+    0.06em;
+}
+
+.price {
+  min-height: 118px;
+
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+
+  gap: 8px;
+
+  margin:
+    42px 0 22px;
+
+  padding-bottom: 20px;
+
+  border-bottom:
+    1px solid
+    var(--line);
+}
+
+.price > strong,
+.priceLine > strong {
+  font-size:
+    clamp(
+      44px,
+      4vw,
+      64px
+    );
+
+  line-height: 0.92;
+
+  letter-spacing:
+    -0.06em;
+}
+
+.price > span,
+.priceLine > span {
+  color:
+    var(--muted);
+
+  font-size: 12px;
+}
+
+.priceLine {
+  display: flex;
+
+  align-items: baseline;
+
+  gap: 7px;
+}
+
+.price small {
+  color:
+    var(--bimap-yellow);
+
+  font:
+    9px
+    var(--font-mono);
+
+  line-height: 1.5;
+}
+
 .planGrid {
   display: grid;
 
@@ -352,7 +502,7 @@
 
 .discount {
   margin:
-    46px 0 24px;
+    0 0 24px;
 }
 
 .discount > strong {
@@ -721,6 +871,12 @@
 
     flex-direction:
       column;
+  }
+
+  .billingControl {
+    width: 100%;
+
+    justify-items: start;
   }
 
   .currentPanel {
