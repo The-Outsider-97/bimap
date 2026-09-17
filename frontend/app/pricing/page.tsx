@@ -104,7 +104,7 @@ function actionLabel(
   return `Downgrade to ${plan.name}`;
 }
 
-export function PricingPage() {
+export default function PricingPage() {
   const {
     account,
     status,
