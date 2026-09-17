@@ -647,6 +647,7 @@ __all__ = [
     "APIHealthDependencies",
     "APIAdminDependencies",
     "APIDependencies",
+    "APIStorefrontDependencies",
     "install_api_dependencies",
     "get_api_dependencies",
     "AccountSummaryResolver",
