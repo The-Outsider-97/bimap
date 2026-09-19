@@ -78,7 +78,7 @@ from ..domain.orders.models import Order
 from ..domain.products.models import ProductTier
 from ..notifications.email_models import EmailVerificationData
 from ..notifications.email_service import EmailService
-from ..notifications.utils.email_errors import EmailError as BIMAPEmailError, EmailTransportTimeoutError
+from ..notifications.utils.email_errors import EmailError as BIMAPEmailError, EmailTransportTimeoutError, SMTPAuthenticationError
 from logs.logger import PrettyPrinter, get_logger  # type: ignore
 
 
@@ -334,6 +334,18 @@ class LocalSLAIAuthentication(Authentication):
         except EmailTransportTimeoutError as exc:
             raise AppPortTimeoutError(
                 "Email verification delivery timed out.",
+                component="local_slai_authentication",
+                operation="issue_signup_verification",
+                context={
+                    "email_error_type": type(exc).__name__,
+                    "email_error_code": getattr(exc, "code", None),
+                },
+                cause=exc,
+            ) from exc
+
+        except SMTPAuthenticationError as exc:
+            raise AppPortUnavailableError(
+                "Email verification delivery is unavailable.",
                 component="local_slai_authentication",
                 operation="issue_signup_verification",
                 context={
